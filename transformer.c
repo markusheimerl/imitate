@@ -1,146 +1,135 @@
 #include "grad/grad.h"
-#include <math.h>
 
 #define BATCH_SIZE 2
-#define SEQ_LENGTH 8
+#define SEQ_LEN 8
 #define EMBED_DIM 32
+#define HEAD_DIM 8
 #define NUM_HEADS 4
-#define HEAD_DIM (EMBED_DIM / NUM_HEADS)
-#define FF_DIM (4 * EMBED_DIM)
 
 typedef struct {
-    Tensor *wq, *wk, *wv, *wo;  // Attention weights
-    Tensor *w1, *w2;            // FFN weights
-    Tensor *norm1, *norm2;      // Layer norm weights
-} TransformerBlock;
+    Tensor *wq, *wk, *wv, *wo;  // attention weights
+    Tensor *w1, *w2;            // ffn weights
+    Tensor *ln1, *ln2;          // layer norms
+} Transformer;
 
-Tensor* tensor_sub(Tensor* a, Tensor* b) {
-    // b * -1
-    Tensor* neg_b = tensor_hadamard(b, tensor_new(1, (int[]){1}, (float[]){-1.0f}, 1));
-    // a + (-b)
-    return tensor_add(a, neg_b);
+static Tensor* create_weight(int nrows, int ncols) {
+    float* data = malloc(nrows * ncols * sizeof(float));
+    for (int i = 0; i < nrows * ncols; i++) {
+        data[i] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) / sqrtf(ncols);
+    }
+    Tensor* w = tensor_new(2, (int[]){nrows, ncols}, data, 1);
+    free(data);
+    return w;
 }
 
-Tensor* tensor_softmax(Tensor* x) {
-    // Compute max for numerical stability
-    Tensor* max = tensor_reduce_max(x, (int[]){x->ndims - 1}, 1);
+static Tensor* softmax(Tensor* x) {
+    // First find max for numerical stability
+    Tensor* max = tensor_reduce_max(x, (int[]){x->ndims-1}, 1);
     
-    int reshape_dims[MAX_DIMS];
-    for(int i = 0; i < x->ndims - 1; i++) reshape_dims[i] = x->dims[i];
-    reshape_dims[x->ndims - 1] = 1;
-    Tensor* max_reshaped = tensor_reshape(max, x->ndims, reshape_dims);
+    // Reshape max to broadcast
+    int reshape_dims[] = {BATCH_SIZE, SEQ_LEN, 1};
+    Tensor* max_broad = tensor_reshape(max, 3, reshape_dims);
     
-    // Subtract max and compute exp
-    Tensor* shifted = tensor_sub(x, max_reshaped);
-    Tensor* exp = tensor_exp(shifted);
+    // Subtract max and exp
+    Tensor* x_stable = tensor_add(x, tensor_hadamard(max_broad, 
+                                tensor_new(1, (int[]){1}, (float[]){-1.0f}, 1)));
+    Tensor* exp = tensor_exp(x_stable);
     
-    // Compute sum for normalization
-    Tensor* sum = tensor_reduce_sum(exp, (int[]){x->ndims - 1}, 1);
-    Tensor* sum_reshaped = tensor_reshape(sum, x->ndims, reshape_dims);
+    // Sum for normalization
+    Tensor* sum = tensor_reduce_sum(exp, (int[]){x->ndims-1}, 1);
+    Tensor* sum_broad = tensor_reshape(sum, 3, reshape_dims);
     
     // Normalize
-    return tensor_hadamard(exp, tensor_pow(sum_reshaped, -1.0f));
+    return tensor_hadamard(exp, tensor_pow(sum_broad, -1.0f));
 }
 
-static Tensor* create_random_tensor(int ndims, const int* dims) {
-    int size = 1;
-    for (int i = 0; i < ndims; i++) size *= dims[i];
+static Tensor* layer_norm(Tensor* x, Tensor* weight) {
+    // Simple RMSNorm
+    Tensor* var = tensor_pow(tensor_reduce_sum(tensor_pow(x, 2.0f), 
+                           (int[]){x->ndims-1}, 1), 0.5f);
+    int reshape_dims[] = {BATCH_SIZE, SEQ_LEN, 1};
+    return tensor_hadamard(x, tensor_hadamard(weight, 
+           tensor_pow(tensor_reshape(var, 3, reshape_dims), -1.0f)));
+}
+
+static Tensor* attention(Tensor* x, Transformer* t) {
+    Tensor* q = tensor_matmul(x, t->wq);
+    Tensor* k = tensor_matmul(x, t->wk);
+    Tensor* v = tensor_matmul(x, t->wv);
     
-    float* data = malloc(size * sizeof(float));
-    for (int i = 0; i < size; i++) {
-        data[i] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) / sqrtf(size);
-    }
+    // Scaled dot-product attention
+    Tensor* qk = tensor_matmul(q, k);
+    Tensor* scaled = tensor_pow(qk, 1.0f/sqrtf(HEAD_DIM));
+    Tensor* attn = softmax(scaled);
     
-    Tensor* t = tensor_new(ndims, dims, data, 1);
-    free(data);
+    return tensor_matmul(tensor_matmul(attn, v), t->wo);
+}
+
+static Tensor* mlp(Tensor* x, Transformer* t) {
+    return tensor_matmul(tensor_relu(tensor_matmul(x, t->w1)), t->w2);
+}
+
+static Transformer* transformer_new() {
+    Transformer* t = calloc(1, sizeof(Transformer));
+    
+    // Create attention weights
+    t->wq = create_weight(EMBED_DIM, EMBED_DIM);
+    t->wk = create_weight(EMBED_DIM, EMBED_DIM);
+    t->wv = create_weight(EMBED_DIM, EMBED_DIM);
+    t->wo = create_weight(EMBED_DIM, EMBED_DIM);
+    
+    // Create MLP weights
+    t->w1 = create_weight(EMBED_DIM, 4*EMBED_DIM);
+    t->w2 = create_weight(4*EMBED_DIM, EMBED_DIM);
+    
+    // Create layer norm weights (initialized to ones)
+    float ones[EMBED_DIM];
+    for(int i = 0; i < EMBED_DIM; i++) ones[i] = 1.0f;
+    t->ln1 = tensor_new(1, (int[]){EMBED_DIM}, ones, 1);
+    t->ln2 = tensor_new(1, (int[]){EMBED_DIM}, ones, 1);
+    
     return t;
 }
 
-static Tensor* rms_norm(Tensor* x, Tensor* weight) {
-    Tensor* mean = tensor_pow(tensor_reduce_sum(tensor_pow(x, 2.0f), 
-                            (int[]){x->ndims - 1}, 1), 0.5f);
-    
-    int reshape_dims[MAX_DIMS];
-    for(int i = 0; i < x->ndims - 1; i++) reshape_dims[i] = x->dims[i];
-    reshape_dims[x->ndims - 1] = 1;
-    
-    Tensor* normalized = tensor_hadamard(x, 
-                        tensor_pow(tensor_reshape(mean, x->ndims, reshape_dims), -1.0f));
-    
-    return tensor_hadamard(normalized, weight);
-}
-
-static Tensor* attention(Tensor* x, TransformerBlock* block) {
-    Tensor* q = tensor_matmul(x, block->wq);
-    Tensor* k = tensor_matmul(x, block->wk);
-    Tensor* v = tensor_matmul(x, block->wv);
-    
-    Tensor* scores = tensor_matmul(q, k);
-    scores = tensor_pow(scores, 1.0f / sqrtf(HEAD_DIM));
-    
-    Tensor* attn = tensor_matmul(
-        tensor_softmax(scores),
-        v
-    );
-    
-    return tensor_matmul(attn, block->wo);
-}
-
-static Tensor* ffn(Tensor* x, TransformerBlock* block) {
-    return tensor_matmul(
-        tensor_relu(tensor_matmul(x, block->w1)),
-        block->w2
-    );
-}
-
-static Tensor* transformer_forward(Tensor* x, TransformerBlock* block) {
-    Tensor* a = tensor_add(x, attention(rms_norm(x, block->norm1), block));
-    return tensor_add(a, ffn(rms_norm(a, block->norm2), block));
-}
-
-static TransformerBlock* create_transformer() {
-    TransformerBlock* block = calloc(1, sizeof(TransformerBlock));
-    
-    int qkv_dims[] = {EMBED_DIM, EMBED_DIM};
-    int ff1_dims[] = {EMBED_DIM, FF_DIM};
-    int ff2_dims[] = {FF_DIM, EMBED_DIM};
-    
-    block->wq = create_random_tensor(2, qkv_dims);
-    block->wk = create_random_tensor(2, qkv_dims);
-    block->wv = create_random_tensor(2, qkv_dims);
-    block->wo = create_random_tensor(2, qkv_dims);
-    block->w1 = create_random_tensor(2, ff1_dims);
-    block->w2 = create_random_tensor(2, ff2_dims);
-    
-    float ones[EMBED_DIM] = {1.0f};
-    block->norm1 = tensor_new(1, (int[]){EMBED_DIM}, ones, 1);
-    block->norm2 = tensor_new(1, (int[]){EMBED_DIM}, ones, 1);
-    
-    return block;
-}
-
-static void free_transformer(TransformerBlock* block) {
-    tensor_free(block->wq); tensor_free(block->wk);
-    tensor_free(block->wv); tensor_free(block->wo);
-    tensor_free(block->w1); tensor_free(block->w2);
-    tensor_free(block->norm1); tensor_free(block->norm2);
-    free(block);
+static void transformer_free(Transformer* t) {
+    tensor_free(t->wq); tensor_free(t->wk); 
+    tensor_free(t->wv); tensor_free(t->wo);
+    tensor_free(t->w1); tensor_free(t->w2);
+    tensor_free(t->ln1); tensor_free(t->ln2);
+    free(t);
 }
 
 int main() {
     srand(42);
     
-    int input_dims[] = {BATCH_SIZE, SEQ_LENGTH, EMBED_DIM};
-    Tensor* input = create_random_tensor(3, input_dims);
-    TransformerBlock* block = create_transformer();
+    // Create input [batch_size, seq_len, embed_dim]
+    float* data = malloc(BATCH_SIZE * SEQ_LEN * EMBED_DIM * sizeof(float));
+    for(int i = 0; i < BATCH_SIZE * SEQ_LEN * EMBED_DIM; i++) {
+        data[i] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * 0.1f;
+    }
+    Tensor* x = tensor_new(3, (int[]){BATCH_SIZE, SEQ_LEN, EMBED_DIM}, data, 1);
+    free(data);
     
-    Tensor* output = transformer_forward(input, block);
+    // Create transformer
+    Transformer* t = transformer_new();
+    
+    // Forward pass
+    Tensor* norm1 = layer_norm(x, t->ln1);
+    Tensor* attn = attention(norm1, t);
+    Tensor* add1 = tensor_add(x, attn);
+    
+    Tensor* norm2 = layer_norm(add1, t->ln2);
+    Tensor* ff = mlp(norm2, t);
+    Tensor* out = tensor_add(add1, ff);
+    
+    // Backward pass
     backward();
     
+    // Cleanup
+    tensor_free(x);
+    tensor_free(out);
+    transformer_free(t);
     cleanup_tape();
-    tensor_free(input);
-    tensor_free(output);
-    free_transformer(block);
     
     return 0;
 }
