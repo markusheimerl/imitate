@@ -446,6 +446,18 @@ void backward() {
                 break;
 
             case RESHAPE:
+                printf("Processing RESHAPE\n");
+                if (a->requires_grad) {
+                    int min_size = MIN(t->size, a->size);
+                    if (!a->grad || !t->grad) {
+                        printf("Error: NULL gradients in RESHAPE backward pass\n");
+                        continue;
+                    }
+                    for (int j = 0; j < min_size; j++) {
+                        a->grad[j] += t->grad[j];
+                    }
+                }
+                break;
             case ADD:
                 printf("Processing %s\n", e->op == RESHAPE ? "RESHAPE" : "ADD");
                 if (a->requires_grad) {
