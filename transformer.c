@@ -14,6 +14,34 @@ typedef struct {
     Tensor *norm1, *norm2;      // Layer norm weights
 } TransformerBlock;
 
+Tensor* tensor_sub(Tensor* a, Tensor* b) {
+    // b * -1
+    Tensor* neg_b = tensor_hadamard(b, tensor_new(1, (int[]){1}, (float[]){-1.0f}, 1));
+    // a + (-b)
+    return tensor_add(a, neg_b);
+}
+
+Tensor* tensor_softmax(Tensor* x) {
+    // Compute max for numerical stability
+    Tensor* max = tensor_reduce_max(x, (int[]){x->ndims - 1}, 1);
+    
+    int reshape_dims[MAX_DIMS];
+    for(int i = 0; i < x->ndims - 1; i++) reshape_dims[i] = x->dims[i];
+    reshape_dims[x->ndims - 1] = 1;
+    Tensor* max_reshaped = tensor_reshape(max, x->ndims, reshape_dims);
+    
+    // Subtract max and compute exp
+    Tensor* shifted = tensor_sub(x, max_reshaped);
+    Tensor* exp = tensor_exp(shifted);
+    
+    // Compute sum for normalization
+    Tensor* sum = tensor_reduce_sum(exp, (int[]){x->ndims - 1}, 1);
+    Tensor* sum_reshaped = tensor_reshape(sum, x->ndims, reshape_dims);
+    
+    // Normalize
+    return tensor_hadamard(exp, tensor_pow(sum_reshaped, -1.0f));
+}
+
 static Tensor* create_random_tensor(int ndims, const int* dims) {
     int size = 1;
     for (int i = 0; i < ndims; i++) size *= dims[i];
