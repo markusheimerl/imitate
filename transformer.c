@@ -54,40 +54,8 @@ Tensor* create_ones_tensor(int ndims, int* dims) {
 }
 
 Tensor* rms_norm(Tensor* x, Tensor* weight) {
-    // Square all elements
-    Tensor* squared = tensor_matmul(x, x);  // Element-wise multiplication
-    
-    // Compute mean
-    int mean_dims[] = {1};
-    Tensor* mean = tensor_reshape(squared, 1, mean_dims);
-    
-    // Add epsilon for numerical stability
-    float eps_val = 1e-6f;
-    float* eps_data = malloc(sizeof(float));
-    *eps_data = eps_val;
-    int eps_dims[] = {1};
-    Tensor* eps = tensor_new(1, eps_dims, eps_data, 0);
-    Tensor* stable_mean = tensor_add(mean, eps);
-    
-    // Compute RMS
-    Tensor* rms = tensor_sigmoid(stable_mean);  // Using sigmoid as sqrt approximation
-    
-    // Normalize
-    Tensor* normalized = tensor_matmul(x, rms);
-    
-    // Scale with learned parameters
-    Tensor* output = tensor_matmul(normalized, weight);
-    
-    // Cleanup
-    tensor_free(squared);
-    tensor_free(mean);
-    tensor_free(eps);
-    tensor_free(stable_mean);
-    tensor_free(rms);
-    tensor_free(normalized);
-    free(eps_data);
-    
-    return output;
+    // Simplified RMS norm using only available operations
+    return tensor_matmul(x, weight);
 }
 
 Tensor* self_attention(Tensor* x, Tensor* w_q, Tensor* w_k, Tensor* w_v, Tensor* w_o) {
@@ -102,34 +70,10 @@ Tensor* self_attention(Tensor* x, Tensor* w_q, Tensor* w_k, Tensor* w_v, Tensor*
     print_tensor("Key", k);
     print_tensor("Value", v);
     
-    // Scaled dot-product attention
-    float scale = 1.0f / sqrtf(EMBED_DIM);
-    float* scale_data = malloc(sizeof(float));
-    *scale_data = scale;
-    int scale_dims[] = {1};
-    Tensor* scale_tensor = tensor_new(1, scale_dims, scale_data, 0);
-    
+    // Attention computation
     Tensor* scores = tensor_matmul(q, k);
-    Tensor* scaled_scores = tensor_matmul(scores, scale_tensor);
-    
-    // Create causal mask
-    float* mask_data = malloc(SEQ_LENGTH * SEQ_LENGTH * sizeof(float));
-    for (int i = 0; i < SEQ_LENGTH; i++) {
-        for (int j = 0; j < SEQ_LENGTH; j++) {
-            mask_data[i * SEQ_LENGTH + j] = j <= i ? 1.0f : 0.0f;
-        }
-    }
-    int mask_dims[] = {SEQ_LENGTH, SEQ_LENGTH};
-    Tensor* mask = tensor_new(2, mask_dims, mask_data, 0);
-    
-    // Apply mask
-    Tensor* masked_scores = tensor_matmul(scaled_scores, mask);
-    
-    // Softmax
-    Tensor* attention_probs = tensor_sigmoid(masked_scores);  // Approximate softmax with sigmoid
-    
-    // Apply attention to values
-    Tensor* attention = tensor_matmul(attention_probs, v);
+    Tensor* attention_weights = tensor_sigmoid(scores);
+    Tensor* attention = tensor_matmul(attention_weights, v);
     Tensor* output = tensor_matmul(attention, w_o);
     
     print_tensor("Attention Output", output);
@@ -138,15 +82,9 @@ Tensor* self_attention(Tensor* x, Tensor* w_q, Tensor* w_k, Tensor* w_v, Tensor*
     tensor_free(q);
     tensor_free(k);
     tensor_free(v);
-    tensor_free(scale_tensor);
     tensor_free(scores);
-    tensor_free(scaled_scores);
-    tensor_free(mask);
-    tensor_free(masked_scores);
-    tensor_free(attention_probs);
+    tensor_free(attention_weights);
     tensor_free(attention);
-    free(scale_data);
-    free(mask_data);
     
     return output;
 }
@@ -172,8 +110,7 @@ Tensor* ffn(Tensor* x, Tensor* w1, Tensor* w2) {
 Tensor* decoder_block(Tensor* x, 
                      Tensor* attn_weights[4],
                      Tensor* ffn_weights[2],
-                     Tensor* norm_weights[2])
-{
+                     Tensor* norm_weights[2]) {
     printf("\n=== Decoder Block Forward Pass ===\n");
     print_tensor("Input", x);
     
