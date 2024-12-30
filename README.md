@@ -1,2 +1,2 @@
 # transformer
-A minimal transformer implementation
+A minimal decoder transformer implementation
