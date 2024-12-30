@@ -66,7 +66,33 @@ Tensor* rms_norm(Tensor* x, Tensor* weight) {
     return output;
 }
 
-// Multi-head Attention
+// Softmax implementation using tensor operations
+Tensor* softmax(Tensor* x) {
+    // exp(x)
+    Tensor* exp_x = tensor_exp(x);
+    
+    // Sum across last dimension
+    int axes[] = {x->ndims - 1};
+    Tensor* sum_exp = tensor_reduce_sum(exp_x, axes, 1);
+    
+    // Reshape sum for broadcasting
+    int new_dims[MAX_DIMS];
+    for(int i = 0; i < x->ndims - 1; i++) new_dims[i] = x->dims[i];
+    new_dims[x->ndims - 1] = 1;
+    Tensor* sum_exp_reshaped = tensor_reshape(sum_exp, x->ndims, new_dims);
+    
+    // Divide exp(x) by sum
+    Tensor* output = tensor_hadamard(exp_x, tensor_pow(sum_exp_reshaped, -1.0f));
+    
+    // Cleanup
+    tensor_free(exp_x);
+    tensor_free(sum_exp);
+    tensor_free(sum_exp_reshaped);
+    
+    return output;
+}
+
+// Modified multi-head attention using proper softmax
 Tensor* multi_head_attention(Tensor* x, TransformerBlock* block) {
     // Project to Q, K, V
     Tensor* q = tensor_matmul(x, block->wq);
@@ -76,8 +102,12 @@ Tensor* multi_head_attention(Tensor* x, TransformerBlock* block) {
     // Compute attention scores (scaled dot product)
     Tensor* scores = tensor_matmul(q, k);
     
-    // Apply attention weights
-    Tensor* attn_weights = tensor_sigmoid(scores);  // Using sigmoid as softmax approximation
+    // Scale scores by 1/sqrt(d_k)
+    float scale = 1.0f / sqrtf(HEAD_DIM);
+    Tensor* scaled_scores = tensor_pow(scores, scale);
+    
+    // Apply softmax to get attention weights
+    Tensor* attn_weights = softmax(scaled_scores);
     Tensor* context = tensor_matmul(attn_weights, v);
     
     // Project output
@@ -88,6 +118,7 @@ Tensor* multi_head_attention(Tensor* x, TransformerBlock* block) {
     tensor_free(k);
     tensor_free(v);
     tensor_free(scores);
+    tensor_free(scaled_scores);
     tensor_free(attn_weights);
     tensor_free(context);
     
