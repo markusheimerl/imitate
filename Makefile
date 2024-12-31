@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -O3 -march=native -funroll-loops -Wall -Wextra -I./grad
-LDFLAGS = -flto -lm
+CFLAGS = -Wall -Wextra -I./grad
+LDFLAGS = -lm
 TARGET = transformer.out
 
 .PHONY: all clean run
