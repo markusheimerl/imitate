@@ -38,6 +38,14 @@ Tensor* tensor_masked_multihead_attention(Tensor* Q, Tensor* K, Tensor* V, Tenso
     return tensor_reshape(tensor_permute(attention, (int[]){0,2,1,3}, 4), 3, (int[]){batch_size,seq_len_q,d_model});
 }
 
+Tensor* tensor_feedforward(Tensor* input, Tensor* weights, Tensor* bias) {
+    if (!input || !weights || !bias) return NULL;
+    Tensor* matmul_result = tensor_matmul(input, weights);
+    Tensor* bias_added = tensor_add(matmul_result, bias);
+    Tensor* output = tensor_gelu(bias_added);
+    return output;
+}
+
 int main() {
     {
         int batch_size = 1, seq_len = 2, d_model = 4, num_heads = 2;
@@ -108,6 +116,73 @@ int main() {
             printf("\n");
         }
     }
+
+    {
+        // Create input tensor (batch_size x input_dim)
+        int input_dims[] = {2, 4};  // 2 samples, 4 input features
+        float input_data[] = {
+            0.5f, -0.2f, 0.1f, 0.3f,
+            -0.1f, 0.4f, -0.3f, 0.2f
+        };
+        Tensor* input = tensor_new(2, input_dims, input_data, 1);
+
+        // Create weights tensor (input_dim x output_dim)
+        int weight_dims[] = {4, 3};  // 4 input features, 3 output features
+        float weight_data[] = {
+            0.1f, 0.2f, -0.1f,
+            -0.2f, 0.1f, 0.3f,
+            0.0f, 0.4f, 0.1f,
+            0.3f, -0.2f, 0.2f
+        };
+        Tensor* weights = tensor_new(2, weight_dims, weight_data, 1);
+
+        // Create bias tensor (1 x output_dim)
+        int bias_dims[] = {1, 3};
+        float bias_data[] = {0.1f, -0.1f, 0.2f};
+        Tensor* bias = tensor_new(2, bias_dims, bias_data, 1);
+
+        // Apply feedforward
+        Tensor* output = tensor_feedforward(input, weights, bias);
+
+        // Print results
+        printf("Input:\n");
+        for (int i = 0; i < input->size; i++) {
+            printf("%f ", input->data[i]);
+            if ((i + 1) % input_dims[1] == 0) printf("\n");
+        }
+
+        printf("\nOutput:\n");
+        for (int i = 0; i < output->size; i++) {
+            printf("%f ", output->data[i]);
+            if ((i + 1) % weight_dims[1] == 0) printf("\n");
+        }
+
+        // Test backward pass
+        // Set gradient of output to 1.0
+        for (int i = 0; i < output->size; i++) {
+            output->grad[i] = 1.0f;
+        }
+
+        backward();
+
+        printf("\nInput gradients:\n");
+        for (int i = 0; i < input->size; i++) {
+            printf("%f ", input->grad[i]);
+            if ((i + 1) % input_dims[1] == 0) printf("\n");
+        }
+
+        printf("\nWeight gradients:\n");
+        for (int i = 0; i < weights->size; i++) {
+            printf("%f ", weights->grad[i]);
+            if ((i + 1) % weight_dims[1] == 0) printf("\n");
+        }
+
+        printf("\nBias gradients:\n");
+        for (int i = 0; i < bias->size; i++) {
+            printf("%f ", bias->grad[i]);
+        }
+        printf("\n");
+    } 
 
     clean_registry();
     return 0;
