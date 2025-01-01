@@ -8,7 +8,7 @@ Tensor* feed_forward(Tensor* x, Tensor* W1, Tensor* W2) {
     return tensor_feedforward(tensor_feedforward(x, W1), W2);
 }
 
-Tensor* transformer_layer(Tensor* x, Tensor* mask, int num_heads, float eps, Tensor* W_ff1, Tensor* W_ff2) {
+Tensor* transformer_block(Tensor* x, Tensor* mask, int num_heads, float eps, Tensor* W_ff1, Tensor* W_ff2) {
     x = tensor_add(x, attention(tensor_rms_norm(x, eps), mask, num_heads));
     x = tensor_add(x, feed_forward(tensor_rms_norm(x, eps), W_ff1, W_ff2));
     return x;
