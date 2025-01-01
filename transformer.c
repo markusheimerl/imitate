@@ -1,150 +1,114 @@
 #include "grad.h"
 
-#define BATCH_SIZE 2
-#define SEQ_LEN 8
-#define EMBED_DIM 32
-#define HEAD_DIM 8
-#define NUM_HEADS 4
-
-typedef struct {
-    Tensor *wq, *wk, *wv, *wo;  // attention weights
-    Tensor *w1, *w2;            // ffn weights
-    Tensor *ln1, *ln2;          // layer norms
-} Transformer;
-
-static Tensor* create_weight(int nrows, int ncols) {
-    printf("Creating weight matrix %dx%d\n", nrows, ncols);
-    float* data = malloc(nrows * ncols * sizeof(float));
-    for (int i = 0; i < nrows * ncols; i++) {
-        data[i] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) / sqrtf(ncols);
-    }
-    Tensor* w = tensor_new(2, (int[]){nrows, ncols}, data, 1);
-    free(data);
-    return w;
-}
-
-static Tensor* softmax(Tensor* x) {
-    printf("Starting softmax\n");
-    Tensor* max = tensor_reduce_max(x, (int[]){x->ndims-1}, 1);
-    Tensor* x_stable = tensor_add(x, tensor_hadamard(
-        tensor_reshape(max, 3, (int[]){BATCH_SIZE, SEQ_LEN, 1}), 
-        tensor_new(1, (int[]){1}, (float[]){-1.0f}, 1)));
-    Tensor* exp = tensor_exp(x_stable);
-    Tensor* sum = tensor_reduce_sum(exp, (int[]){x->ndims-1}, 1);
-    Tensor* result = tensor_hadamard(exp, tensor_pow(
-        tensor_reshape(sum, 3, (int[]){BATCH_SIZE, SEQ_LEN, 1}), -1.0f));
-    printf("Finished softmax\n");
-    return result;
-}
-
-static Tensor* layer_norm(Tensor* x, Tensor* weight) {
-    printf("Starting layer norm\n");
-    Tensor* var = tensor_pow(tensor_reduce_sum(tensor_pow(x, 2.0f), 
-                           (int[]){x->ndims-1}, 1), 0.5f);
-    Tensor* result = tensor_hadamard(x, tensor_hadamard(weight, 
-           tensor_pow(tensor_reshape(var, 3, (int[]){BATCH_SIZE, SEQ_LEN, 1}), -1.0f)));
-    printf("Finished layer norm\n");
-    return result;
-}
-
-static Tensor* attention(Tensor* x, Transformer* t) {
-    printf("Starting attention\n");
-    Tensor* q = tensor_matmul(x, t->wq);
-    printf("Computed Q\n");
-    Tensor* k = tensor_matmul(x, t->wk);
-    printf("Computed K\n");
-    Tensor* v = tensor_matmul(x, t->wv);
-    printf("Computed V\n");
-    Tensor* qk = tensor_matmul(q, k);
-    printf("Computed QK\n");
-    Tensor* scaled_qk = tensor_pow(qk, 1.0f/sqrtf(HEAD_DIM));
-    printf("Computed scaled QK\n");
-    Tensor* attn = softmax(scaled_qk);
-    printf("Computed attention weights\n");
-    Tensor* attn_v = tensor_matmul(attn, v);
-    printf("Computed attention output\n");
-    Tensor* result = tensor_matmul(attn_v, t->wo);
-    printf("Finished attention\n");
-    return result;
-}
-
-static Tensor* forward(Tensor* x, Transformer* t) {
-    printf("Starting forward pass\n");
-    Tensor* norm1 = layer_norm(x, t->ln1);
-    printf("First layer norm done\n");
-    Tensor* attn = attention(norm1, t);
-    printf("Attention done\n");
-    Tensor* a = tensor_add(x, attn);
-    printf("Residual connection 1 done\n");
-    Tensor* norm2 = layer_norm(a, t->ln2);
-    printf("Second layer norm done\n");
-    Tensor* ff1 = tensor_matmul(norm2, t->w1);
-    printf("First FFN layer done\n");
-    Tensor* ff1_relu = tensor_relu(ff1);
-    Tensor* ff2 = tensor_matmul(ff1_relu, t->w2);
-    printf("Second FFN layer done\n");
-    Tensor* result = tensor_add(a, ff2);
-    printf("Finished forward pass\n");
-    return result;
-}
-
-static Transformer* transformer_new() {
-    printf("Creating transformer\n");
-    Transformer* t = calloc(1, sizeof(Transformer));
-    t->wq = create_weight(EMBED_DIM, EMBED_DIM);
-    t->wk = create_weight(EMBED_DIM, EMBED_DIM);
-    t->wv = create_weight(EMBED_DIM, EMBED_DIM);
-    t->wo = create_weight(EMBED_DIM, EMBED_DIM);
-    t->w1 = create_weight(EMBED_DIM, 4*EMBED_DIM);
-    t->w2 = create_weight(4*EMBED_DIM, EMBED_DIM);
+Tensor* tensor_masked_multihead_attention(Tensor* Q, Tensor* K, Tensor* V, Tensor* mask, int num_heads) {
+    if (!Q || !K || !V || !mask || Q->ndims != 3 || K->ndims != 3 || V->ndims != 3 || mask->ndims != 4) return NULL;
+    int batch_size = Q->dims[0], seq_len_q = Q->dims[1], seq_len_k = K->dims[1], d_model = Q->dims[2];
+    if (d_model % num_heads != 0 || K->dims[2] != d_model || V->dims[2] != d_model || 
+        seq_len_k != V->dims[1] || batch_size != K->dims[0] || batch_size != V->dims[0] ||
+        mask->dims[0] != batch_size || mask->dims[1] != num_heads || 
+        mask->dims[2] != seq_len_q || mask->dims[3] != seq_len_k) return NULL;
     
-    float ones[EMBED_DIM];
-    for(int i = 0; i < EMBED_DIM; i++) ones[i] = 1.0f;
-    t->ln1 = tensor_new(1, (int[]){EMBED_DIM}, ones, 1);
-    t->ln2 = tensor_new(1, (int[]){EMBED_DIM}, ones, 1);
-    printf("Finished creating transformer\n");
-    return t;
-}
+    int d_head = d_model/num_heads; tape_len = 0;
+    int reshape_dims[] = {batch_size, -1, num_heads, d_head}, perm[] = {0, 2, 1, 3};
+    
+    reshape_dims[1] = seq_len_q;
+    Tensor* Q_perm = tensor_permute(tensor_reshape(Q, 4, reshape_dims), perm, 4);
+    reshape_dims[1] = seq_len_k;
+    Tensor* K_perm = tensor_permute(tensor_reshape(K, 4, reshape_dims), perm, 4);
+    Tensor* V_perm = tensor_permute(tensor_reshape(V, 4, reshape_dims), perm, 4);
+    if (!Q_perm || !K_perm || !V_perm) return NULL;
 
-void transformer_free(Transformer* t) {
-    printf("Freeing transformer\n");
-    tensor_free(t->wq);
-    tensor_free(t->wk);
-    tensor_free(t->wv);
-    tensor_free(t->wo);
-    tensor_free(t->w1);
-    tensor_free(t->w2);
-    tensor_free(t->ln1);
-    tensor_free(t->ln2);
-    free(t);
-    printf("Finished freeing transformer\n");
+    Tensor* K_transpose = tensor_permute(K_perm, (int[]){0,1,3,2}, 4);
+    if (!K_transpose) return NULL;
+    
+    Tensor* scores = tensor_matmul(Q_perm, K_transpose);
+    if (!scores) return NULL;
+    
+    float scale = 1.0f/sqrt(d_head);
+    Tensor* scaled_scores = tensor_hadamard(scores, tensor_new(4, (int[]){1,1,1,1}, (float[]){scale}, 0));
+    if (!scaled_scores) return NULL;
+
+    // Apply mask
+    Tensor* masked_scores = tensor_hadamard(scaled_scores, mask);
+    if (!masked_scores) return NULL;
+
+    Tensor* attention = tensor_matmul(tensor_softmax(masked_scores), V_perm);
+    if (!attention) return NULL;
+
+    return tensor_reshape(tensor_permute(attention, (int[]){0,2,1,3}, 4), 3, (int[]){batch_size,seq_len_q,d_model});
 }
 
 int main() {
-    printf("Starting program\n");
-    srand(42);
-    
-    printf("Creating input tensor\n");
-    float* data = malloc(BATCH_SIZE * SEQ_LEN * EMBED_DIM * sizeof(float));
-    for(int i = 0; i < BATCH_SIZE * SEQ_LEN * EMBED_DIM; i++) {
-        data[i] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * 0.1f;
+    {
+        int batch_size = 1, seq_len = 2, d_model = 4, num_heads = 2;
+        int qkv_dims[] = {batch_size, seq_len, d_model};
+        int mask_dims[] = {batch_size, num_heads, seq_len, seq_len};
+        
+        float q_data[] = {1,1,0,0, 0,0,1,1};
+        float k_data[] = {1,1,0,0, 0,0,1,1};
+        float v_data[] = {1,1,2,2, 3,3,4,4};
+        // Causal mask: upper triangle is 0
+        float mask_data[] = {1,0, 1,1};
+        
+        Tensor *Q = tensor_new(3, qkv_dims, q_data, 1);
+        Tensor *K = tensor_new(3, qkv_dims, k_data, 1);
+        Tensor *V = tensor_new(3, qkv_dims, v_data, 1);
+        Tensor *mask = tensor_new(4, mask_dims, mask_data, 0);
+
+        printf("\nTest 1: Masked Multi-Head Attention\n\nInput values:\nQ:"); 
+        for(int i = 0; i < 8; i++) printf(" %f", q_data[i]);
+        printf("\nK:"); for(int i = 0; i < 8; i++) printf(" %f", k_data[i]);
+        printf("\nV:"); for(int i = 0; i < 8; i++) printf(" %f", v_data[i]);
+        printf("\nMask:"); for(int i = 0; i < 4; i++) printf(" %f", mask_data[i]);
+
+        Tensor* output = tensor_masked_multihead_attention(Q, K, V, mask, num_heads);
+        printf("\n\nFinal output values (with causal masking):\n");
+        for (int i = 0; i < seq_len; i++) {
+            printf("Seq %d:", i);
+            for (int j = 0; j < d_model; j++) printf(" %6.3f", output->data[i * d_model + j]);
+            printf("\n");
+        }
+
+        // Test gradients
+        for (int i = 0; i < output->size; i++) output->grad[i] = 1.0f;
+        backward();
+        printf("\nQ gradients:\n");
+        for (int i = 0; i < seq_len; i++) {
+            printf("Seq %d:", i);
+            for (int j = 0; j < d_model; j++) printf(" %6.3f", Q->grad[i * d_model + j]);
+            printf("\n");
+        }
     }
-    Tensor* x = tensor_new(3, (int[]){BATCH_SIZE, SEQ_LEN, EMBED_DIM}, data, 1);
-    free(data);
-    
-    Transformer* t = transformer_new();
-    printf("Running forward pass\n");
-    Tensor* out = forward(x, t);
-    
-    printf("Running backward pass\n");
-    backward();
-    
-    printf("Cleaning up\n");
-    tensor_free(x);
-    tensor_free(out);
-    transformer_free(t);
-    cleanup_tape();
-    
-    printf("Program finished successfully\n");
+
+    {
+        // Test with different mask patterns
+        int batch_size = 1, seq_len = 3, d_model = 4, num_heads = 2;
+        int qkv_dims[] = {batch_size, seq_len, d_model};
+        int mask_dims[] = {batch_size, num_heads, seq_len, seq_len};
+        
+        float q_data[12], k_data[12], v_data[12];
+        for (int i = 0; i < seq_len * d_model; i++) {
+            q_data[i] = k_data[i] = 1.0f;
+            v_data[i] = (i/d_model) + 1.0f;
+        }
+        
+        // Create a mask that only allows attention to even positions
+        float mask_data[] = {1,0,1, 1,0,1, 1,0,1};
+        
+        Tensor *Q = tensor_new(3, qkv_dims, q_data, 1);
+        Tensor *K = tensor_new(3, qkv_dims, k_data, 1);
+        Tensor *V = tensor_new(3, qkv_dims, v_data, 1);
+        Tensor *mask = tensor_new(4, mask_dims, mask_data, 0);
+
+        Tensor* output = tensor_masked_multihead_attention(Q, K, V, mask, num_heads);
+        printf("\nTest 2: Custom Mask Pattern\nOutput:\n");
+        for (int i = 0; i < seq_len; i++) {
+            printf("Seq %d:", i);
+            for (int j = 0; j < d_model; j++) printf(" %6.3f", output->data[i * d_model + j]);
+            printf("\n");
+        }
+    }
+
+    clean_registry();
     return 0;
 }
