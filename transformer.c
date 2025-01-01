@@ -1,12 +1,17 @@
 #include "transformer.h"
 
+Tensor* attention(Tensor* x, Tensor* mask, int num_heads) {
+    return tensor_masked_multihead_attention(x, x, x, mask, num_heads);
+}
+
+Tensor* feed_forward(Tensor* x, Tensor* W1, Tensor* W2) {
+    return tensor_feedforward(tensor_feedforward(x, W1), W2);
+}
+
 Tensor* transformer_layer(Tensor* x, Tensor* mask, int num_heads, float eps, Tensor* W_ff1, Tensor* W_ff2) {
-    Tensor* norm1 = tensor_rms_norm(x, eps);
-    Tensor* attn_out = tensor_masked_multihead_attention(norm1, norm1, norm1, mask, num_heads);
-    Tensor* post_attn = tensor_add(x, attn_out);
-    Tensor* norm2 = tensor_rms_norm(post_attn, eps);
-    Tensor* ff_out = tensor_feedforward(tensor_feedforward(norm2, W_ff1), W_ff2);
-    return tensor_add(post_attn, ff_out);
+    x = tensor_add(x, attention(tensor_rms_norm(x, eps), mask, num_heads));
+    x = tensor_add(x, feed_forward(tensor_rms_norm(x, eps), W_ff1, W_ff2));
+    return x;
 }
 
 int main() {
@@ -17,10 +22,17 @@ int main() {
     const int ff_dim = 32;
     const float eps = 1e-5f;
 
-    const float input_data[] = {0.1f, 0.2f, -0.1f, 0.3f, 0.2f, 0.1f, -0.2f, 0.1f, 0.2f, 0.1f, 0.3f, -0.1f, 0.1f, 0.2f, 0.3f, -0.2f, -0.1f, 0.3f, 0.2f, 0.1f, -0.2f, 0.3f, 0.1f, 0.2f};
+    // Initialize input tensor
+    const float input_data[] = {0.1f, 0.2f, -0.1f, 0.3f, 0.2f, 0.1f, -0.2f, 0.1f, 
+                               0.2f, 0.1f, 0.3f, -0.1f, 0.1f, 0.2f, 0.3f, -0.2f, 
+                               -0.1f, 0.3f, 0.2f, 0.1f, -0.2f, 0.3f, 0.1f, 0.2f};
     Tensor* x = tensor_new(3, (const int[3]){batch_size, seq_len, d_model}, input_data, 1);
 
-    Tensor* mask = tensor_new(4, (const int[4]){batch_size, num_heads, seq_len, seq_len}, (const float[18]){1,0,0, 1,1,0, 1,1,1, 1,0,0, 1,1,0, 1,1,1}, 0);
+    // Initialize mask
+    Tensor* mask = tensor_new(4, (const int[4]){batch_size, num_heads, seq_len, seq_len}, 
+                             (const float[18]){1,0,0, 1,1,0, 1,1,1, 1,0,0, 1,1,0, 1,1,1}, 0);
+
+    // Initialize feedforward weights
     Tensor* W_ff1 = tensor_randn(2, (const int[2]){d_model, ff_dim}, 1);
     Tensor* W_ff2 = tensor_randn(2, (const int[2]){ff_dim, d_model}, 1);
 
@@ -30,8 +42,9 @@ int main() {
     printf("\nFinal output (first sequence position):\n");
     for(int j = 0; j < d_model; j++) printf("%.3f ", output->data[j]);
     printf("\n");
-    for(int i = 0; i < output->size; i++) output->grad[i] = 1.0f;
 
+    // Backpropagation
+    for(int i = 0; i < output->size; i++) output->grad[i] = 1.0f;
     backward();
 
     printf("\nInput gradients (first sequence position):\n");
