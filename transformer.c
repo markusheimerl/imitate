@@ -1,5 +1,31 @@
 #include "transformer.h"
 
+// Function that processes input through a transformer layer
+Tensor* transformer_layer(Tensor* x, Tensor* mask, 
+                         int num_heads, float eps,
+                         Tensor* W_ff1, Tensor* W_ff2,
+                         Tensor* b_ff1, Tensor* b_ff2) {
+    
+    // 1. Layer Norm 1
+    Tensor* norm1 = tensor_rms_norm(x, eps);
+
+    // 2. Self-attention
+    Tensor* attn_out = tensor_masked_multihead_attention(norm1, norm1, norm1, mask, num_heads);
+    
+    // 3. Residual connection after attention
+    Tensor* post_attn = tensor_add(x, attn_out);
+
+    // 4. Layer Norm 2
+    Tensor* norm2 = tensor_rms_norm(post_attn, eps);
+
+    // 5. Feed-forward network with residual connection
+    Tensor* ff_hidden = tensor_feedforward(norm2, W_ff1, b_ff1);
+    Tensor* ff_output = tensor_feedforward(ff_hidden, W_ff2, b_ff2);
+    Tensor* output = tensor_add(post_attn, ff_output);
+    
+    return output;
+}
+
 int main() {
     // Configuration
     int batch_size = 1;
@@ -37,34 +63,22 @@ int main() {
 
     // Initialize feed-forward weights
     int ff1_dims[] = {d_model, ff_dim};
-    int ff2_dims[] = {ff_dim, d_model};
     Tensor* W_ff1 = tensor_randn(2, ff1_dims, 1);
+    
+    int ff2_dims[] = {ff_dim, d_model};
     Tensor* W_ff2 = tensor_randn(2, ff2_dims, 1);
     
     // Initialize feed-forward biases
     int bias_ff1_dims[] = {1, ff_dim};
+    Tensor* b_ff1 = tensor_randn(2, bias_ff1_dims, 1);
+    
     int bias_ff2_dims[] = {1, d_model};
-    Tensor* b_ff1 = tensor_zeros(2, bias_ff1_dims, 1);
-    Tensor* b_ff2 = tensor_zeros(2, bias_ff2_dims, 1);
+    Tensor* b_ff2 = tensor_randn(2, bias_ff2_dims, 1);
 
     printf("Processing sequence through decoder layer...\n");
 
-    // 1. Layer Norm 1
-    Tensor* norm1 = tensor_rms_norm(x, eps);
-
-    // 2. Self-attention
-    Tensor* attn_out = tensor_masked_multihead_attention(norm1, norm1, norm1, mask, num_heads);
-    
-    // 3. Residual connection after attention
-    Tensor* post_attn = tensor_add(x, attn_out);
-
-    // 4. Layer Norm 2
-    Tensor* norm2 = tensor_rms_norm(post_attn, eps);
-
-    // 5. Feed-forward network with residual connection
-    Tensor* ff_hidden = tensor_feedforward(norm2, W_ff1, b_ff1);
-    Tensor* ff_output = tensor_feedforward(ff_hidden, W_ff2, b_ff2);
-    Tensor* output = tensor_add(post_attn, ff_output);
+    // Forward pass through transformer layer
+    Tensor* output = transformer_layer(x, mask, num_heads, eps, W_ff1, W_ff2, b_ff1, b_ff2);
 
     // Print sample outputs
     printf("\nFinal output (first sequence position):\n");
