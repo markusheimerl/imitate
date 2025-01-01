@@ -37,7 +37,7 @@ int main() {
     Tensor* W_ff2 = tensor_randn(2, (const int[2]){ff_dim, d_model}, 1);
 
     printf("Processing sequence through decoder layer...\n");
-    Tensor* output = transformer_layer(x, mask, num_heads, eps, W_ff1, W_ff2);
+    Tensor* output = transformer_block(x, mask, num_heads, eps, W_ff1, W_ff2);
 
     printf("\nFinal output (first sequence position):\n");
     for(int j = 0; j < d_model; j++) printf("%.3f ", output->data[j]);
