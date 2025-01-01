@@ -54,7 +54,7 @@ int main() {
     int seq_len = 3;
     int d_model = 8;
     int num_heads = 2;
-    int ff_dim = 16;  // Feed-forward dimension, typically 4x d_model
+    int ff_dim = 32;  // Feed-forward dimension, typically 4x d_model
     float eps = 1e-5f;
 
     // Sample input sequence
@@ -72,31 +72,28 @@ int main() {
     // Create causal mask (lower triangular)
     int mask_dims[] = {batch_size, num_heads, seq_len, seq_len};
     float mask_data[] = {
+        // First head
+        1,0,0,
+        1,1,0,
+        1,1,1,
+        // Second head
         1,0,0,
         1,1,0,
         1,1,1
     };
     Tensor* mask = tensor_new(4, mask_dims, mask_data, 0);
 
-    // Decoder layer weights
-    // Self-attention weights
-    int qkv_dims[] = {d_model, d_model};
-    Tensor* W_q = tensor_randn(2, qkv_dims, 0, 1.0f/sqrt(d_model));
-    Tensor* W_k = tensor_randn(2, qkv_dims, 0, 1.0f/sqrt(d_model));
-    Tensor* W_v = tensor_randn(2, qkv_dims, 0, 1.0f/sqrt(d_model));
-    Tensor* W_o = tensor_randn(2, qkv_dims, 0, 1.0f/sqrt(d_model));
-
-    // Feed-forward weights
+    // Initialize feed-forward weights
     int ff1_dims[] = {d_model, ff_dim};
     int ff2_dims[] = {ff_dim, d_model};
-    Tensor* W_ff1 = tensor_randn(2, ff1_dims, 0, 1.0f/sqrt(d_model));
-    Tensor* W_ff2 = tensor_randn(2, ff2_dims, 0, 1.0f/sqrt(ff_dim));
+    Tensor* W_ff1 = tensor_randn(2, ff1_dims, 1);
+    Tensor* W_ff2 = tensor_randn(2, ff2_dims, 1);
     
-    // Biases
+    // Initialize feed-forward biases
     int bias_ff1_dims[] = {1, ff_dim};
     int bias_ff2_dims[] = {1, d_model};
-    Tensor* b_ff1 = tensor_zeros(2, bias_ff1_dims);
-    Tensor* b_ff2 = tensor_zeros(2, bias_ff2_dims);
+    Tensor* b_ff1 = tensor_zeros(2, bias_ff1_dims, 1);
+    Tensor* b_ff2 = tensor_zeros(2, bias_ff2_dims, 1);
 
     printf("Processing sequence through decoder layer...\n");
 
@@ -104,27 +101,18 @@ int main() {
     Tensor* norm1 = tensor_rms_norm(x, eps);
 
     // 2. Self-attention
-    // Project to Q, K, V
-    Tensor* Q = tensor_matmul(norm1, W_q);
-    Tensor* K = tensor_matmul(norm1, W_k);
-    Tensor* V = tensor_matmul(norm1, W_v);
+    Tensor* attn_out = tensor_masked_multihead_attention(norm1, norm1, norm1, mask, num_heads);
+    
+    // 3. Residual connection after attention
+    Tensor* post_attn = tensor_add(x, attn_out);
 
-    // Multi-head attention
-    Tensor* attn_out = tensor_masked_multihead_attention(Q, K, V, mask, num_heads);
-    Tensor* proj_attn = tensor_matmul(attn_out, W_o);
+    // 4. Layer Norm 2
+    Tensor* norm2 = tensor_rms_norm(post_attn, eps);
 
-    // Residual connection
-    Tensor* add1 = tensor_add(x, proj_attn);
-
-    // 3. Layer Norm 2
-    Tensor* norm2 = tensor_rms_norm(add1, eps);
-
-    // 4. Feed-forward network
-    Tensor* ff_out = tensor_feedforward(norm2, W_ff1, b_ff1);
-    Tensor* ff_proj = tensor_feedforward(ff_out, W_ff2, b_ff2);
-
-    // 5. Residual connection
-    Tensor* output = tensor_add(add1, ff_proj);
+    // 5. Feed-forward network with residual connection
+    Tensor* ff_hidden = tensor_feedforward(norm2, W_ff1, b_ff1);
+    Tensor* ff_output = tensor_feedforward(ff_hidden, W_ff2, b_ff2);
+    Tensor* output = tensor_add(post_attn, ff_output);
 
     // Print sample outputs
     printf("\nFinal output (first sequence position):\n");
