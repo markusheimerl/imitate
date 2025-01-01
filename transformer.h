@@ -43,11 +43,10 @@ Tensor* tensor_masked_multihead_attention(Tensor* Q, Tensor* K, Tensor* V, Tenso
     return tensor_reshape(tensor_permute(attention, (int[]){0,2,1,3}, 4), 3, (int[]){batch_size,seq_len_q,d_model});
 }
 
-Tensor* tensor_feedforward(Tensor* input, Tensor* weights, Tensor* bias) {
-    if (!input || !weights || !bias) return NULL;
+Tensor* tensor_feedforward(Tensor* input, Tensor* weights) {
+    if (!input || !weights) return NULL;
     Tensor* matmul_result = tensor_matmul(input, weights);
-    Tensor* bias_added = tensor_add(matmul_result, bias);
-    Tensor* output = tensor_gelu(bias_added);
+    Tensor* output = tensor_gelu(matmul_result);
     return output;
 }
 
