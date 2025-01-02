@@ -80,7 +80,7 @@ Tensor* decoder_transformer(Tensor* input, Tensor** W_q, Tensor** W_k,
 }
 
 int main() {
-    const int batch_size = 4, seq_len = 64, d_model = 64, n_head = 4, n_layers = 4;
+    const int batch_size = 4, seq_len = 128, d_model = 128, n_head = 4, n_layers = 4;
     const int d_head = d_model / n_head;
     printf("Testing transformer with self-attention and feed-forward...\n");
     
