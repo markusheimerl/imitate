@@ -1,7 +1,9 @@
 #include "grad.h"
 
 #define MAX_LINE_LENGTH 1024
-#define INPUT_FEATURES 14
+#define CONDITION_FEATURES 4
+#define SEQUENCE_FEATURES 10
+#define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define LEARNING_RATE 0.0001f
 #define BATCH_SIZE 4
 #define SEQ_LENGTH 64
@@ -84,7 +86,6 @@ Dataset load_csv(const char* filename) {
         exit(1);
     }
     
-    // Find min and max for normalization
     float* mins = calloc(INPUT_FEATURES, sizeof(float));
     float* maxs = calloc(INPUT_FEATURES, sizeof(float));
     for (int i = 0; i < INPUT_FEATURES; i++) {
@@ -109,7 +110,6 @@ Dataset load_csv(const char* filename) {
         dataset.rows++;
     }
     
-    // Normalize data to [-1, 1]
     for (int i = 0; i < dataset.rows; i++) {
         for (int j = 0; j < INPUT_FEATURES; j++) {
             float range = maxs[j] - mins[j];
@@ -127,16 +127,34 @@ Dataset load_csv(const char* filename) {
     return dataset;
 }
 
-Tensor* embed_features(Tensor* W_e, float* data, int batch_size, int seq_len) {
-    int input_dims[] = {batch_size, seq_len, INPUT_FEATURES};
-    Tensor* input = tensor_new(3, input_dims, NULL, 1);
-    memcpy(input->data, data, batch_size * seq_len * INPUT_FEATURES * sizeof(float));
-    return tensor_matmul(input, W_e);
+Tensor* embed_features(Tensor* W_e, Tensor* W_cond, float* data, int batch_size, int seq_len) {
+    int seq_dims[] = {batch_size, seq_len, SEQUENCE_FEATURES};
+    int cond_dims[] = {batch_size, seq_len, CONDITION_FEATURES};
+    
+    Tensor* seq_input = tensor_new(3, seq_dims, NULL, 1);
+    Tensor* cond_input = tensor_new(3, cond_dims, NULL, 1);
+    
+    for (int b = 0; b < batch_size; b++) {
+        for (int s = 0; s < seq_len; s++) {
+            for (int f = 0; f < CONDITION_FEATURES; f++) {
+                cond_input->data[(b * seq_len + s) * CONDITION_FEATURES + f] = 
+                    data[(b * seq_len + s) * INPUT_FEATURES + f];
+            }
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+                seq_input->data[(b * seq_len + s) * SEQUENCE_FEATURES + f] = 
+                    data[(b * seq_len + s) * INPUT_FEATURES + f + CONDITION_FEATURES];
+            }
+        }
+    }
+    
+    Tensor* seq_embedding = tensor_matmul(seq_input, W_e);
+    Tensor* cond_embedding = tensor_matmul(cond_input, W_cond);
+    return tensor_add(seq_embedding, cond_embedding);
 }
 
-void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k, 
+void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Tensor** W_k, 
                 Tensor** W_v, Tensor** W_o, Tensor** W_ff1, Tensor** W_ff2, 
-                Tensor* scale_tensor, Tensor* causal_mask, float learning_rate) {
+                Tensor* W_out, Tensor* scale_tensor, Tensor* causal_mask, float learning_rate) {
     int n_batches = (dataset->rows - SEQ_LENGTH - 1) / BATCH_SIZE;
     float total_loss = 0.0f;
     
@@ -159,34 +177,50 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
             }
         }
         
-        Tensor* output = decoder_transformer(embed_features(W_e, x_batch->data, BATCH_SIZE, SEQ_LENGTH),
+        Tensor* output = decoder_transformer(embed_features(W_e, W_cond, x_batch->data, BATCH_SIZE, SEQ_LENGTH),
                                           W_q, W_k, W_v, W_o, W_ff1, W_ff2, scale_tensor, causal_mask,
                                           BATCH_SIZE, SEQ_LENGTH, N_HEAD, D_MODEL, N_LAYERS);
         
-        int perm[] = {1, 0};
-        Tensor* pred = tensor_matmul(output, tensor_permute(W_e, perm, 2));
+        Tensor* pred = tensor_matmul(output, W_out);
         
         float batch_loss = 0.0f;
-        for (int i = 0; i < BATCH_SIZE * SEQ_LENGTH * INPUT_FEATURES; i++) {
-            float diff = pred->data[i] - y_batch->data[i];
-            diff = fmaxf(fminf(diff, 100.0f), -100.0f); // Clip gradients
-            batch_loss += diff * diff;
-            pred->grad[i] = 2.0f * diff;
+        for (int b = 0; b < BATCH_SIZE; b++) {
+            for (int s = 0; s < SEQ_LENGTH; s++) {
+                for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+                    int pred_idx = (b * SEQ_LENGTH + s) * SEQUENCE_FEATURES + f;
+                    int y_idx = (b * SEQ_LENGTH + s) * INPUT_FEATURES + f + CONDITION_FEATURES;
+                    float diff = pred->data[pred_idx] - y_batch->data[y_idx];
+                    diff = fmaxf(fminf(diff, 100.0f), -100.0f);
+                    batch_loss += diff * diff;
+                    pred->grad[pred_idx] = 2.0f * diff;
+                }
+            }
         }
-        batch_loss /= (BATCH_SIZE * SEQ_LENGTH * INPUT_FEATURES);
+        batch_loss /= (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
         
         if (isfinite(batch_loss)) {
             total_loss += batch_loss;
             
             backward();
             
-            // Gradient clipping
             float max_grad = 1.0f;
             
             for (int i = 0; i < W_e->size; i++) {
                 W_e->grad[i] = fmaxf(fminf(W_e->grad[i], max_grad), -max_grad);
                 W_e->data[i] -= learning_rate * W_e->grad[i];
                 W_e->grad[i] = 0.0f;
+            }
+            
+            for (int i = 0; i < W_cond->size; i++) {
+                W_cond->grad[i] = fmaxf(fminf(W_cond->grad[i], max_grad), -max_grad);
+                W_cond->data[i] -= learning_rate * W_cond->grad[i];
+                W_cond->grad[i] = 0.0f;
+            }
+            
+            for (int i = 0; i < W_out->size; i++) {
+                W_out->grad[i] = fmaxf(fminf(W_out->grad[i], max_grad), -max_grad);
+                W_out->data[i] -= learning_rate * W_out->grad[i];
+                W_out->grad[i] = 0.0f;
             }
             
             for (int l = 0; l < N_LAYERS; l++) {
@@ -229,10 +263,18 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
 int main() {
     Dataset dataset = load_csv("2024-12-29_6-25-1_control_data.csv");
     
-    int dims_e[] = {INPUT_FEATURES, D_MODEL};
+    int dims_e[] = {SEQUENCE_FEATURES, D_MODEL};
+    int dims_cond[] = {CONDITION_FEATURES, D_MODEL};
     Tensor* W_e = tensor_randn_permanent(2, dims_e, 1);
-    float w_scale = sqrtf(2.0f / INPUT_FEATURES);
+    Tensor* W_cond = tensor_randn_permanent(2, dims_cond, 1);
+    
+    int dims_out[] = {D_MODEL, SEQUENCE_FEATURES};
+    Tensor* W_out = tensor_randn_permanent(2, dims_out, 1);
+    
+    float w_scale = sqrtf(2.0f / D_MODEL);
     for (int i = 0; i < W_e->size; i++) W_e->data[i] *= w_scale;
+    for (int i = 0; i < W_cond->size; i++) W_cond->data[i] *= w_scale;
+    for (int i = 0; i < W_out->size; i++) W_out->data[i] *= w_scale;
     
     int scale_dims[] = {BATCH_SIZE, N_HEAD, SEQ_LENGTH, SEQ_LENGTH};
     Tensor* scale_tensor = tensor_zeros_permanent(4, scale_dims, 0);
@@ -274,8 +316,8 @@ int main() {
     
     for (int epoch = 0; epoch < EPOCHS; epoch++) {
         printf("\n=== Epoch %d/%d ===\n", epoch + 1, EPOCHS);
-        train_epoch(&dataset, W_e, W_q, W_k, W_v, W_o, W_ff1, W_ff2,
-                   scale_tensor, causal_mask, LEARNING_RATE);
+        train_epoch(&dataset, W_e, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2,
+                   W_out, scale_tensor, causal_mask, LEARNING_RATE);
     }
     
     free(dataset.data);
