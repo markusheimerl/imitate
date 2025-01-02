@@ -1,0 +1,41 @@
+name: Train Transformer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Decompress training data
+      run: xz -d 2024-12-29_6-25-1_control_data.csv.xz
+
+    - name: Build transformer
+      run: make
+
+    - name: Train transformer
+      run: ./transformer.out
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: weights-${{ github.sha }}
+        release_name: Model Weights ${{ github.sha }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Weights
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./weights.bin
+        asset_name: weights.bin
+        asset_content_type: application/octet-stream
