@@ -1,7 +1,4 @@
 #include "grad.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #define MAX_LINE_LENGTH 1024
 #define INPUT_FEATURES 14
@@ -415,77 +412,21 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
     DEBUG_PRINT("Will process %d batches", n_batches);
     float total_loss = 0.0f;
     
-    // Allocate batch data
-    float* x_data = malloc(BATCH_SIZE * SEQ_LENGTH * INPUT_FEATURES * sizeof(float));
-    float* y_data = malloc(BATCH_SIZE * SEQ_LENGTH * INPUT_FEATURES * sizeof(float));
+    // Create permanent tensors for batch data
+    int batch_dims[] = {BATCH_SIZE, SEQ_LENGTH, INPUT_FEATURES};
+    Tensor* x_batch = tensor_zeros_permanent(3, batch_dims, 0);
+    Tensor* y_batch = tensor_zeros_permanent(3, batch_dims, 0);
     
-    if (!x_data || !y_data) {
-        printf("ERROR: Failed to allocate batch data memory\n");
+    if (!x_batch || !y_batch) {
+        printf("ERROR: Failed to create batch tensors\n");
         exit(1);
     }
 
-    // Store the original weights
-    float* W_e_data = malloc(W_e->size * sizeof(float));
-    memcpy(W_e_data, W_e->data, W_e->size * sizeof(float));
-    
-    float** W_q_data = malloc(N_LAYERS * sizeof(float*));
-    float** W_k_data = malloc(N_LAYERS * sizeof(float*));
-    float** W_v_data = malloc(N_LAYERS * sizeof(float*));
-    float** W_o_data = malloc(N_LAYERS * sizeof(float*));
-    float** W_ff1_data = malloc(N_LAYERS * sizeof(float*));
-    float** W_ff2_data = malloc(N_LAYERS * sizeof(float*));
-    
-    for (int l = 0; l < N_LAYERS; l++) {
-        W_q_data[l] = malloc(W_q[l]->size * sizeof(float));
-        W_k_data[l] = malloc(W_k[l]->size * sizeof(float));
-        W_v_data[l] = malloc(W_v[l]->size * sizeof(float));
-        W_o_data[l] = malloc(W_o[l]->size * sizeof(float));
-        W_ff1_data[l] = malloc(W_ff1[l]->size * sizeof(float));
-        W_ff2_data[l] = malloc(W_ff2[l]->size * sizeof(float));
-        
-        memcpy(W_q_data[l], W_q[l]->data, W_q[l]->size * sizeof(float));
-        memcpy(W_k_data[l], W_k[l]->data, W_k[l]->size * sizeof(float));
-        memcpy(W_v_data[l], W_v[l]->data, W_v[l]->size * sizeof(float));
-        memcpy(W_o_data[l], W_o[l]->data, W_o[l]->size * sizeof(float));
-        memcpy(W_ff1_data[l], W_ff1[l]->data, W_ff1[l]->size * sizeof(float));
-        memcpy(W_ff2_data[l], W_ff2[l]->data, W_ff2[l]->size * sizeof(float));
-    }
-    
-    // Store attention mask data
-    int scale_size = BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH;
-    float* scale_data = malloc(scale_size * sizeof(float));
-    float* mask_data = malloc(scale_size * sizeof(float));
-    memcpy(scale_data, scale_tensor->data, scale_size * sizeof(float));
-    memcpy(mask_data, causal_mask->data, scale_size * sizeof(float));
-    
     for (int batch = 0; batch < n_batches; batch++) {
         DEBUG_PRINT("\nProcessing batch %d/%d", batch + 1, n_batches);
         
-        // Clear registry and recreate tensors
+        // Clear registry (but keep permanent tensors)
         clean_registry();
-        
-        // Recreate embedding tensor
-        int dims_e[] = {INPUT_FEATURES, D_MODEL};
-        W_e = tensor_new(2, dims_e, W_e_data, 1);
-        
-        // Recreate layer tensors
-        int dims_attn[] = {D_MODEL, D_MODEL};
-        int dims_ff1[] = {D_MODEL, D_MODEL * 4};
-        int dims_ff2[] = {D_MODEL * 4, D_MODEL};
-        
-        for (int l = 0; l < N_LAYERS; l++) {
-            W_q[l] = tensor_new(2, dims_attn, W_q_data[l], 1);
-            W_k[l] = tensor_new(2, dims_attn, W_k_data[l], 1);
-            W_v[l] = tensor_new(2, dims_attn, W_v_data[l], 1);
-            W_o[l] = tensor_new(2, dims_attn, W_o_data[l], 1);
-            W_ff1[l] = tensor_new(2, dims_ff1, W_ff1_data[l], 1);
-            W_ff2[l] = tensor_new(2, dims_ff2, W_ff2_data[l], 1);
-        }
-        
-        // Recreate attention masks
-        int scale_dims[] = {BATCH_SIZE, N_HEAD, SEQ_LENGTH, SEQ_LENGTH};
-        scale_tensor = tensor_new(4, scale_dims, scale_data, 0);
-        causal_mask = tensor_new(4, scale_dims, mask_data, 0);
         
         // Fill batch data
         for (int b = 0; b < BATCH_SIZE; b++) {
@@ -494,14 +435,14 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
                 for (int f = 0; f < INPUT_FEATURES; f++) {
                     int idx = (b * SEQ_LENGTH + s) * INPUT_FEATURES + f;
                     int data_idx = (start_idx + s) * INPUT_FEATURES + f;
-                    x_data[idx] = dataset->data[data_idx];
-                    y_data[idx] = dataset->data[data_idx + INPUT_FEATURES];
+                    x_batch->data[idx] = dataset->data[data_idx];
+                    y_batch->data[idx] = dataset->data[data_idx + INPUT_FEATURES];
                 }
             }
         }
         
         // Forward pass
-        Tensor* x_embedded = embed_features(W_e, x_data, BATCH_SIZE, SEQ_LENGTH);
+        Tensor* x_embedded = embed_features(W_e, x_batch->data, BATCH_SIZE, SEQ_LENGTH);
         if (!x_embedded) {
             printf("ERROR: Failed to create embedded input\n");
             exit(1);
@@ -531,7 +472,7 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
         // Compute loss and gradients
         float batch_loss = 0.0f;
         for (int i = 0; i < BATCH_SIZE * SEQ_LENGTH * INPUT_FEATURES; i++) {
-            float diff = pred->data[i] - y_data[i];
+            float diff = pred->data[i] - y_batch->data[i];
             batch_loss += diff * diff;
             pred->grad[i] = 2.0f * diff;
         }
@@ -540,23 +481,30 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
         
         backward();
         
-        // Update stored weights
+        // Update weights directly
         for (int i = 0; i < W_e->size; i++) {
-            W_e_data[i] -= learning_rate * W_e->grad[i];
+            W_e->data[i] -= learning_rate * W_e->grad[i];
+            W_e->grad[i] = 0.0f;  // Clear gradients for next batch
         }
         
         for (int l = 0; l < N_LAYERS; l++) {
             for (int i = 0; i < W_q[l]->size; i++) {
-                W_q_data[l][i] -= learning_rate * W_q[l]->grad[i];
-                W_k_data[l][i] -= learning_rate * W_k[l]->grad[i];
-                W_v_data[l][i] -= learning_rate * W_v[l]->grad[i];
-                W_o_data[l][i] -= learning_rate * W_o[l]->grad[i];
+                W_q[l]->data[i] -= learning_rate * W_q[l]->grad[i];
+                W_k[l]->data[i] -= learning_rate * W_k[l]->grad[i];
+                W_v[l]->data[i] -= learning_rate * W_v[l]->grad[i];
+                W_o[l]->data[i] -= learning_rate * W_o[l]->grad[i];
+                W_q[l]->grad[i] = 0.0f;  // Clear gradients
+                W_k[l]->grad[i] = 0.0f;
+                W_v[l]->grad[i] = 0.0f;
+                W_o[l]->grad[i] = 0.0f;
             }
             for (int i = 0; i < W_ff1[l]->size; i++) {
-                W_ff1_data[l][i] -= learning_rate * W_ff1[l]->grad[i];
+                W_ff1[l]->data[i] -= learning_rate * W_ff1[l]->grad[i];
+                W_ff1[l]->grad[i] = 0.0f;
             }
             for (int i = 0; i < W_ff2[l]->size; i++) {
-                W_ff2_data[l][i] -= learning_rate * W_ff2[l]->grad[i];
+                W_ff2[l]->data[i] -= learning_rate * W_ff2[l]->grad[i];
+                W_ff2[l]->grad[i] = 0.0f;
             }
         }
         
@@ -564,39 +512,6 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor** W_q, Tensor** W_k,
             DEBUG_PRINT("Batch %d/%d, Loss: %f", batch + 1, n_batches, batch_loss);
         }
     }
-    
-    // Copy final weights back to original tensors
-    memcpy(W_e->data, W_e_data, W_e->size * sizeof(float));
-    for (int l = 0; l < N_LAYERS; l++) {
-        memcpy(W_q[l]->data, W_q_data[l], W_q[l]->size * sizeof(float));
-        memcpy(W_k[l]->data, W_k_data[l], W_k[l]->size * sizeof(float));
-        memcpy(W_v[l]->data, W_v_data[l], W_v[l]->size * sizeof(float));
-        memcpy(W_o[l]->data, W_o_data[l], W_o[l]->size * sizeof(float));
-        memcpy(W_ff1[l]->data, W_ff1_data[l], W_ff1[l]->size * sizeof(float));
-        memcpy(W_ff2[l]->data, W_ff2_data[l], W_ff2[l]->size * sizeof(float));
-    }
-    
-    // Cleanup
-    free(W_e_data);
-    free(scale_data);
-    free(mask_data);
-    for (int l = 0; l < N_LAYERS; l++) {
-        free(W_q_data[l]);
-        free(W_k_data[l]);
-        free(W_v_data[l]);
-        free(W_o_data[l]);
-        free(W_ff1_data[l]);
-        free(W_ff2_data[l]);
-    }
-    free(W_q_data);
-    free(W_k_data);
-    free(W_v_data);
-    free(W_o_data);
-    free(W_ff1_data);
-    free(W_ff2_data);
-    
-    free(x_data);
-    free(y_data);
     
     DEBUG_PRINT("Epoch complete, average loss: %f", total_loss / n_batches);
 }
@@ -608,31 +523,25 @@ int main() {
     Dataset dataset = load_csv("2024-12-29_6-25-1_control_data.csv");
     DEBUG_PRINT("Dataset loaded with %d rows", dataset.rows);
     
+    // Create embedding weights
     DEBUG_PRINT("Creating embedding weights");
-    Tensor* W_e = create_embedding_weights();
+    int dims_e[] = {INPUT_FEATURES, D_MODEL};
+    Tensor* W_e = tensor_randn_permanent(2, dims_e, 1);
     if (!W_e) {
         printf("ERROR: Failed to create embedding weights\n");
         exit(1);
     }
+    float w_scale = sqrtf(2.0f / INPUT_FEATURES);
+    for (int i = 0; i < W_e->size; i++) {
+        W_e->data[i] *= w_scale;
+    }
     DEBUG_PRINT("Created embedding weights with dims [%d, %d]", W_e->dims[0], W_e->dims[1]);
     
-    DEBUG_PRINT("Allocating transformer weights");
-    Tensor **W_q = malloc(N_LAYERS * sizeof(Tensor*));
-    Tensor **W_k = malloc(N_LAYERS * sizeof(Tensor*));
-    Tensor **W_v = malloc(N_LAYERS * sizeof(Tensor*));
-    Tensor **W_o = malloc(N_LAYERS * sizeof(Tensor*));
-    Tensor **W_ff1 = malloc(N_LAYERS * sizeof(Tensor*));
-    Tensor **W_ff2 = malloc(N_LAYERS * sizeof(Tensor*));
-    
-    if (!W_q || !W_k || !W_v || !W_o || !W_ff1 || !W_ff2) {
-        printf("ERROR: Failed to allocate weight arrays\n");
-        exit(1);
-    }
-    
+    // Create attention masks
     DEBUG_PRINT("Creating attention masks");
     int scale_dims[] = {BATCH_SIZE, N_HEAD, SEQ_LENGTH, SEQ_LENGTH};
-    Tensor* scale_tensor = tensor_new(4, scale_dims, NULL, 0);
-    Tensor* causal_mask = tensor_new(4, scale_dims, NULL, 0);
+    Tensor* scale_tensor = tensor_zeros_permanent(4, scale_dims, 0);
+    Tensor* causal_mask = tensor_zeros_permanent(4, scale_dims, 0);
     float scale_val = 1.0f / sqrtf(D_MODEL / N_HEAD);
     
     DEBUG_PRINT("Initializing attention masks");
@@ -651,20 +560,29 @@ int main() {
         }
     }
     
+    // Create transformer weights
     DEBUG_PRINT("Initializing transformer weights");
     int attn_dims[] = {D_MODEL, D_MODEL};
     int ff_dims1[] = {D_MODEL, D_MODEL * 4};
     int ff_dims2[] = {D_MODEL * 4, D_MODEL};
-    float w_scale = sqrtf(2.0f / D_MODEL);
+    w_scale = sqrtf(2.0f / D_MODEL);
+    
+    Tensor* W_q[N_LAYERS];
+    Tensor* W_k[N_LAYERS];
+    Tensor* W_v[N_LAYERS];
+    Tensor* W_o[N_LAYERS];
+    Tensor* W_ff1[N_LAYERS];
+    Tensor* W_ff2[N_LAYERS];
     
     for (int l = 0; l < N_LAYERS; l++) {
         DEBUG_PRINT("Initializing layer %d", l + 1);
-        W_q[l] = tensor_randn(2, attn_dims, 1);
-        W_k[l] = tensor_randn(2, attn_dims, 1);
-        W_v[l] = tensor_randn(2, attn_dims, 1);
-        W_o[l] = tensor_randn(2, attn_dims, 1);
-        W_ff1[l] = tensor_randn(2, ff_dims1, 1);
-        W_ff2[l] = tensor_randn(2, ff_dims2, 1);
+        
+        W_q[l] = tensor_randn_permanent(2, attn_dims, 1);
+        W_k[l] = tensor_randn_permanent(2, attn_dims, 1);
+        W_v[l] = tensor_randn_permanent(2, attn_dims, 1);
+        W_o[l] = tensor_randn_permanent(2, attn_dims, 1);
+        W_ff1[l] = tensor_randn_permanent(2, ff_dims1, 1);
+        W_ff2[l] = tensor_randn_permanent(2, ff_dims2, 1);
         
         // Validate tensor creation
         if (!W_q[l] || !W_k[l] || !W_v[l] || !W_o[l] || !W_ff1[l] || !W_ff2[l]) {
@@ -680,16 +598,17 @@ int main() {
         DEBUG_PRINT("  W_ff1: [%d, %d]", W_ff1[l]->dims[0], W_ff1[l]->dims[1]);
         DEBUG_PRINT("  W_ff2: [%d, %d]", W_ff2[l]->dims[0], W_ff2[l]->dims[1]);
         
+        // Scale weights
         for (int i = 0; i < D_MODEL * D_MODEL; i++) {
             W_q[l]->data[i] *= w_scale;
             W_k[l]->data[i] *= w_scale;
             W_v[l]->data[i] *= w_scale;
             W_o[l]->data[i] *= w_scale;
         }
-        for (int i = 0; i < D_MODEL * D_MODEL * 4; i++) {
+        for (int i = 0; i < W_ff1[l]->size; i++) {
             W_ff1[l]->data[i] *= w_scale;
         }
-        for (int i = 0; i < D_MODEL * 4 * D_MODEL; i++) {
+        for (int i = 0; i < W_ff2[l]->size; i++) {
             W_ff2[l]->data[i] *= w_scale;
         }
     }
@@ -702,12 +621,6 @@ int main() {
     }
     
     DEBUG_PRINT("Cleaning up");
-    free(W_q);
-    free(W_k);
-    free(W_v);
-    free(W_o);
-    free(W_ff1);
-    free(W_ff2);
     free(dataset.data);
     clean_registry();
     
