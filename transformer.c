@@ -289,6 +289,61 @@ Tensor* create_alibi_mask(int batch_size, int n_head, int seq_len) {
     return mask;
 }
 
+void save_weights(Tensor* W_e, Tensor* W_cond, Tensor* W_out, 
+                 Tensor** W_q, Tensor** W_k, Tensor** W_v, Tensor** W_o,
+                 Tensor** W_ff1, Tensor** W_ff2) {
+    // Save embedding weights
+    FILE* f_e = fopen("weights_W_e.bin", "wb");
+    fwrite(W_e->data, sizeof(float), W_e->size, f_e);
+    fclose(f_e);
+
+    FILE* f_cond = fopen("weights_W_cond.bin", "wb");
+    fwrite(W_cond->data, sizeof(float), W_cond->size, f_cond);
+    fclose(f_cond);
+
+    // Save output weights
+    FILE* f_out = fopen("weights_W_out.bin", "wb");
+    fwrite(W_out->data, sizeof(float), W_out->size, f_out);
+    fclose(f_out);
+
+    // Save transformer layer weights
+    for (int l = 0; l < N_LAYERS; l++) {
+        char filename[100];
+        
+        sprintf(filename, "weights_W_q_%d.bin", l);
+        FILE* f_q = fopen(filename, "wb");
+        fwrite(W_q[l]->data, sizeof(float), W_q[l]->size, f_q);
+        fclose(f_q);
+
+        sprintf(filename, "weights_W_k_%d.bin", l);
+        FILE* f_k = fopen(filename, "wb");
+        fwrite(W_k[l]->data, sizeof(float), W_k[l]->size, f_k);
+        fclose(f_k);
+
+        sprintf(filename, "weights_W_v_%d.bin", l);
+        FILE* f_v = fopen(filename, "wb");
+        fwrite(W_v[l]->data, sizeof(float), W_v[l]->size, f_v);
+        fclose(f_v);
+
+        sprintf(filename, "weights_W_o_%d.bin", l);
+        FILE* f_o = fopen(filename, "wb");
+        fwrite(W_o[l]->data, sizeof(float), W_o[l]->size, f_o);
+        fclose(f_o);
+
+        sprintf(filename, "weights_W_ff1_%d.bin", l);
+        FILE* f_ff1 = fopen(filename, "wb");
+        fwrite(W_ff1[l]->data, sizeof(float), W_ff1[l]->size, f_ff1);
+        fclose(f_ff1);
+
+        sprintf(filename, "weights_W_ff2_%d.bin", l);
+        FILE* f_ff2 = fopen(filename, "wb");
+        fwrite(W_ff2[l]->data, sizeof(float), W_ff2[l]->size, f_ff2);
+        fclose(f_ff2);
+    }
+
+    printf("All weights have been saved to files.\n");
+}
+
 int main() {
     Dataset dataset = load_csv("2024-12-29_6-25-1_control_data.csv");
     
@@ -341,6 +396,8 @@ int main() {
         train_epoch(&dataset, W_e, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2,
                    W_out, scale_tensor, alibi_mask, LEARNING_RATE);
     }
+
+    save_weights(W_e, W_cond, W_out, W_q, W_k, W_v, W_o, W_ff1, W_ff2);
     
     free(dataset.data);
     clean_registry();
