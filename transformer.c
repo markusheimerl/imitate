@@ -11,14 +11,14 @@ int main() {
     int dims_out[] = {D_MODEL, SEQUENCE_FEATURES};
     Tensor* W_out = tensor_randn_permanent(2, dims_out, 1);
     
-    float w_scale = sqrtf(2.0f / D_MODEL);
+    double w_scale = sqrtf(2.0f / D_MODEL);
     for (int i = 0; i < W_e->size; i++) W_e->data[i] *= w_scale;
     for (int i = 0; i < W_cond->size; i++) W_cond->data[i] *= w_scale;
     for (int i = 0; i < W_out->size; i++) W_out->data[i] *= w_scale;
     
     int scale_dims[] = {BATCH_SIZE, N_HEAD, SEQ_LENGTH, SEQ_LENGTH};
     Tensor* scale_tensor = tensor_zeros_permanent(4, scale_dims, 0);
-    float scale_val = 1.0f / sqrtf(D_MODEL / N_HEAD);
+    double scale_val = 1.0f / sqrtf(D_MODEL / N_HEAD);
     for (int i = 0; i < scale_tensor->size; i++) scale_tensor->data[i] = scale_val;
     Tensor* alibi_mask = create_alibi_mask(BATCH_SIZE, N_HEAD, SEQ_LENGTH);
     

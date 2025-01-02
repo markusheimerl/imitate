@@ -16,7 +16,7 @@
 #define EPOCHS 100
 
 typedef struct {
-    float* data;
+    double* data;
     int rows;
     int cols;
 } Dataset;
@@ -75,7 +75,7 @@ Dataset load_csv(const char* filename) {
     printf("Loading CSV file: %s\n", filename);
     Dataset dataset = {NULL, 0, INPUT_FEATURES};
     char line[MAX_LINE_LENGTH];
-    float* temp = malloc(1000 * INPUT_FEATURES * sizeof(float));
+    double* temp = malloc(1000 * INPUT_FEATURES * sizeof(double));
     int capacity = 1000;
     
     FILE* file = fopen(filename, "r");
@@ -90,8 +90,8 @@ Dataset load_csv(const char* filename) {
         exit(1);
     }
     
-    float* mins = calloc(INPUT_FEATURES, sizeof(float));
-    float* maxs = calloc(INPUT_FEATURES, sizeof(float));
+    double* mins = calloc(INPUT_FEATURES, sizeof(double));
+    double* maxs = calloc(INPUT_FEATURES, sizeof(double));
     for (int i = 0; i < INPUT_FEATURES; i++) {
         mins[i] = INFINITY;
         maxs[i] = -INFINITY;
@@ -100,12 +100,12 @@ Dataset load_csv(const char* filename) {
     while (fgets(line, MAX_LINE_LENGTH, file)) {
         if (dataset.rows >= capacity) {
             capacity *= 2;
-            temp = realloc(temp, capacity * INPUT_FEATURES * sizeof(float));
+            temp = realloc(temp, capacity * INPUT_FEATURES * sizeof(double));
         }
         
         char* token = strtok(line, ",");
         for (int i = 0; i < INPUT_FEATURES; i++) {
-            float val = atof(token);
+            double val = atof(token);
             temp[dataset.rows * INPUT_FEATURES + i] = val;
             mins[i] = fminf(mins[i], val);
             maxs[i] = fmaxf(maxs[i], val);
@@ -116,7 +116,7 @@ Dataset load_csv(const char* filename) {
     
     for (int i = 0; i < dataset.rows; i++) {
         for (int j = 0; j < INPUT_FEATURES; j++) {
-            float range = maxs[j] - mins[j];
+            double range = maxs[j] - mins[j];
             if (range > 0) {
                 temp[i * INPUT_FEATURES + j] = 2.0f * (temp[i * INPUT_FEATURES + j] - mins[j]) / range - 1.0f;
             }
@@ -131,7 +131,7 @@ Dataset load_csv(const char* filename) {
     return dataset;
 }
 
-Tensor* embed_features(Tensor* W_e, Tensor* W_cond, float* data, int batch_size, int seq_len) {
+Tensor* embed_features(Tensor* W_e, Tensor* W_cond, double* data, int batch_size, int seq_len) {
     int seq_dims[] = {batch_size, seq_len, SEQUENCE_FEATURES};
     int cond_dims[] = {batch_size, seq_len, CONDITION_FEATURES};
     
@@ -158,9 +158,9 @@ Tensor* embed_features(Tensor* W_e, Tensor* W_cond, float* data, int batch_size,
 
 void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Tensor** W_k, 
                 Tensor** W_v, Tensor** W_o, Tensor** W_ff1, Tensor** W_ff2, 
-                Tensor* W_out, Tensor* scale_tensor, Tensor* alibi_mask, float learning_rate) {
+                Tensor* W_out, Tensor* scale_tensor, Tensor* alibi_mask, double learning_rate) {
     int n_batches = (dataset->rows - SEQ_LENGTH - 1) / BATCH_SIZE;
-    float total_loss = 0.0f;
+    double total_loss = 0.0f;
     
     int batch_dims[] = {BATCH_SIZE, SEQ_LENGTH, INPUT_FEATURES};
     Tensor* x_batch = tensor_zeros_permanent(3, batch_dims, 0);
@@ -187,13 +187,13 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Te
         
         Tensor* pred = tensor_matmul(output, W_out);
         
-        float batch_loss = 0.0f;
+        double batch_loss = 0.0f;
         for (int b = 0; b < BATCH_SIZE; b++) {
             for (int s = 0; s < SEQ_LENGTH; s++) {
                 for (int f = 0; f < SEQUENCE_FEATURES; f++) {
                     int pred_idx = (b * SEQ_LENGTH + s) * SEQUENCE_FEATURES + f;
                     int y_idx = (b * SEQ_LENGTH + s) * INPUT_FEATURES + f + CONDITION_FEATURES;
-                    float diff = pred->data[pred_idx] - y_batch->data[y_idx];
+                    double diff = pred->data[pred_idx] - y_batch->data[y_idx];
                     diff = fmaxf(fminf(diff, 100.0f), -100.0f);
                     batch_loss += diff * diff;
                     pred->grad[pred_idx] = 2.0f * diff;
@@ -207,7 +207,7 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Te
             
             backward();
             
-            float max_grad = 1.0f;
+            double max_grad = 1.0f;
             
             for (int i = 0; i < W_e->size; i++) {
                 W_e->grad[i] = fmaxf(fminf(W_e->grad[i], max_grad), -max_grad);
@@ -268,20 +268,20 @@ Tensor* create_alibi_mask(int batch_size, int n_head, int seq_len) {
     int dims[] = {batch_size, n_head, seq_len, seq_len};
     Tensor* mask = tensor_zeros_permanent(4, dims, 0);
     
-    float* slopes = malloc(n_head * sizeof(float));
-    float base = powf(2.0f, -8.0f / n_head);
+    double* slopes = malloc(n_head * sizeof(double));
+    double base = powf(2.0f, -8.0f / n_head);
     for (int h = 0; h < n_head; h++) {
         slopes[h] = powf(base, h + 1);
     }
     
     for (int b = 0; b < batch_size; b++) {
         for (int h = 0; h < n_head; h++) {
-            float slope = slopes[h];
+            double slope = slopes[h];
             for (int i = 0; i < seq_len; i++) {
                 for (int j = 0; j < seq_len; j++) {
-                    float distance = j - i;
-                    float alibi_bias = -slope * distance;
-                    float mask_value = j <= i ? alibi_bias : -1e9f;
+                    double distance = j - i;
+                    double alibi_bias = -slope * distance;
+                    double mask_value = j <= i ? alibi_bias : -1e9f;
                     mask->data[((b * n_head + h) * seq_len + i) * seq_len + j] = mask_value;
                 }
             }
@@ -297,16 +297,16 @@ void save_weights(Tensor* W_e, Tensor* W_cond, Tensor* W_out,
                  Tensor** W_ff1, Tensor** W_ff2) {
     // Save embedding weights
     FILE* f_e = fopen("weights_W_e.bin", "wb");
-    fwrite(W_e->data, sizeof(float), W_e->size, f_e);
+    fwrite(W_e->data, sizeof(double), W_e->size, f_e);
     fclose(f_e);
 
     FILE* f_cond = fopen("weights_W_cond.bin", "wb");
-    fwrite(W_cond->data, sizeof(float), W_cond->size, f_cond);
+    fwrite(W_cond->data, sizeof(double), W_cond->size, f_cond);
     fclose(f_cond);
 
     // Save output weights
     FILE* f_out = fopen("weights_W_out.bin", "wb");
-    fwrite(W_out->data, sizeof(float), W_out->size, f_out);
+    fwrite(W_out->data, sizeof(double), W_out->size, f_out);
     fclose(f_out);
 
     // Save transformer layer weights
@@ -315,32 +315,32 @@ void save_weights(Tensor* W_e, Tensor* W_cond, Tensor* W_out,
         
         sprintf(filename, "weights_W_q_%d.bin", l);
         FILE* f_q = fopen(filename, "wb");
-        fwrite(W_q[l]->data, sizeof(float), W_q[l]->size, f_q);
+        fwrite(W_q[l]->data, sizeof(double), W_q[l]->size, f_q);
         fclose(f_q);
 
         sprintf(filename, "weights_W_k_%d.bin", l);
         FILE* f_k = fopen(filename, "wb");
-        fwrite(W_k[l]->data, sizeof(float), W_k[l]->size, f_k);
+        fwrite(W_k[l]->data, sizeof(double), W_k[l]->size, f_k);
         fclose(f_k);
 
         sprintf(filename, "weights_W_v_%d.bin", l);
         FILE* f_v = fopen(filename, "wb");
-        fwrite(W_v[l]->data, sizeof(float), W_v[l]->size, f_v);
+        fwrite(W_v[l]->data, sizeof(double), W_v[l]->size, f_v);
         fclose(f_v);
 
         sprintf(filename, "weights_W_o_%d.bin", l);
         FILE* f_o = fopen(filename, "wb");
-        fwrite(W_o[l]->data, sizeof(float), W_o[l]->size, f_o);
+        fwrite(W_o[l]->data, sizeof(double), W_o[l]->size, f_o);
         fclose(f_o);
 
         sprintf(filename, "weights_W_ff1_%d.bin", l);
         FILE* f_ff1 = fopen(filename, "wb");
-        fwrite(W_ff1[l]->data, sizeof(float), W_ff1[l]->size, f_ff1);
+        fwrite(W_ff1[l]->data, sizeof(double), W_ff1[l]->size, f_ff1);
         fclose(f_ff1);
 
         sprintf(filename, "weights_W_ff2_%d.bin", l);
         FILE* f_ff2 = fopen(filename, "wb");
-        fwrite(W_ff2[l]->data, sizeof(float), W_ff2[l]->size, f_ff2);
+        fwrite(W_ff2[l]->data, sizeof(double), W_ff2[l]->size, f_ff2);
         fclose(f_ff2);
     }
 
