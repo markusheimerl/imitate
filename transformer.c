@@ -23,7 +23,7 @@ Tensor* feed_forward(Tensor* W_in, Tensor* W_out, Tensor* x) {
 }
 
 Tensor* attention(Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o, 
-                 Tensor* x, Tensor* scale_tensor, Tensor* causal_mask,
+                 Tensor* x, Tensor* scale_tensor, Tensor* alibi_mask,
                  int batch_size, int seq_len, int n_head, int d_model) {
     int d_head = d_model / n_head;
     int qkv_dims[] = {batch_size, seq_len, n_head, d_head};
@@ -34,8 +34,9 @@ Tensor* attention(Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
     Tensor* V = tensor_permute(tensor_reshape(tensor_matmul(x, W_v), 4, qkv_dims), perm, 4);
     
     int perm_k[] = {0, 1, 3, 2};
-    Tensor* scores = tensor_hadamard(tensor_hadamard(tensor_matmul(Q, tensor_permute(K, perm_k, 4)), 
-                                   scale_tensor), causal_mask);
+    Tensor* scores = tensor_matmul(Q, tensor_permute(K, perm_k, 4));
+    scores = tensor_hadamard(scores, scale_tensor);
+    scores = tensor_add(scores, alibi_mask);
     
     Tensor* attn_output = tensor_matmul(tensor_softmax(scores), V);
     int out_dims[] = {batch_size, seq_len, d_model};
@@ -44,10 +45,10 @@ Tensor* attention(Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
 
 Tensor* transformer_block(Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
                         Tensor* W_ff1, Tensor* W_ff2, Tensor* x,
-                        Tensor* scale_tensor, Tensor* causal_mask,
+                        Tensor* scale_tensor, Tensor* alibi_mask,
                         int batch_size, int seq_len, int n_head, int d_model) {
     Tensor* attn_out = attention(W_q, W_k, W_v, W_o, tensor_rms_norm(x, 1e-5f), 
-                                scale_tensor, causal_mask,
+                                scale_tensor, alibi_mask,
                                 batch_size, seq_len, n_head, d_model);
     Tensor* res1 = tensor_add(x, attn_out);
     return tensor_add(res1, feed_forward(W_ff1, W_ff2, tensor_rms_norm(res1, 1e-5f)));
@@ -56,12 +57,12 @@ Tensor* transformer_block(Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
 Tensor* decoder_transformer(Tensor* input, Tensor** W_q, Tensor** W_k, 
                           Tensor** W_v, Tensor** W_o, Tensor** W_ff1, 
                           Tensor** W_ff2, Tensor* scale_tensor, 
-                          Tensor* causal_mask, int batch_size, int seq_len, 
+                          Tensor* alibi_mask, int batch_size, int seq_len, 
                           int n_head, int d_model, int n_layers) {
     Tensor* current = input;
     for (int l = 0; l < n_layers; l++) {
         current = transformer_block(W_q[l], W_k[l], W_v[l], W_o[l],
-            W_ff1[l], W_ff2[l], current, scale_tensor, causal_mask,
+            W_ff1[l], W_ff2[l], current, scale_tensor, alibi_mask,
             batch_size, seq_len, n_head, d_model);
     }
     return current;
@@ -154,7 +155,7 @@ Tensor* embed_features(Tensor* W_e, Tensor* W_cond, float* data, int batch_size,
 
 void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Tensor** W_k, 
                 Tensor** W_v, Tensor** W_o, Tensor** W_ff1, Tensor** W_ff2, 
-                Tensor* W_out, Tensor* scale_tensor, Tensor* causal_mask, float learning_rate) {
+                Tensor* W_out, Tensor* scale_tensor, Tensor* alibi_mask, float learning_rate) {
     int n_batches = (dataset->rows - SEQ_LENGTH - 1) / BATCH_SIZE;
     float total_loss = 0.0f;
     
@@ -178,7 +179,7 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Te
         }
         
         Tensor* output = decoder_transformer(embed_features(W_e, W_cond, x_batch->data, BATCH_SIZE, SEQ_LENGTH),
-                                          W_q, W_k, W_v, W_o, W_ff1, W_ff2, scale_tensor, causal_mask,
+                                          W_q, W_k, W_v, W_o, W_ff1, W_ff2, scale_tensor, alibi_mask,
                                           BATCH_SIZE, SEQ_LENGTH, N_HEAD, D_MODEL, N_LAYERS);
         
         Tensor* pred = tensor_matmul(output, W_out);
@@ -260,6 +261,34 @@ void train_epoch(Dataset* dataset, Tensor* W_e, Tensor* W_cond, Tensor** W_q, Te
     printf("Average loss: %f\n", total_loss / n_batches);
 }
 
+Tensor* create_alibi_mask(int batch_size, int n_head, int seq_len) {
+    int dims[] = {batch_size, n_head, seq_len, seq_len};
+    Tensor* mask = tensor_zeros_permanent(4, dims, 0);
+    
+    float* slopes = malloc(n_head * sizeof(float));
+    float base = powf(2.0f, -8.0f / n_head);
+    for (int h = 0; h < n_head; h++) {
+        slopes[h] = powf(base, h + 1);
+    }
+    
+    for (int b = 0; b < batch_size; b++) {
+        for (int h = 0; h < n_head; h++) {
+            float slope = slopes[h];
+            for (int i = 0; i < seq_len; i++) {
+                for (int j = 0; j < seq_len; j++) {
+                    float distance = j - i;
+                    float alibi_bias = -slope * distance;
+                    float mask_value = j <= i ? alibi_bias : -1e9f;
+                    mask->data[((b * n_head + h) * seq_len + i) * seq_len + j] = mask_value;
+                }
+            }
+        }
+    }
+    
+    free(slopes);
+    return mask;
+}
+
 int main() {
     Dataset dataset = load_csv("2024-12-29_6-25-1_control_data.csv");
     
@@ -278,16 +307,9 @@ int main() {
     
     int scale_dims[] = {BATCH_SIZE, N_HEAD, SEQ_LENGTH, SEQ_LENGTH};
     Tensor* scale_tensor = tensor_zeros_permanent(4, scale_dims, 0);
-    Tensor* causal_mask = tensor_zeros_permanent(4, scale_dims, 0);
     float scale_val = 1.0f / sqrtf(D_MODEL / N_HEAD);
-    
     for (int i = 0; i < scale_tensor->size; i++) scale_tensor->data[i] = scale_val;
-    
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int h = 0; h < N_HEAD; h++)
-            for (int i = 0; i < SEQ_LENGTH; i++)
-                for (int j = 0; j < SEQ_LENGTH; j++)
-                    causal_mask->data[((b*N_HEAD + h)*SEQ_LENGTH + i)*SEQ_LENGTH + j] = j <= i ? 1.0f : -1e9f;
+    Tensor* alibi_mask = create_alibi_mask(BATCH_SIZE, N_HEAD, SEQ_LENGTH);
     
     int attn_dims[] = {D_MODEL, D_MODEL};
     int ff_dims1[] = {D_MODEL, D_MODEL * 4};
@@ -317,7 +339,7 @@ int main() {
     for (int epoch = 0; epoch < EPOCHS; epoch++) {
         printf("\n=== Epoch %d/%d ===\n", epoch + 1, EPOCHS);
         train_epoch(&dataset, W_e, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2,
-                   W_out, scale_tensor, causal_mask, LEARNING_RATE);
+                   W_out, scale_tensor, alibi_mask, LEARNING_RATE);
     }
     
     free(dataset.data);
