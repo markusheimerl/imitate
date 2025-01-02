@@ -9,6 +9,8 @@ jobs:
     
     steps:
     - uses: actions/checkout@v3
+      with:
+        submodules: 'recursive'
 
     - name: Decompress training data
       run: xz -d 2024-12-29_6-25-1_control_data.csv.xz
