@@ -2,11 +2,11 @@
 
 #define MAX_LINE_LENGTH 1024
 #define INPUT_FEATURES 14
-#define BATCH_SIZE 4     // Further reduced
-#define SEQ_LENGTH 2     // Further reduced
-#define D_MODEL 32       // Further reduced
-#define N_HEAD 2         // Reduced
-#define N_LAYERS 1       // Single layer for testing
+#define BATCH_SIZE 8
+#define SEQ_LENGTH 128
+#define D_MODEL 128
+#define N_HEAD 4
+#define N_LAYERS 2
 #define EPOCHS 100
 #define LEARNING_RATE 0.001f
 
