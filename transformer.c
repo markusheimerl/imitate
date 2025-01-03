@@ -281,6 +281,39 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
     free(batch_data);
 }
 
+void save_weights(const char* filename, 
+                 const Tensor* ws, const Tensor* wc,
+                 const Tensor* wq, const Tensor* wk,
+                 const Tensor* wv, const Tensor* wo,
+                 const Tensor* wf1, const Tensor* wf2,
+                 const Tensor* wout) {
+    FILE* f = fopen(filename, "wb");
+    if (!f) {
+        printf("Error opening file for writing weights\n");
+        return;
+    }
+
+    // Write sequence and condition weights
+    fwrite(ws->data, sizeof(double), ws->size, f);
+    fwrite(wc->data, sizeof(double), wc->size, f);
+
+    // Write layer weights
+    for (int l = 0; l < N_LAYERS; l++) {
+        fwrite(wq[l].data, sizeof(double), wq[l].size, f);
+        fwrite(wk[l].data, sizeof(double), wk[l].size, f);
+        fwrite(wv[l].data, sizeof(double), wv[l].size, f);
+        fwrite(wo[l].data, sizeof(double), wo[l].size, f);
+        fwrite(wf1[l].data, sizeof(double), wf1[l].size, f);
+        fwrite(wf2[l].data, sizeof(double), wf2[l].size, f);
+    }
+
+    // Write output weights
+    fwrite(wout->data, sizeof(double), wout->size, f);
+
+    fclose(f);
+    printf("Weights saved to %s\n", filename);
+}
+
 int main() {
     srand(time(NULL));
     Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
@@ -317,6 +350,7 @@ int main() {
     for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
 
     train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
+    save_weights("weights.bin", &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
 
     // Cleanup
     free(ds.data); free(ds.mins); free(ds.maxs);
