@@ -9,13 +9,13 @@
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define BATCH_SIZE 2
-#define SEQ_LENGTH 8
+#define SEQ_LENGTH 16
 #define D_MODEL 16
-#define N_HEAD 2
+#define N_HEAD 4
 #define N_LAYERS 2
-#define EPSILON 1e-4
-#define LEARNING_RATE 0.01
-#define TRAINING_STEPS 100
+#define EPSILON 1e-6
+#define LEARNING_RATE 0.0001
+#define TRAINING_STEPS 1000
 
 typedef struct {
     double *data, *grad;
