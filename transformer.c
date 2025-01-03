@@ -20,269 +20,202 @@
 typedef struct { double *data, *grad; int *dims, ndims, size; } Tensor;
 typedef struct { double* data; int rows, cols; double *mins, *maxs; } Dataset;
 
-double normalize(double value, double min_val, double max_val) {
-    double range = max_val - min_val;
-    return range == 0 ? 0 : 2.0 * (value - min_val) / range - 1.0;
-}
+double normalize(double v, double min, double max) { return max == min ? 0 : 2.0 * (v - min) / (max - min) - 1.0; }
+double denormalize(double v, double min, double max) { return (v + 1.0) * (max - min) / 2.0 + min; }
+double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
 
-double denormalize(double normalized_value, double min_val, double max_val) {
-    return (normalized_value + 1.0) * (max_val - min_val) / 2.0 + min_val;
-}
-
-double randn() {
-    double u1 = (double)rand() / RAND_MAX, u2 = (double)rand() / RAND_MAX;
-    return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-}
-
-void rmsnorm(Tensor *output, const Tensor *input) {
-    double eps = 1e-5;
-    for (int b = 0; b < BATCH_SIZE; b++) {
+void rmsnorm(Tensor *out, const Tensor *in) {
+    for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++) {
             double ss = 0.0;
-            for (int i = 0; i < D_MODEL; i++) {
-                int idx = (b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + i;
-                ss += input->data[idx] * input->data[idx];
-            }
-            double rms = sqrt(ss / D_MODEL + eps);
-            for (int i = 0; i < D_MODEL; i++) {
-                int idx = (b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + i;
-                output->data[idx] = input->data[idx] / rms;
-            }
+            int idx = (b * SEQ_LENGTH + s) * D_MODEL;
+            for (int i = 0; i < D_MODEL; i++) ss += in->data[idx + i] * in->data[idx + i];
+            double rms = sqrt(ss / D_MODEL + 1e-5);
+            for (int i = 0; i < D_MODEL; i++) out->data[idx + i] = in->data[idx + i] / rms;
         }
-    }
 }
 
-double gelu(double x) {
-    return 0.5 * x * (1.0 + tanh(sqrt(2.0 / M_PI) * (x + 0.044715 * pow(x, 3))));
-}
+double gelu(double x) { return 0.5 * x * (1.0 + tanh(sqrt(2.0/M_PI) * (x + 0.044715 * x * x * x))); }
 
-void feedforward(Tensor *output, const Tensor *w1, const Tensor *w2, const Tensor *input) {
-    double *intermediate = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
-    for (int b = 0; b < BATCH_SIZE; b++) {
+void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in) {
+    double *mid = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+    for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++) {
+            int idx = (b * SEQ_LENGTH + s);
             for (int h = 0; h < D_MODEL * 4; h++) {
                 double sum = 0.0;
-                for (int d = 0; d < D_MODEL; d++)
-                    sum += input->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * w1->data[h * D_MODEL + d];
-                intermediate[(b * SEQ_LENGTH * (D_MODEL * 4)) + (s * (D_MODEL * 4)) + h] = gelu(sum);
+                for (int d = 0; d < D_MODEL; d++) 
+                    sum += in->data[idx * D_MODEL + d] * w1->data[h * D_MODEL + d];
+                mid[idx * (D_MODEL * 4) + h] = gelu(sum);
             }
-        }
-    }
-    for (int b = 0; b < BATCH_SIZE; b++) {
-        for (int s = 0; s < SEQ_LENGTH; s++) {
             for (int d = 0; d < D_MODEL; d++) {
                 double sum = 0.0;
                 for (int h = 0; h < D_MODEL * 4; h++)
-                    sum += intermediate[(b * SEQ_LENGTH * (D_MODEL * 4)) + (s * (D_MODEL * 4)) + h] * w2->data[d * (D_MODEL * 4) + h];
-                output->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] = sum;
+                    sum += mid[idx * (D_MODEL * 4) + h] * w2->data[d * (D_MODEL * 4) + h];
+                out->data[idx * D_MODEL + d] = sum;
             }
         }
-    }
-    free(intermediate);
+    free(mid);
 }
 
-void multihead_attention(Tensor *output, const Tensor *input, const Tensor *wq, const Tensor *wk, const Tensor *wv, const Tensor *wo) {
-    int head_dim = D_MODEL / N_HEAD;
-    double scale = 1.0 / sqrt(head_dim);
-    double *q_heads = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *k_heads = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *v_heads = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *scores = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
-    for (int b = 0; b < BATCH_SIZE; b++) {
-        for (int s = 0; s < SEQ_LENGTH; s++) {
-            for (int h = 0; h < N_HEAD; h++) {
-                for (int d = 0; d < head_dim; d++) {
-                    double sum_q = 0.0, sum_k = 0.0, sum_v = 0.0;
+void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const Tensor *wk, const Tensor *wv, const Tensor *wo) {
+    int hd = D_MODEL/N_HEAD;
+    double *q = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *k = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *v = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *s = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
+
+    for (int b = 0; b < BATCH_SIZE; b++)
+        for (int t = 0; t < SEQ_LENGTH; t++)
+            for (int h = 0; h < N_HEAD; h++)
+                for (int d = 0; d < hd; d++) {
+                    int idx = (b*SEQ_LENGTH*D_MODEL) + (t*D_MODEL) + (h*hd) + d;
+                    double sq=0, sk=0, sv=0;
                     for (int i = 0; i < D_MODEL; i++) {
-                        int in_idx = (b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + i;
-                        int w_idx = (h * head_dim + d) * D_MODEL + i;
-                        sum_q += input->data[in_idx] * wq->data[w_idx];
-                        sum_k += input->data[in_idx] * wk->data[w_idx];
-                        sum_v += input->data[in_idx] * wv->data[w_idx];
+                        int in_i = (b*SEQ_LENGTH*D_MODEL) + (t*D_MODEL) + i;
+                        int w_i = (h*hd + d)*D_MODEL + i;
+                        sq += in->data[in_i] * wq->data[w_i];
+                        sk += in->data[in_i] * wk->data[w_i];
+                        sv += in->data[in_i] * wv->data[w_i];
                     }
-                    int out_idx = (b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + (h * head_dim) + d;
-                    q_heads[out_idx] = sum_q;
-                    k_heads[out_idx] = sum_k;
-                    v_heads[out_idx] = sum_v;
+                    q[idx]=sq; k[idx]=sk; v[idx]=sv;
                 }
-            }
-        }
-    }
 
-    for (int b = 0; b < BATCH_SIZE; b++) {
+    for (int b = 0; b < BATCH_SIZE; b++)
         for (int h = 0; h < N_HEAD; h++) {
-            double m = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
-            for (int q_pos = 0; q_pos < SEQ_LENGTH; q_pos++) {
-                for (int k_pos = 0; k_pos < SEQ_LENGTH; k_pos++) {
-                    if (k_pos > q_pos) {
-                        scores[(b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + (q_pos * SEQ_LENGTH) + k_pos] = -INFINITY;
-                        continue;
-                    }
-
-                    double score = 0.0;
-                    for (int d = 0; d < head_dim; d++) {
-                        int q_idx = (b * SEQ_LENGTH * D_MODEL) + (q_pos * D_MODEL) + (h * head_dim) + d;
-                        int k_idx = (b * SEQ_LENGTH * D_MODEL) + (k_pos * D_MODEL) + (h * head_dim) + d;
-                        score += q_heads[q_idx] * k_heads[k_idx];
-                    }
-                    score = score * scale - m * (q_pos - k_pos);
-                    scores[(b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + (q_pos * SEQ_LENGTH) + k_pos] = score;
+            double m = pow(2.0, -(8.0*(h+1)/N_HEAD));
+            for (int i = 0; i < SEQ_LENGTH; i++) {
+                double max=-INFINITY, sum=0;
+                for (int j = 0; j <= i; j++) {
+                    int idx = (b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH) + (h*SEQ_LENGTH*SEQ_LENGTH) + (i*SEQ_LENGTH) + j;
+                    s[idx] = 0;
+                    for (int d = 0; d < hd; d++)
+                        s[idx] += q[(b*SEQ_LENGTH*D_MODEL)+(i*D_MODEL)+(h*hd)+d] * k[(b*SEQ_LENGTH*D_MODEL)+(j*D_MODEL)+(h*hd)+d];
+                    s[idx] = s[idx]/sqrt(hd) - m*(i-j);
+                    max = fmax(max, s[idx]);
                 }
-
-                double max_score = -INFINITY;
-                for (int k_pos = 0; k_pos <= q_pos; k_pos++) {
-                    int idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + (q_pos * SEQ_LENGTH) + k_pos;
-                    if (scores[idx] > max_score) max_score = scores[idx];
+                for (int j = 0; j <= i; j++) {
+                    int idx = (b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH) + (h*SEQ_LENGTH*SEQ_LENGTH) + (i*SEQ_LENGTH) + j;
+                    s[idx] = exp(s[idx]-max);
+                    sum += s[idx];
                 }
-
-                double sum_exp = 0.0;
-                for (int k_pos = 0; k_pos <= q_pos; k_pos++) {
-                    int idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + (q_pos * SEQ_LENGTH) + k_pos;
-                    scores[idx] = exp(scores[idx] - max_score);
-                    sum_exp += scores[idx];
-                }
-
-                for (int k_pos = 0; k_pos <= q_pos; k_pos++) {
-                    int idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + (q_pos * SEQ_LENGTH) + k_pos;
-                    scores[idx] /= sum_exp;
-                }
+                for (int j = 0; j <= i; j++)
+                    s[(b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH)+(h*SEQ_LENGTH*SEQ_LENGTH)+(i*SEQ_LENGTH)+j] /= sum;
             }
         }
-    }
 
-    for (int b = 0; b < BATCH_SIZE; b++) {
-        for (int s = 0; s < SEQ_LENGTH; s++) {
-            double *head_outputs = calloc(D_MODEL, sizeof(double));
-
-            for (int h = 0; h < N_HEAD; h++) {
-                for (int d = 0; d < head_dim; d++) {
-                    double head_sum = 0.0;
-                    for (int s2 = 0; s2 <= s; s2++) {
-                        int score_idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + (s * SEQ_LENGTH) + s2;
-                        int v_idx = (b * SEQ_LENGTH * D_MODEL) + (s2 * D_MODEL) + (h * head_dim) + d;
-                        head_sum += scores[score_idx] * v_heads[v_idx];
-                    }
-                    head_outputs[h * head_dim + d] = head_sum;
+    for (int b = 0; b < BATCH_SIZE; b++)
+        for (int t = 0; t < SEQ_LENGTH; t++) {
+            double *ho = calloc(D_MODEL, sizeof(double));
+            for (int h = 0; h < N_HEAD; h++)
+                for (int d = 0; d < hd; d++) {
+                    double sum = 0;
+                    for (int j = 0; j <= t; j++)
+                        sum += s[(b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH)+(h*SEQ_LENGTH*SEQ_LENGTH)+(t*SEQ_LENGTH)+j] * v[(b*SEQ_LENGTH*D_MODEL)+(j*D_MODEL)+(h*hd)+d];
+                    ho[h*hd+d] = sum;
                 }
-            }
-
             for (int d = 0; d < D_MODEL; d++) {
-                double sum = 0.0;
-                for (int i = 0; i < D_MODEL; i++) {
-                    sum += head_outputs[i] * wo->data[d * D_MODEL + i];
-                }
-                output->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] = sum;
+                double sum = 0;
+                for (int i = 0; i < D_MODEL; i++) sum += ho[i] * wo->data[d*D_MODEL+i];
+                out->data[(b*SEQ_LENGTH*D_MODEL)+(t*D_MODEL)+d] = sum;
             }
-
-            free(head_outputs);
+            free(ho);
         }
-    }
-
-    free(q_heads);
-    free(k_heads);
-    free(v_heads);
-    free(scores);
+    free(q); free(k); free(v); free(s);
 }
 
 Dataset load_csv(const char* filename) {
-    Dataset dataset = {NULL, 0, INPUT_FEATURES, calloc(INPUT_FEATURES, sizeof(double)), calloc(INPUT_FEATURES, sizeof(double))};
+    Dataset ds = {NULL, 0, INPUT_FEATURES, calloc(INPUT_FEATURES, sizeof(double)), calloc(INPUT_FEATURES, sizeof(double))};
     char line[MAX_LINE_LENGTH];
-    double* temp = malloc(1000 * INPUT_FEATURES * sizeof(double));
-    int capacity = 1000;
-    FILE* file = fopen(filename, "r");
-    if (!file) { printf("Failed to open file\n"); exit(1); }
-    if (fgets(line, MAX_LINE_LENGTH, file) == NULL) {
-        printf("Failed to read header line\n"); fclose(file); exit(1);
-    }
-    for (int i = 0; i < INPUT_FEATURES; i++) {
-        dataset.mins[i] = INFINITY;
-        dataset.maxs[i] = -INFINITY;
-    }
-    while (fgets(line, MAX_LINE_LENGTH, file)) {
-        if (dataset.rows >= capacity) {
-            capacity *= 2;
-            temp = realloc(temp, capacity * INPUT_FEATURES * sizeof(double));
+    double* tmp = malloc(1000 * INPUT_FEATURES * sizeof(double));
+    FILE* f = fopen(filename, "r");
+    if (!f || !fgets(line, MAX_LINE_LENGTH, f)) { printf("File error\n"); exit(1); }
+    
+    for (int i = 0; i < INPUT_FEATURES; i++) ds.mins[i]=INFINITY, ds.maxs[i]=-INFINITY;
+    
+    while (fgets(line, MAX_LINE_LENGTH, f)) {
+        if (ds.rows >= 1000) tmp = realloc(tmp, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
+        char* tok = strtok(line, ",");
+        for (int i = 0; i < INPUT_FEATURES && tok; i++, tok = strtok(NULL, ",")) {
+            tmp[ds.rows * INPUT_FEATURES + i] = atof(tok);
+            ds.mins[i] = fmin(ds.mins[i], tmp[ds.rows * INPUT_FEATURES + i]);
+            ds.maxs[i] = fmax(ds.maxs[i], tmp[ds.rows * INPUT_FEATURES + i]);
         }
-        char* token = strtok(line, ",");
-        for (int i = 0; i < INPUT_FEATURES; i++) {
-            double val = atof(token);
-            temp[dataset.rows * INPUT_FEATURES + i] = val;
-            dataset.mins[i] = fmin(dataset.mins[i], val);
-            dataset.maxs[i] = fmax(dataset.maxs[i], val);
-            token = strtok(NULL, ",");
-        }
-        dataset.rows++;
+        ds.rows++;
     }
-    for (int i = 0; i < dataset.rows; i++)
-        for (int j = 0; j < INPUT_FEATURES; j++)
-            temp[i * INPUT_FEATURES + j] = normalize(temp[i * INPUT_FEATURES + j], dataset.mins[j], dataset.maxs[j]);
-    dataset.data = temp;
-    return dataset;
+    
+    for (int i = 0; i < ds.rows * INPUT_FEATURES; i++)
+        tmp[i] = normalize(tmp[i], ds.mins[i % INPUT_FEATURES], ds.maxs[i % INPUT_FEATURES]);
+    
+    ds.data = tmp;
+    fclose(f);
+    return ds;
 }
 
-void embed_sequence(Tensor* output, const double* input, const Tensor* W_seq, const Tensor* W_cond) {
+void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++)
             for (int d = 0; d < D_MODEL; d++) {
-                double sum = 0.0;
+                int idx = (b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d;
+                int in_idx = (b * SEQ_LENGTH + s) * INPUT_FEATURES;
+                out->data[idx] = 0;
                 for (int f = 0; f < SEQUENCE_FEATURES; f++)
-                    sum += input[(b * SEQ_LENGTH + s) * INPUT_FEATURES + f + CONDITION_FEATURES] * W_seq->data[f * D_MODEL + d];
+                    out->data[idx] += in[in_idx + f + CONDITION_FEATURES] * ws->data[f * D_MODEL + d];
                 for (int f = 0; f < CONDITION_FEATURES; f++)
-                    sum += input[(b * SEQ_LENGTH + s) * INPUT_FEATURES + f] * W_cond->data[f * D_MODEL + d];
-                output->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] = sum;
+                    out->data[idx] += in[in_idx + f] * wc->data[f * D_MODEL + d];
             }
 }
 
-double forward_pass(const Dataset* dataset, Tensor* output, Tensor* hidden, Tensor* temp,
-                   const Tensor* W_seq, const Tensor* W_cond, const Tensor* W_q, const Tensor* W_k, const Tensor* W_v, const Tensor* W_o,
-                   const Tensor* W_ff1, const Tensor* W_ff2, const Tensor* W_out) {
-    embed_sequence(hidden, dataset->data, W_seq, W_cond);
+double forward_pass(const Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
+                   const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
+                   const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
+                   const Tensor* wout) {
+    embed_sequence(hidden, ds->data, ws, wc);
 
     for (int l = 0; l < N_LAYERS; l++) {
         rmsnorm(temp, hidden);
-        multihead_attention(temp, temp, &W_q[l], &W_k[l], &W_v[l], &W_o[l]);
-        for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
+        multihead_attention(temp, temp, &wq[l], &wk[l], &wv[l], &wo[l]);
+        for (int i = 0; i < hidden->size; i++) 
+            hidden->data[i] += temp->data[i];
         rmsnorm(temp, hidden);
-        feedforward(temp, &W_ff1[l], &W_ff2[l], temp);
-        for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
+        feedforward(temp, &wf1[l], &wf2[l], temp);
+        for (int i = 0; i < hidden->size; i++) 
+            hidden->data[i] += temp->data[i];
     }
 
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++)
             for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                double sum = 0.0;
+                double sum = 0;
                 for (int d = 0; d < D_MODEL; d++)
-                    sum += hidden->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * W_out->data[d * SEQUENCE_FEATURES + f];
-                output->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] = sum;
+                    sum += hidden->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * 
+                          wout->data[d * SEQUENCE_FEATURES + f];
+                out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] = sum;
             }
 
-    double total_loss = 0.0;
-    for (int b = 0; b < BATCH_SIZE; b++) {
-        for (int s = 0; s < SEQ_LENGTH; s++) {
+    double loss = 0;
+    for (int b = 0; b < BATCH_SIZE; b++)
+        for (int s = 0; s < SEQ_LENGTH; s++)
             for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                int pred_idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
-                int actual_idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
-                double diff = output->data[pred_idx] - dataset->data[actual_idx];
-                total_loss += diff * diff;
+                double diff = out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] - 
+                             ds->data[((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES];
+                loss += diff * diff;
             }
-        }
-    }
-    
-    return total_loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+    return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
-void update_weights(Tensor* w, double base_loss, double current_lr, Dataset* dataset, Tensor* output, Tensor* hidden, Tensor* temp, 
-                   Tensor* W_seq, Tensor* W_cond, Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o, Tensor* W_ff1, Tensor* W_ff2, Tensor* W_out) {
+void update_weights(Tensor* w, double base_loss, double lr, Dataset* ds, Tensor* out, 
+                   Tensor* hidden, Tensor* temp, Tensor* ws, Tensor* wc, Tensor* wq, 
+                   Tensor* wk, Tensor* wv, Tensor* wo, Tensor* wf1, Tensor* wf2, 
+                   Tensor* wout) {
     for (int i = 0; i < w->size; i++) {
         w->data[i] += EPSILON;
-        double new_loss = forward_pass(dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
+        double new_loss = forward_pass(ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         w->data[i] -= EPSILON;
-
         if (!isnan(new_loss)) {
             double grad = (new_loss - base_loss) / EPSILON;
-            if (grad > 1.0) grad = 1.0;
-            if (grad < -1.0) grad = -1.0;
-            w->data[i] -= current_lr * grad;
+            grad = fmax(-1.0, fmin(1.0, grad));
+            w->data[i] -= lr * grad;
         }
     }
 }
