@@ -13,6 +13,9 @@
 #define D_MODEL 128
 #define N_HEAD 4
 #define N_LAYERS 2
+#define EPSILON 1e-4
+#define LEARNING_RATE 0.01
+#define TRAINING_STEPS 100
 
 typedef struct {
     double *data, *grad;
@@ -234,11 +237,197 @@ void embed_sequence(Tensor* output, const double* input, const Tensor* W_seq, co
             }
 }
 
+double forward_pass(const Dataset* dataset, Tensor* output, Tensor* hidden, Tensor* temp,
+                   const Tensor* W_seq, const Tensor* W_cond, 
+                   const Tensor* W_q, const Tensor* W_k, const Tensor* W_v, const Tensor* W_o,
+                   const Tensor* W_ff1, const Tensor* W_ff2, const Tensor* W_out) {
+    
+    embed_sequence(hidden, dataset->data, W_seq, W_cond);
+    
+    for (int l = 0; l < N_LAYERS; l++) {
+        rmsnorm(temp, hidden);
+        multihead_attention(temp, temp, &W_q[l], &W_k[l], &W_v[l], &W_o[l]);
+        for (int i = 0; i < hidden->size; i++) 
+            hidden->data[i] += temp->data[i];
+        
+        rmsnorm(temp, hidden);
+        feedforward(temp, &W_ff1[l], &W_ff2[l], temp);
+        for (int i = 0; i < hidden->size; i++) 
+            hidden->data[i] += temp->data[i];
+    }
+    
+    // Compute output
+    for (int b = 0; b < BATCH_SIZE; b++)
+        for (int s = 0; s < SEQ_LENGTH; s++)
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+                double sum = 0.0;
+                for (int d = 0; d < D_MODEL; d++)
+                    sum += hidden->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * 
+                           W_out->data[d * SEQUENCE_FEATURES + f];
+                output->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] = sum;
+            }
+    
+    // Compute loss
+    double total_loss = 0.0;
+    for (int b = 0; b < BATCH_SIZE; b++) {
+        for (int s = 0; s < SEQ_LENGTH; s++) {
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+                int pred_idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
+                int actual_idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
+                double diff = output->data[pred_idx] - dataset->data[actual_idx];
+                total_loss += diff * diff;
+            }
+        }
+    }
+    
+    return total_loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+}
+
+void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor* temp,
+                      Tensor* W_seq, Tensor* W_cond, 
+                      Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
+                      Tensor* W_ff1, Tensor* W_ff2, Tensor* W_out) {
+    
+    for (int step = 0; step < TRAINING_STEPS; step++) {
+        double base_loss = forward_pass(dataset, output, hidden, temp,
+                                      W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                      W_ff1, W_ff2, W_out);
+        
+        printf("Step %d, Loss: %f\n", step, base_loss);
+        
+        // Update each parameter using finite differences
+        for (int l = 0; l < N_LAYERS; l++) {
+            // Update W_q
+            for (int i = 0; i < W_q[l].size; i++) {
+                W_q[l].data[i] += EPSILON;
+                double new_loss = forward_pass(dataset, output, hidden, temp,
+                                             W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                             W_ff1, W_ff2, W_out);
+                W_q[l].data[i] -= EPSILON;
+                double grad = (new_loss - base_loss) / EPSILON;
+                W_q[l].data[i] -= LEARNING_RATE * grad;
+            }
+            
+            // Update W_k
+            for (int i = 0; i < W_k[l].size; i++) {
+                W_k[l].data[i] += EPSILON;
+                double new_loss = forward_pass(dataset, output, hidden, temp,
+                                             W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                             W_ff1, W_ff2, W_out);
+                W_k[l].data[i] -= EPSILON;
+                double grad = (new_loss - base_loss) / EPSILON;
+                W_k[l].data[i] -= LEARNING_RATE * grad;
+            }
+            
+            // Update W_v
+            for (int i = 0; i < W_v[l].size; i++) {
+                W_v[l].data[i] += EPSILON;
+                double new_loss = forward_pass(dataset, output, hidden, temp,
+                                             W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                             W_ff1, W_ff2, W_out);
+                W_v[l].data[i] -= EPSILON;
+                double grad = (new_loss - base_loss) / EPSILON;
+                W_v[l].data[i] -= LEARNING_RATE * grad;
+            }
+            
+            // Update W_o
+            for (int i = 0; i < W_o[l].size; i++) {
+                W_o[l].data[i] += EPSILON;
+                double new_loss = forward_pass(dataset, output, hidden, temp,
+                                             W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                             W_ff1, W_ff2, W_out);
+                W_o[l].data[i] -= EPSILON;
+                double grad = (new_loss - base_loss) / EPSILON;
+                W_o[l].data[i] -= LEARNING_RATE * grad;
+            }
+            
+            // Update W_ff1
+            for (int i = 0; i < W_ff1[l].size; i++) {
+                W_ff1[l].data[i] += EPSILON;
+                double new_loss = forward_pass(dataset, output, hidden, temp,
+                                             W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                             W_ff1, W_ff2, W_out);
+                W_ff1[l].data[i] -= EPSILON;
+                double grad = (new_loss - base_loss) / EPSILON;
+                W_ff1[l].data[i] -= LEARNING_RATE * grad;
+            }
+            
+            // Update W_ff2
+            for (int i = 0; i < W_ff2[l].size; i++) {
+                W_ff2[l].data[i] += EPSILON;
+                double new_loss = forward_pass(dataset, output, hidden, temp,
+                                             W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                             W_ff1, W_ff2, W_out);
+                W_ff2[l].data[i] -= EPSILON;
+                double grad = (new_loss - base_loss) / EPSILON;
+                W_ff2[l].data[i] -= LEARNING_RATE * grad;
+            }
+        }
+        
+        // Update embedding weights (W_seq)
+        for (int i = 0; i < W_seq->size; i++) {
+            W_seq->data[i] += EPSILON;
+            double new_loss = forward_pass(dataset, output, hidden, temp,
+                                         W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                         W_ff1, W_ff2, W_out);
+            W_seq->data[i] -= EPSILON;
+            double grad = (new_loss - base_loss) / EPSILON;
+            W_seq->data[i] -= LEARNING_RATE * grad;
+        }
+        
+        // Update condition weights (W_cond)
+        for (int i = 0; i < W_cond->size; i++) {
+            W_cond->data[i] += EPSILON;
+            double new_loss = forward_pass(dataset, output, hidden, temp,
+                                         W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                         W_ff1, W_ff2, W_out);
+            W_cond->data[i] -= EPSILON;
+            double grad = (new_loss - base_loss) / EPSILON;
+            W_cond->data[i] -= LEARNING_RATE * grad;
+        }
+        
+        // Update output weights (W_out)
+        for (int i = 0; i < W_out->size; i++) {
+            W_out->data[i] += EPSILON;
+            double new_loss = forward_pass(dataset, output, hidden, temp,
+                                         W_seq, W_cond, W_q, W_k, W_v, W_o,
+                                         W_ff1, W_ff2, W_out);
+            W_out->data[i] -= EPSILON;
+            double grad = (new_loss - base_loss) / EPSILON;
+            W_out->data[i] -= LEARNING_RATE * grad;
+        }
+        
+        // Optional: Print predictions every N steps
+        if (step % 10 == 0) {
+            printf("\nPredictions at step %d:\n", step);
+            for (int b = 0; b < 1; b++) {  // Just print first batch
+                for (int s = 0; s < 5; s++) {  // Just print first 5 steps
+                    printf("Step %d: ", s);
+                    for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+                        int pred_idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
+                        int actual_idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
+                        double pred = denormalize(output->data[pred_idx], 
+                                                dataset->mins[f + CONDITION_FEATURES],
+                                                dataset->maxs[f + CONDITION_FEATURES]);
+                        double actual = denormalize(dataset->data[actual_idx],
+                                                  dataset->mins[f + CONDITION_FEATURES],
+                                                  dataset->maxs[f + CONDITION_FEATURES]);
+                        printf("F%d(P:%.2f,A:%.2f) ", f, pred, actual);
+                    }
+                    printf("\n");
+                }
+                printf("\n");
+            }
+        }
+    }
+}
+
 int main() {
     srand(time(NULL));
     Dataset dataset = load_csv("2024-12-29_6-25-1_control_data.csv");
     double w_scale = sqrt(2.0 / D_MODEL);
     
+    // Initialize model parameters
     int dims_e[] = {SEQUENCE_FEATURES, D_MODEL};
     int dims_cond[] = {CONDITION_FEATURES, D_MODEL};
     Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), NULL, dims_e, 2, 
@@ -257,18 +446,12 @@ int main() {
     Tensor W_ff1[N_LAYERS], W_ff2[N_LAYERS];
     
     for (int l = 0; l < N_LAYERS; l++) {
-        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, 
-                          D_MODEL * D_MODEL};
-        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, 
-                          D_MODEL * D_MODEL};
-        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, 
-                          D_MODEL * D_MODEL};
-        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, 
-                          D_MODEL * D_MODEL};
-        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), NULL, ff_dims1, 2, 
-                           D_MODEL * (D_MODEL * 4)};
-        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), NULL, ff_dims2, 2, 
-                           (D_MODEL * 4) * D_MODEL};
+        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
+        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
+        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
+        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
+        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), NULL, ff_dims1, 2, D_MODEL * (D_MODEL * 4)};
+        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), NULL, ff_dims2, 2, (D_MODEL * 4) * D_MODEL};
         
         for (int i = 0; i < D_MODEL * D_MODEL; i++) {
             W_q[l].data[i] = randn() * w_scale;
@@ -285,18 +468,6 @@ int main() {
     Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL,
                   (int[]){BATCH_SIZE, SEQ_LENGTH, D_MODEL}, 3, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
     
-    embed_sequence(&hidden, dataset.data, &W_seq, &W_cond);
-    
-    for (int l = 0; l < N_LAYERS; l++) {
-        rmsnorm(&temp, &hidden);
-        multihead_attention(&temp, &temp, &W_q[l], &W_k[l], &W_v[l], &W_o[l]);
-        for (int i = 0; i < hidden.size; i++) hidden.data[i] += temp.data[i];
-        
-        rmsnorm(&temp, &hidden);
-        feedforward(&temp, &W_ff1[l], &W_ff2[l], &temp);
-        for (int i = 0; i < hidden.size; i++) hidden.data[i] += temp.data[i];
-    }
-    
     int out_dims[] = {BATCH_SIZE, SEQ_LENGTH, SEQUENCE_FEATURES};
     Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL,
                     out_dims, 3, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
@@ -305,47 +476,12 @@ int main() {
     
     for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * w_scale;
     
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int s = 0; s < SEQ_LENGTH; s++)
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                double sum = 0.0;
-                for (int d = 0; d < D_MODEL; d++)
-                    sum += hidden.data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * 
-                           W_out.data[d * SEQUENCE_FEATURES + f];
-                output.data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] = sum;
-            }
-
-    double total_loss = 0.0;
-    for (int b = 0; b < BATCH_SIZE; b++) {
-        printf("\nBatch %d:\n", b);
-        for (int s = 0; s < SEQ_LENGTH; s++) {
-            printf("\nSequence step %d:\n", s);
-            printf("Actual:    ");
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                int idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
-                printf("%.3f ", denormalize(dataset.data[idx], dataset.mins[f + CONDITION_FEATURES],
-                                          dataset.maxs[f + CONDITION_FEATURES]));
-            }
-            printf("\nPredicted: ");
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                int idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
-                printf("%.3f ", denormalize(output.data[idx], dataset.mins[f + CONDITION_FEATURES],
-                                          dataset.maxs[f + CONDITION_FEATURES]));
-            }
-            printf("\n");
-            
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                int pred_idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
-                int actual_idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
-                double diff = output.data[pred_idx] - dataset.data[actual_idx];
-                total_loss += diff * diff;
-            }
-        }
-    }
+    // Train the model
+    train_finite_diff(&dataset, &output, &hidden, &temp,
+                     &W_seq, &W_cond, W_q, W_k, W_v, W_o,
+                     W_ff1, W_ff2, &W_out);
     
-    total_loss /= (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
-    printf("\nAverage MSE Loss (normalized): %.6f\n", total_loss);
-    
+    // Cleanup
     free(dataset.data); free(dataset.mins); free(dataset.maxs);
     free(hidden.data); free(temp.data); free(output.data); free(W_out.data);
     for (int l = 0; l < N_LAYERS; l++) {
