@@ -144,6 +144,8 @@ Dataset load_csv(const char* filename) {
         ds.rows++;
     }
     
+    printf("Dataset loaded with %d rows\n", ds.rows);
+    
     for (int i = 0; i < ds.rows * INPUT_FEATURES; i++)
         tmp[i] = normalize(tmp[i], ds.mins[i % INPUT_FEATURES], ds.maxs[i % INPUT_FEATURES]);
     
