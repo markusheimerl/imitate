@@ -166,11 +166,11 @@ void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tenso
             }
 }
 
-double forward_pass(const Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
+double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
                    const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
                    const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
                    const Tensor* wout) {
-    embed_sequence(hidden, ds->data, ws, wc);
+    embed_sequence(hidden, batch_data, ws, wc);
 
     for (int l = 0; l < N_LAYERS; l++) {
         rmsnorm(temp, hidden);
@@ -197,20 +197,23 @@ double forward_pass(const Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++)
             for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                double diff = out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] - 
-                             ds->data[((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES];
+                double pred = out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + 
+                                      (s * SEQUENCE_FEATURES) + f];
+                double target = batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + 
+                                         ((s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES];
+                double diff = pred - target;
                 loss += diff * diff;
             }
     return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
-void update_weights(Tensor* w, double base_loss, double lr, Dataset* ds, Tensor* out, 
+void update_weights(Tensor* w, double base_loss, double lr, double* batch_data, Tensor* out, 
                    Tensor* hidden, Tensor* temp, Tensor* ws, Tensor* wc, Tensor* wq, 
                    Tensor* wk, Tensor* wv, Tensor* wo, Tensor* wf1, Tensor* wf2, 
                    Tensor* wout) {
     for (int i = 0; i < w->size; i++) {
         w->data[i] += EPSILON;
-        double new_loss = forward_pass(ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        double new_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         w->data[i] -= EPSILON;
         if (!isnan(new_loss)) {
             double grad = (new_loss - base_loss) / EPSILON;
@@ -224,9 +227,22 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                       Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
                       Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
     const double lr = LEARNING_RATE;
-
+    double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
+    
     for (int step = 0; step < TRAINING_STEPS; step++) {
-        double base_loss = forward_pass(ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        // Fill batch_data with sequences - independent random starts per batch
+        for (int b = 0; b < BATCH_SIZE; b++) {
+            int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1); // Random start for each batch
+            for (int s = 0; s < SEQ_LENGTH + 1; s++) {
+                for (int f = 0; f < INPUT_FEATURES; f++) {
+                    batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + 
+                              (s * INPUT_FEATURES) + f] = 
+                        ds->data[(seq_start + s) * INPUT_FEATURES + f];
+                }
+            }
+        }
+
+        double base_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         
         if (isnan(base_loss)) {
             printf("NaN detected at step %d, skipping update\n", step);
@@ -237,16 +253,16 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
 
         // Update weights with fixed learning rate
         for (int l = 0; l < N_LAYERS; l++) {
-            update_weights(&wq[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wk[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wv[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wo[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wf1[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wf2[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wq[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wk[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wv[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wo[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wf1[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wf2[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         }
-        update_weights(ws, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-        update_weights(wc, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-        update_weights(wout, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        update_weights(ws, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        update_weights(wc, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        update_weights(wout, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
 
         // Print predictions every 10 steps
         if (step % 10 == 0) {
@@ -257,7 +273,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                     double pred = denormalize(out->data[s * SEQUENCE_FEATURES + f], 
                                            ds->mins[f + CONDITION_FEATURES], 
                                            ds->maxs[f + CONDITION_FEATURES]);
-                    double actual = denormalize(ds->data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES],
+                    double actual = denormalize(batch_data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES],
                                              ds->mins[f + CONDITION_FEATURES], 
                                              ds->maxs[f + CONDITION_FEATURES]);
                     printf("F%d(P:%.2f,A:%.2f) ", f, pred, actual);
@@ -267,6 +283,8 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
             printf("\n");
         }
     }
+    
+    free(batch_data);
 }
 
 int main() {
