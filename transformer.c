@@ -17,8 +17,8 @@
 #define LEARNING_RATE 0.0001
 #define TRAINING_STEPS 1000
 
-typedef struct { double *data; int *dims, ndims, size; } Tensor;
-typedef struct { double* data; int rows, cols; double *mins, *maxs; } Dataset;
+typedef struct { double *data; int size; } Tensor;
+typedef struct { double *data; int rows, cols; double *mins, *maxs; } Dataset;
 
 double normalize(double v, double min, double max) { return max == min ? 0 : 2.0 * (v - min) / (max - min) - 1.0; }
 double denormalize(double v, double min, double max) { return (v + 1.0) * (max - min) / 2.0 + min; }
@@ -259,7 +259,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         update_weights(wout, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
 
         // Print predictions
-        if (step % 100 == 0) {
+        if (step > 0 && step % 100 == 0) {
             printf("\nPredictions at step %d:\n", step);
             for (int s = 0; s < 5; s++) {
                 printf("Step %d: ", s);
@@ -282,19 +282,19 @@ int main() {
     Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
     double ws = sqrt(2.0 / D_MODEL);
     
-    Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), NULL, 0, SEQUENCE_FEATURES * D_MODEL};
-    Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), NULL, 0, CONDITION_FEATURES * D_MODEL};
+    Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), SEQUENCE_FEATURES * D_MODEL};
+    Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), CONDITION_FEATURES * D_MODEL};
     W_seq.size = SEQUENCE_FEATURES * D_MODEL;
     W_cond.size = CONDITION_FEATURES * D_MODEL;
     
     Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS], W_ff1[N_LAYERS], W_ff2[N_LAYERS];
     for (int l = 0; l < N_LAYERS; l++) {
-        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, 0, D_MODEL * D_MODEL};
-        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, 0, D_MODEL * D_MODEL};
-        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, 0, D_MODEL * D_MODEL};
-        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, 0, D_MODEL * D_MODEL};
-        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), NULL, 0, D_MODEL * (D_MODEL * 4)};
-        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), NULL, 0, (D_MODEL * 4) * D_MODEL};
+        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
+        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
+        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
+        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
+        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), D_MODEL * (D_MODEL * 4)};
+        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), (D_MODEL * 4) * D_MODEL};
         
         for (int i = 0; i < D_MODEL * D_MODEL; i++)
             W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
@@ -305,10 +305,10 @@ int main() {
     for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
     for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
     
-    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, 0, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
-    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), NULL, 0, D_MODEL * SEQUENCE_FEATURES};
+    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), BATCH_SIZE * SEQ_LENGTH * D_MODEL};
+    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), BATCH_SIZE * SEQ_LENGTH * D_MODEL};
+    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
+    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), D_MODEL * SEQUENCE_FEATURES};
     
     for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
 
