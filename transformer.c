@@ -177,12 +177,10 @@ double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tenso
     for (int l = 0; l < N_LAYERS; l++) {
         rmsnorm(temp, hidden);
         multihead_attention(temp, temp, &wq[l], &wk[l], &wv[l], &wo[l]);
-        for (int i = 0; i < hidden->size; i++) 
-            hidden->data[i] += temp->data[i];
+        for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
         rmsnorm(temp, hidden);
         feedforward(temp, &wf1[l], &wf2[l], temp);
-        for (int i = 0; i < hidden->size; i++) 
-            hidden->data[i] += temp->data[i];
+        for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
     }
 
     for (int b = 0; b < BATCH_SIZE; b++)
@@ -232,9 +230,8 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
     double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
     
     for (int step = 0; step < TRAINING_STEPS; step++) {
-        // Fill batch_data with sequences - independent random starts per batch
         for (int b = 0; b < BATCH_SIZE; b++) {
-            int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1); // Random start for each batch
+            int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1);
             for (int s = 0; s < SEQ_LENGTH + 1; s++) {
                 for (int f = 0; f < INPUT_FEATURES; f++) {
                     batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + 
@@ -245,15 +242,10 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         }
 
         double base_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-        
-        if (isnan(base_loss)) {
-            printf("NaN detected at step %d, skipping update\n", step);
-            continue;
-        }
-
+        if (isnan(base_loss)) {printf("NaN detected at step %d, skipping update\n", step); continue;}
         printf("Step %d, Loss: %f\n", step, base_loss);
 
-        // Update weights with fixed learning rate
+        // Update weights
         for (int l = 0; l < N_LAYERS; l++) {
             update_weights(&wq[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
             update_weights(&wk[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
@@ -266,18 +258,14 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         update_weights(wc, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         update_weights(wout, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
 
-        // Print predictions every 10 steps
-        if (step % 10 == 0) {
+        // Print predictions
+        if (step % 100 == 0) {
             printf("\nPredictions at step %d:\n", step);
             for (int s = 0; s < 5; s++) {
                 printf("Step %d: ", s);
                 for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                    double pred = denormalize(out->data[s * SEQUENCE_FEATURES + f], 
-                                           ds->mins[f + CONDITION_FEATURES], 
-                                           ds->maxs[f + CONDITION_FEATURES]);
-                    double actual = denormalize(batch_data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES],
-                                             ds->mins[f + CONDITION_FEATURES], 
-                                             ds->maxs[f + CONDITION_FEATURES]);
+                    double pred = denormalize(out->data[s * SEQUENCE_FEATURES + f], ds->mins[f + CONDITION_FEATURES], ds->maxs[f + CONDITION_FEATURES]);
+                    double actual = denormalize(batch_data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES], ds->mins[f + CONDITION_FEATURES], ds->maxs[f + CONDITION_FEATURES]);
                     printf("F%d(P:%.2f,A:%.2f) ", f, pred, actual);
                 }
                 printf("\n");
