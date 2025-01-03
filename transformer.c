@@ -220,107 +220,102 @@ void update_weights(Tensor* w, double base_loss, double lr, Dataset* ds, Tensor*
     }
 }
 
-void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor* temp,
-                      Tensor* W_seq, Tensor* W_cond, 
-                      Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
-                      Tensor* W_ff1, Tensor* W_ff2, Tensor* W_out) {
-    
-    double prev_loss = INFINITY, best_loss = INFINITY, current_lr = LEARNING_RATE;
+void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
+                      Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
+                      Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
+    double prev_loss = INFINITY, best_loss = INFINITY, lr = LEARNING_RATE;
 
     for (int step = 0; step < TRAINING_STEPS; step++) {
-        double base_loss = forward_pass(dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-
+        double base_loss = forward_pass(ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        
         if (isnan(base_loss)) {
-            printf("Warning: NaN loss detected. Reducing learning rate...\n");
-            current_lr *= 0.5;
+            printf("NaN detected, reducing lr\n");
+            lr *= 0.5;
             continue;
         }
 
-        printf("Step %d, Loss: %f (lr: %e)\n", step, base_loss, current_lr);
-
+        printf("Step %d, Loss: %f (lr: %e)\n", step, base_loss, lr);
+        
         if (base_loss > prev_loss * 1.5) {
-            printf("Loss increasing too much, reducing learning rate...\n");
-            current_lr *= 0.5;
+            printf("Loss spiking, reducing lr\n");
+            lr *= 0.5;
             continue;
         }
 
         if (base_loss < best_loss) best_loss = base_loss;
         prev_loss = base_loss;
 
-        // Update transformer layers
         for (int l = 0; l < N_LAYERS; l++) {
-            update_weights(&W_q[l], base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-            update_weights(&W_k[l], base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-            update_weights(&W_v[l], base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-            update_weights(&W_o[l], base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-            update_weights(&W_ff1[l], base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-            update_weights(&W_ff2[l], base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
+            update_weights(&wq[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wk[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wv[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wo[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wf1[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wf2[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         }
-
-        update_weights(W_seq, base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-        update_weights(W_cond, base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-        update_weights(W_out, base_loss, current_lr, dataset, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
+        update_weights(ws, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        update_weights(wc, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        update_weights(wout, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
 
         if (step % 10 == 0) {
-            printf("\nPredictions at training step %d:\n", step);
-            for (int b = 0; b < 1; b++) {
-                for (int s = 0; s < 5; s++) {
-                    printf("Sequence step %d: ", s);
-                    for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                        int pred_idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
-                        int actual_idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
-                        double pred = denormalize(output->data[pred_idx], dataset->mins[f + CONDITION_FEATURES], dataset->maxs[f + CONDITION_FEATURES]);
-                        double actual = denormalize(dataset->data[actual_idx], dataset->mins[f + CONDITION_FEATURES], dataset->maxs[f + CONDITION_FEATURES]);
-                        printf("F%d(P:%.2f,A:%.2f) ", f, pred, actual);
-                    }
-                    printf("\n");
+            printf("\nPredictions at step %d:\n", step);
+            for (int s = 0; s < 5; s++) {
+                printf("Step %d: ", s);
+                for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+                    double pred = denormalize(out->data[s * SEQUENCE_FEATURES + f], 
+                                           ds->mins[f + CONDITION_FEATURES], 
+                                           ds->maxs[f + CONDITION_FEATURES]);
+                    double actual = denormalize(ds->data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES],
+                                             ds->mins[f + CONDITION_FEATURES], 
+                                             ds->maxs[f + CONDITION_FEATURES]);
+                    printf("F%d(P:%.2f,A:%.2f) ", f, pred, actual);
                 }
                 printf("\n");
             }
+            printf("\n");
         }
     }
 }
 
 int main() {
     srand(time(NULL));
-    Dataset dataset = load_csv("2024-12-29_6-25-1_control_data.csv");
-    double w_scale = sqrt(2.0 / D_MODEL);
-    int dims_e[] = {SEQUENCE_FEATURES, D_MODEL};
-    int dims_cond[] = {CONDITION_FEATURES, D_MODEL};
-    Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), NULL, dims_e, 2, SEQUENCE_FEATURES * D_MODEL};
-    Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), NULL, dims_cond, 2, CONDITION_FEATURES * D_MODEL};
-    for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * w_scale;
-    for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * w_scale;
-    int attn_dims[] = {D_MODEL, D_MODEL};
-    int ff_dims1[] = {D_MODEL, D_MODEL * 4};
-    int ff_dims2[] = {D_MODEL * 4, D_MODEL};
-    Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS];
-    Tensor W_ff1[N_LAYERS], W_ff2[N_LAYERS];
+    Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
+    double ws = sqrt(2.0 / D_MODEL);
+    
+    Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), NULL, NULL, 0, SEQUENCE_FEATURES * D_MODEL};
+    Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), NULL, NULL, 0, CONDITION_FEATURES * D_MODEL};
+    W_seq.size = SEQUENCE_FEATURES * D_MODEL;
+    W_cond.size = CONDITION_FEATURES * D_MODEL;
+    
+    Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS], W_ff1[N_LAYERS], W_ff2[N_LAYERS];
     for (int l = 0; l < N_LAYERS; l++) {
-        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
-        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
-        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
-        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, attn_dims, 2, D_MODEL * D_MODEL};
-        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), NULL, ff_dims1, 2, D_MODEL * (D_MODEL * 4)};
-        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), NULL, ff_dims2, 2, (D_MODEL * 4) * D_MODEL};
-        for (int i = 0; i < D_MODEL * D_MODEL; i++) {
-            W_q[l].data[i] = randn() * w_scale;
-            W_k[l].data[i] = randn() * w_scale;
-            W_v[l].data[i] = randn() * w_scale;
-            W_o[l].data[i] = randn() * w_scale;
-        }
-        for (int i = 0; i < W_ff1[l].size; i++) W_ff1[l].data[i] = randn() * w_scale;
-        for (int i = 0; i < W_ff2[l].size; i++) W_ff2[l].data[i] = randn() * w_scale;
+        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, NULL, 0, D_MODEL * D_MODEL};
+        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, NULL, 0, D_MODEL * D_MODEL};
+        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, NULL, 0, D_MODEL * D_MODEL};
+        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), NULL, NULL, 0, D_MODEL * D_MODEL};
+        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), NULL, NULL, 0, D_MODEL * (D_MODEL * 4)};
+        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), NULL, NULL, 0, (D_MODEL * 4) * D_MODEL};
+        
+        for (int i = 0; i < D_MODEL * D_MODEL; i++)
+            W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
+        for (int i = 0; i < W_ff1[l].size; i++) W_ff1[l].data[i] = randn() * ws;
+        for (int i = 0; i < W_ff2[l].size; i++) W_ff2[l].data[i] = randn() * ws;
     }
-    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, (int[]){BATCH_SIZE, SEQ_LENGTH, D_MODEL}, 3, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, (int[]){BATCH_SIZE, SEQ_LENGTH, D_MODEL}, 3, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, (int[]){BATCH_SIZE, SEQ_LENGTH, SEQUENCE_FEATURES}, 3, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
-    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), NULL, (int[]){D_MODEL, SEQUENCE_FEATURES}, 2, D_MODEL * SEQUENCE_FEATURES};
-    for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * w_scale;
+    
+    for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
+    for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
+    
+    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
+    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
+    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, 0, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
+    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, 0, D_MODEL * SEQUENCE_FEATURES};
+    
+    for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
 
-    train_finite_diff(&dataset, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
+    train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
 
-    free(dataset.data); free(dataset.mins); free(dataset.maxs);
+    // Cleanup
+    free(ds.data); free(ds.mins); free(ds.maxs);
     free(hidden.data); free(temp.data); free(output.data); free(W_out.data);
     for (int l = 0; l < N_LAYERS; l++) {
         free(W_q[l].data); free(W_k[l].data); free(W_v[l].data); free(W_o[l].data);
