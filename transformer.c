@@ -8,10 +8,10 @@
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 4
-#define SEQ_LENGTH 64
-#define D_MODEL 128
-#define N_HEAD 4
+#define BATCH_SIZE 2
+#define SEQ_LENGTH 8
+#define D_MODEL 16
+#define N_HEAD 2
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.01
@@ -97,6 +97,7 @@ void multihead_attention(Tensor *output, const Tensor *input, const Tensor *wq, 
     double *v_heads = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double *scores = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     
+    // Linear projections for Q, K, V
     for (int b = 0; b < BATCH_SIZE; b++) {
         for (int s = 0; s < SEQ_LENGTH; s++) {
             for (int h = 0; h < N_HEAD; h++) {
@@ -118,27 +119,34 @@ void multihead_attention(Tensor *output, const Tensor *input, const Tensor *wq, 
         }
     }
     
+    // Attention scores with alibi masking
     for (int b = 0; b < BATCH_SIZE; b++) {
         for (int h = 0; h < N_HEAD; h++) {
+            // Alibi mask slope (geometric sequence)
             double m = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
+            
             for (int q_pos = 0; q_pos < SEQ_LENGTH; q_pos++) {
                 for (int k_pos = 0; k_pos < SEQ_LENGTH; k_pos++) {
+                    // Causal masking
                     if (k_pos > q_pos) {
                         scores[(b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + 
                                (q_pos * SEQ_LENGTH) + k_pos] = -INFINITY;
                         continue;
                     }
+                    
                     double score = 0.0;
                     for (int d = 0; d < head_dim; d++) {
                         int q_idx = (b * SEQ_LENGTH * D_MODEL) + (q_pos * D_MODEL) + (h * head_dim) + d;
                         int k_idx = (b * SEQ_LENGTH * D_MODEL) + (k_pos * D_MODEL) + (h * head_dim) + d;
                         score += q_heads[q_idx] * k_heads[k_idx];
                     }
+                    // Apply scaling and alibi bias
                     score = score * scale - m * (q_pos - k_pos);
                     scores[(b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + 
                            (q_pos * SEQ_LENGTH) + k_pos] = score;
                 }
                 
+                // Softmax normalization
                 double max_score = -INFINITY;
                 for (int k_pos = 0; k_pos <= q_pos; k_pos++) {
                     int idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + 
@@ -163,27 +171,44 @@ void multihead_attention(Tensor *output, const Tensor *input, const Tensor *wq, 
         }
     }
     
+    // Compute final output with attention
     for (int b = 0; b < BATCH_SIZE; b++) {
         for (int s = 0; s < SEQ_LENGTH; s++) {
-            for (int d = 0; d < D_MODEL; d++) {
-                double sum = 0.0;
-                for (int h = 0; h < N_HEAD; h++) {
+            double *head_outputs = calloc(D_MODEL, sizeof(double));
+            
+            for (int h = 0; h < N_HEAD; h++) {
+                for (int d = 0; d < head_dim; d++) {
                     double head_sum = 0.0;
                     for (int s2 = 0; s2 <= s; s2++) {
-                        int score_idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + (h * SEQ_LENGTH * SEQ_LENGTH) + 
+                        int score_idx = (b * N_HEAD * SEQ_LENGTH * SEQ_LENGTH) + 
+                                      (h * SEQ_LENGTH * SEQ_LENGTH) + 
                                       (s * SEQ_LENGTH) + s2;
-                        int v_idx = (b * SEQ_LENGTH * D_MODEL) + (s2 * D_MODEL) + (h * head_dim) + (d % head_dim);
+                        int v_idx = (b * SEQ_LENGTH * D_MODEL) + 
+                                  (s2 * D_MODEL) + 
+                                  (h * head_dim) + d;
                         head_sum += scores[score_idx] * v_heads[v_idx];
                     }
-                    sum += head_sum;
+                    head_outputs[h * head_dim + d] = head_sum;
                 }
-                double final_sum = 0.0;
-                for (int i = 0; i < D_MODEL; i++) final_sum += sum * wo->data[d * D_MODEL + i];
-                output->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] = final_sum;
             }
+            
+            // Project through output matrix
+            for (int d = 0; d < D_MODEL; d++) {
+                double sum = 0.0;
+                for (int i = 0; i < D_MODEL; i++) {
+                    sum += head_outputs[i] * wo->data[d * D_MODEL + i];
+                }
+                output->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] = sum;
+            }
+            
+            free(head_outputs);
         }
     }
-    free(q_heads); free(k_heads); free(v_heads); free(scores);
+    
+    free(q_heads);
+    free(k_heads);
+    free(v_heads);
+    free(scores);
 }
 
 Dataset load_csv(const char* filename) {
@@ -288,14 +313,37 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                       Tensor* W_q, Tensor* W_k, Tensor* W_v, Tensor* W_o,
                       Tensor* W_ff1, Tensor* W_ff2, Tensor* W_out) {
     
+    double prev_loss = INFINITY;
+    double best_loss = INFINITY;
+    double current_lr = LEARNING_RATE;
+    
     for (int step = 0; step < TRAINING_STEPS; step++) {
         double base_loss = forward_pass(dataset, output, hidden, temp,
                                       W_seq, W_cond, W_q, W_k, W_v, W_o,
                                       W_ff1, W_ff2, W_out);
         
-        printf("Step %d, Loss: %f\n", step, base_loss);
+        if (isnan(base_loss)) {
+            printf("Warning: NaN loss detected. Reducing learning rate...\n");
+            current_lr *= 0.5;
+            continue;
+        }
         
-        // Update each parameter using finite differences
+        printf("Step %d, Loss: %f (lr: %e)\n", step, base_loss, current_lr);
+        
+        // Early stopping check
+        if (base_loss > prev_loss * 1.5) {
+            printf("Loss increasing too much, reducing learning rate...\n");
+            current_lr *= 0.5;
+            continue;
+        }
+        
+        if (base_loss < best_loss) {
+            best_loss = base_loss;
+        }
+        
+        prev_loss = base_loss;
+        
+        // Update transformer layers
         for (int l = 0; l < N_LAYERS; l++) {
             // Update W_q
             for (int i = 0; i < W_q[l].size; i++) {
@@ -304,8 +352,14 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                              W_seq, W_cond, W_q, W_k, W_v, W_o,
                                              W_ff1, W_ff2, W_out);
                 W_q[l].data[i] -= EPSILON;
-                double grad = (new_loss - base_loss) / EPSILON;
-                W_q[l].data[i] -= LEARNING_RATE * grad;
+                
+                if (!isnan(new_loss)) {
+                    double grad = (new_loss - base_loss) / EPSILON;
+                    // Gradient clipping
+                    if (grad > 1.0) grad = 1.0;
+                    if (grad < -1.0) grad = -1.0;
+                    W_q[l].data[i] -= current_lr * grad;
+                }
             }
             
             // Update W_k
@@ -315,8 +369,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                              W_seq, W_cond, W_q, W_k, W_v, W_o,
                                              W_ff1, W_ff2, W_out);
                 W_k[l].data[i] -= EPSILON;
-                double grad = (new_loss - base_loss) / EPSILON;
-                W_k[l].data[i] -= LEARNING_RATE * grad;
+                
+                if (!isnan(new_loss)) {
+                    double grad = (new_loss - base_loss) / EPSILON;
+                    if (grad > 1.0) grad = 1.0;
+                    if (grad < -1.0) grad = -1.0;
+                    W_k[l].data[i] -= current_lr * grad;
+                }
             }
             
             // Update W_v
@@ -326,8 +385,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                              W_seq, W_cond, W_q, W_k, W_v, W_o,
                                              W_ff1, W_ff2, W_out);
                 W_v[l].data[i] -= EPSILON;
-                double grad = (new_loss - base_loss) / EPSILON;
-                W_v[l].data[i] -= LEARNING_RATE * grad;
+                
+                if (!isnan(new_loss)) {
+                    double grad = (new_loss - base_loss) / EPSILON;
+                    if (grad > 1.0) grad = 1.0;
+                    if (grad < -1.0) grad = -1.0;
+                    W_v[l].data[i] -= current_lr * grad;
+                }
             }
             
             // Update W_o
@@ -337,8 +401,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                              W_seq, W_cond, W_q, W_k, W_v, W_o,
                                              W_ff1, W_ff2, W_out);
                 W_o[l].data[i] -= EPSILON;
-                double grad = (new_loss - base_loss) / EPSILON;
-                W_o[l].data[i] -= LEARNING_RATE * grad;
+                
+                if (!isnan(new_loss)) {
+                    double grad = (new_loss - base_loss) / EPSILON;
+                    if (grad > 1.0) grad = 1.0;
+                    if (grad < -1.0) grad = -1.0;
+                    W_o[l].data[i] -= current_lr * grad;
+                }
             }
             
             // Update W_ff1
@@ -348,8 +417,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                              W_seq, W_cond, W_q, W_k, W_v, W_o,
                                              W_ff1, W_ff2, W_out);
                 W_ff1[l].data[i] -= EPSILON;
-                double grad = (new_loss - base_loss) / EPSILON;
-                W_ff1[l].data[i] -= LEARNING_RATE * grad;
+                
+                if (!isnan(new_loss)) {
+                    double grad = (new_loss - base_loss) / EPSILON;
+                    if (grad > 1.0) grad = 1.0;
+                    if (grad < -1.0) grad = -1.0;
+                    W_ff1[l].data[i] -= current_lr * grad;
+                }
             }
             
             // Update W_ff2
@@ -359,8 +433,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                              W_seq, W_cond, W_q, W_k, W_v, W_o,
                                              W_ff1, W_ff2, W_out);
                 W_ff2[l].data[i] -= EPSILON;
-                double grad = (new_loss - base_loss) / EPSILON;
-                W_ff2[l].data[i] -= LEARNING_RATE * grad;
+                
+                if (!isnan(new_loss)) {
+                    double grad = (new_loss - base_loss) / EPSILON;
+                    if (grad > 1.0) grad = 1.0;
+                    if (grad < -1.0) grad = -1.0;
+                    W_ff2[l].data[i] -= current_lr * grad;
+                }
             }
         }
         
@@ -371,8 +450,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                          W_seq, W_cond, W_q, W_k, W_v, W_o,
                                          W_ff1, W_ff2, W_out);
             W_seq->data[i] -= EPSILON;
-            double grad = (new_loss - base_loss) / EPSILON;
-            W_seq->data[i] -= LEARNING_RATE * grad;
+            
+            if (!isnan(new_loss)) {
+                double grad = (new_loss - base_loss) / EPSILON;
+                if (grad > 1.0) grad = 1.0;
+                if (grad < -1.0) grad = -1.0;
+                W_seq->data[i] -= current_lr * grad;
+            }
         }
         
         // Update condition weights (W_cond)
@@ -382,8 +466,13 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                          W_seq, W_cond, W_q, W_k, W_v, W_o,
                                          W_ff1, W_ff2, W_out);
             W_cond->data[i] -= EPSILON;
-            double grad = (new_loss - base_loss) / EPSILON;
-            W_cond->data[i] -= LEARNING_RATE * grad;
+            
+            if (!isnan(new_loss)) {
+                double grad = (new_loss - base_loss) / EPSILON;
+                if (grad > 1.0) grad = 1.0;
+                if (grad < -1.0) grad = -1.0;
+                W_cond->data[i] -= current_lr * grad;
+            }
         }
         
         // Update output weights (W_out)
@@ -393,16 +482,21 @@ void train_finite_diff(Dataset* dataset, Tensor* output, Tensor* hidden, Tensor*
                                          W_seq, W_cond, W_q, W_k, W_v, W_o,
                                          W_ff1, W_ff2, W_out);
             W_out->data[i] -= EPSILON;
-            double grad = (new_loss - base_loss) / EPSILON;
-            W_out->data[i] -= LEARNING_RATE * grad;
+            
+            if (!isnan(new_loss)) {
+                double grad = (new_loss - base_loss) / EPSILON;
+                if (grad > 1.0) grad = 1.0;
+                if (grad < -1.0) grad = -1.0;
+                W_out->data[i] -= current_lr * grad;
+            }
         }
         
-        // Optional: Print predictions every N steps
+        // Print predictions every 10 steps
         if (step % 10 == 0) {
-            printf("\nPredictions at step %d:\n", step);
-            for (int b = 0; b < 1; b++) {  // Just print first batch
-                for (int s = 0; s < 5; s++) {  // Just print first 5 steps
-                    printf("Step %d: ", s);
+            printf("\nPredictions at training step %d:\n", step);
+            for (int b = 0; b < 1; b++) {
+                for (int s = 0; s < 5; s++) {
+                    printf("Sequence step %d: ", s);
                     for (int f = 0; f < SEQUENCE_FEATURES; f++) {
                         int pred_idx = (b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f;
                         int actual_idx = ((b * SEQ_LENGTH + s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES;
