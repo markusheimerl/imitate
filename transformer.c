@@ -223,28 +223,19 @@ void update_weights(Tensor* w, double base_loss, double lr, Dataset* ds, Tensor*
 void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                       Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
                       Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
-    double prev_loss = INFINITY, best_loss = INFINITY, lr = LEARNING_RATE;
+    const double lr = LEARNING_RATE;
 
     for (int step = 0; step < TRAINING_STEPS; step++) {
         double base_loss = forward_pass(ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         
         if (isnan(base_loss)) {
-            printf("NaN detected, reducing lr\n");
-            lr *= 0.5;
+            printf("NaN detected at step %d, skipping update\n", step);
             continue;
         }
 
-        printf("Step %d, Loss: %f (lr: %e)\n", step, base_loss, lr);
-        
-        if (base_loss > prev_loss * 1.5) {
-            printf("Loss spiking, reducing lr\n");
-            lr *= 0.5;
-            continue;
-        }
+        printf("Step %d, Loss: %f\n", step, base_loss);
 
-        if (base_loss < best_loss) best_loss = base_loss;
-        prev_loss = base_loss;
-
+        // Update weights with fixed learning rate
         for (int l = 0; l < N_LAYERS; l++) {
             update_weights(&wq[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
             update_weights(&wk[l], base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
@@ -257,6 +248,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         update_weights(wc, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
         update_weights(wout, base_loss, lr, ds, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
 
+        // Print predictions every 10 steps
         if (step % 10 == 0) {
             printf("\nPredictions at step %d:\n", step);
             for (int s = 0; s < 5; s++) {
