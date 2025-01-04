@@ -11,14 +11,14 @@
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 32
-#define SEQ_LENGTH 128
-#define D_MODEL 8
+#define BATCH_SIZE 8
+#define SEQ_LENGTH 32
+#define D_MODEL 16
 #define N_HEAD 2
-#define N_LAYERS 2
+#define N_LAYERS 4
 #define EPSILON 1e-6
 #define LEARNING_RATE 1e-6
-#define TRAINING_STEPS 1000
+#define TRAINING_STEPS 100000
 
 typedef struct { double *data; int rows, cols; double *mins, *maxs; } Dataset;
 typedef struct { double *data; int size; } Tensor;
