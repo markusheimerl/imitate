@@ -6,11 +6,12 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <omp.h>
 
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 4
+#define BATCH_SIZE 8
 #define SEQ_LENGTH 16
 #define D_MODEL 16
 #define N_HEAD 4

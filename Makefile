@@ -3,7 +3,7 @@ CFLAGS = -O3 -march=native -ffast-math -fomit-frame-pointer \
          -fno-signed-zeros -fno-trapping-math -funroll-loops \
          -fvectorize -fslp-vectorize -falign-functions=32 \
          -fstrict-aliasing -fmerge-all-constants \
-         -fno-math-errno -freciprocal-math
+         -fno-math-errno -freciprocal-math -fopenmp
 LDFLAGS = -flto -lm
 TARGET = transformer.out
 

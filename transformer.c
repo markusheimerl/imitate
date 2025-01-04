@@ -2,6 +2,7 @@
 
 void rmsnorm(Tensor *out, const Tensor *in) {
     const double inv_d = 1.0 / D_MODEL;
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
@@ -14,6 +15,7 @@ void rmsnorm(Tensor *out, const Tensor *in) {
 
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
     const double sqrt_2_pi = sqrt(2.0/M_PI);
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
@@ -41,6 +43,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     const double scale = 1.0 / sqrt(hd);
 
     // QKV Transform
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         for (int h = 0; h < N_HEAD; h++) {
@@ -59,6 +62,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     }
 
     // Attention with alibi mask
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int h = 0; h < N_HEAD; h++) {
             const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
@@ -80,6 +84,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
         }
 
     // Output projection
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double tmp[D_MODEL] = {0};
@@ -243,6 +248,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
 
 int main() {
     srand(time(NULL));
+    omp_set_num_threads(16);
     Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
     const double ws = sqrt(2.0 / D_MODEL);
     
