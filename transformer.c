@@ -37,61 +37,63 @@ void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *
 void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const Tensor *wk, 
                         const Tensor *wv, const Tensor *wo,
                         double *q, double *k, double *v, double *s) {
-    int hd = D_MODEL/N_HEAD;
+    const int hd = D_MODEL / N_HEAD;
+    const double scale = 1.0 / sqrt(hd);
 
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int t = 0; t < SEQ_LENGTH; t++)
-            for (int h = 0; h < N_HEAD; h++)
-                for (int d = 0; d < hd; d++) {
-                    int idx = (b*SEQ_LENGTH*D_MODEL) + (t*D_MODEL) + (h*hd) + d;
-                    double sq=0, sk=0, sv=0;
-                    for (int i = 0; i < D_MODEL; i++) {
-                        int in_i = (b*SEQ_LENGTH*D_MODEL) + (t*D_MODEL) + i;
-                        int w_i = (h*hd + d)*D_MODEL + i;
-                        sq += in->data[in_i] * wq->data[w_i];
-                        sk += in->data[in_i] * wk->data[w_i];
-                        sv += in->data[in_i] * wv->data[w_i];
-                    }
-                    q[idx]=sq; k[idx]=sk; v[idx]=sv;
+    // QKV Transform
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* x = in->data + b * D_MODEL;
+        for (int h = 0; h < N_HEAD; h++) {
+            for (int d = 0; d < hd; d++) {
+                double sq = 0.0, sk = 0.0, sv = 0.0;
+                const int w_idx = (h * hd + d) * D_MODEL;
+                for (int i = 0; i < D_MODEL; i++) {
+                    sq += x[i] * wq->data[w_idx + i];
+                    sk += x[i] * wk->data[w_idx + i];
+                    sv += x[i] * wv->data[w_idx + i];
                 }
+                const int qkv_idx = b * D_MODEL + h * hd + d;
+                q[qkv_idx] = sq; k[qkv_idx] = sk; v[qkv_idx] = sv;
+            }
+        }
+    }
 
+    // Attention with alibi mask
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int h = 0; h < N_HEAD; h++) {
-            double m = pow(2.0, -(8.0*(h+1)/N_HEAD));
+            const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
             for (int i = 0; i < SEQ_LENGTH; i++) {
-                double max=-INFINITY, sum=0;
+                double max = -INFINITY, sum = 0.0;
                 for (int j = 0; j <= i; j++) {
-                    int idx = (b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH) + (h*SEQ_LENGTH*SEQ_LENGTH) + (i*SEQ_LENGTH) + j;
-                    s[idx] = 0;
-                    for (int d = 0; d < hd; d++)
-                        s[idx] += q[(b*SEQ_LENGTH*D_MODEL)+(i*D_MODEL)+(h*hd)+d] * k[(b*SEQ_LENGTH*D_MODEL)+(j*D_MODEL)+(h*hd)+d];
-                    s[idx] = s[idx]/sqrt(hd) - m*(i-j);
-                    max = fmax(max, s[idx]);
+                    double dot = 0.0;
+                    for (int d = 0; d < hd; d++) dot += q[(b * SEQ_LENGTH + i) * D_MODEL + h * hd + d] * k[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
+                    s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = dot * scale - slope * (i - j);
+                    max = fmax(max, s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j]);
                 }
+                
                 for (int j = 0; j <= i; j++) {
-                    int idx = (b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH) + (h*SEQ_LENGTH*SEQ_LENGTH) + (i*SEQ_LENGTH) + j;
-                    s[idx] = exp(s[idx]-max);
-                    sum += s[idx];
+                    s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max);
+                    sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
                 }
-                for (int j = 0; j <= i; j++)
-                    s[(b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH)+(h*SEQ_LENGTH*SEQ_LENGTH)+(i*SEQ_LENGTH)+j] /= sum;
+                for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= sum;
             }
         }
 
+    // Output projection
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
-            double ho[D_MODEL] = {0};
+            double tmp[D_MODEL] = {0};
             for (int h = 0; h < N_HEAD; h++)
                 for (int d = 0; d < hd; d++) {
-                    double sum = 0;
-                    for (int j = 0; j <= t; j++)
-                        sum += s[(b*N_HEAD*SEQ_LENGTH*SEQ_LENGTH)+(h*SEQ_LENGTH*SEQ_LENGTH)+(t*SEQ_LENGTH)+j] * v[(b*SEQ_LENGTH*D_MODEL)+(j*D_MODEL)+(h*hd)+d];
-                    ho[h*hd+d] = sum;
+                    double sum = 0.0;
+                    for (int j = 0; j <= t; j++) sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * v[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
+                    tmp[h * hd + d] = sum;
                 }
+            
             for (int d = 0; d < D_MODEL; d++) {
-                double sum = 0;
-                for (int i = 0; i < D_MODEL; i++) sum += ho[i] * wo->data[d*D_MODEL+i];
-                out->data[(b*SEQ_LENGTH*D_MODEL)+(t*D_MODEL)+d] = sum;
+                double sum = 0.0;
+                for (int i = 0; i < D_MODEL; i++) sum += tmp[i] * wo->data[d * D_MODEL + i];
+                out->data[(b * SEQ_LENGTH + t) * D_MODEL + d] = sum;
             }
         }
 }
