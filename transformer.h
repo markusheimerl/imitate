@@ -16,7 +16,7 @@
 #define N_HEAD 4
 #define N_LAYERS 2
 #define EPSILON 1e-6
-#define LEARNING_RATE 0.0001
+#define LEARNING_RATE 1e-6
 #define TRAINING_STEPS 1000
 
 typedef struct { double *data; int rows, cols; double *mins, *maxs; } Dataset;

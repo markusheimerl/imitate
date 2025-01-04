@@ -150,7 +150,7 @@ double compute_loss(const Tensor* out, const double* batch_data) {
             loss += diff * diff;
         }
     }
-    return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+    return loss / (2.0 * BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
 void update_weights(Tensor* w, double base_loss, double lr, const double* batch_data, 
@@ -168,7 +168,7 @@ void update_weights(Tensor* w, double base_loss, double lr, const double* batch_
         
         if (!isnan(new_loss)) {
             double grad = (new_loss - base_loss) / EPSILON;
-            grad = fmax(-1.0, fmin(1.0, grad));
+            grad = fmax(-10.0, fmin(10.0, grad));
             w->data[i] -= lr * grad;
         }
     }
