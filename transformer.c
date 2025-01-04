@@ -244,7 +244,6 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
 
 int main() {
     srand(time(NULL));
-    omp_set_num_threads(2);
     Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
     const double ws = sqrt(2.0 / D_MODEL);
     
