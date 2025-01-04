@@ -1,6 +1,8 @@
 # transformer
 A minimal decoder transformer implementation
 
+SCALE! Let transformers do what transformers do best
+
 ### Strategies for Improving Finite Differences Training
 
 1. **Efficient Gradient Estimation**:
