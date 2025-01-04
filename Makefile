@@ -1,5 +1,5 @@
-CC = gcc
-CFLAGS = -O3 -march=native -ffast-math -funroll-loops -Wall -Wextra -I./grad
+CC = clang
+CFLAGS = -O3 -march=native -ffast-math -funroll-loops -fvectorize -fslp-vectorize -fstrict-aliasing -fstrict-return -Wall -Wextra
 LDFLAGS = -flto -lm
 TARGET = transformer.out
 
