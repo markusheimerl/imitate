@@ -1,27 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-#include <time.h>
-
-#define CONDITION_FEATURES 4
-#define SEQUENCE_FEATURES 10
-#define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 2
-#define SEQ_LENGTH 16
-#define D_MODEL 16
-#define N_HEAD 4
-#define N_LAYERS 2
-#define EPSILON 1e-6
-#define LEARNING_RATE 0.0001
-#define TRAINING_STEPS 1000
-
-typedef struct { double *data; int size; } Tensor;
-typedef struct { double *data; int rows, cols; double *mins, *maxs; } Dataset;
-
-double normalize(double v, double min, double max) { return max == min ? 0 : 2.0 * (v - min) / (max - min) - 1.0; }
-double denormalize(double v, double min, double max) { return (v + 1.0) * (max - min) / 2.0 + min; }
-double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
+#include "transformer.h"
 
 void rmsnorm(Tensor *out, const Tensor *in) {
     for (int b = 0; b < BATCH_SIZE; b++)
@@ -121,37 +98,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
             free(ho);
         }
     free(q); free(k); free(v); free(s);
-}
-
-Dataset load_csv(const char* filename) {
-    const static int MAX_LINE_LENGTH = 1024;
-    Dataset ds = {NULL, 0, INPUT_FEATURES, calloc(INPUT_FEATURES, sizeof(double)), calloc(INPUT_FEATURES, sizeof(double))};
-    char line[MAX_LINE_LENGTH];
-    double* tmp = malloc(1000 * INPUT_FEATURES * sizeof(double));
-    FILE* f = fopen(filename, "r");
-    if (!f || !fgets(line, MAX_LINE_LENGTH, f)) { printf("File error\n"); exit(1); }
-    
-    for (int i = 0; i < INPUT_FEATURES; i++) ds.mins[i]=INFINITY, ds.maxs[i]=-INFINITY;
-    
-    while (fgets(line, MAX_LINE_LENGTH, f)) {
-        if (ds.rows >= 1000) tmp = realloc(tmp, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
-        char* tok = strtok(line, ",");
-        for (int i = 0; i < INPUT_FEATURES && tok; i++, tok = strtok(NULL, ",")) {
-            tmp[ds.rows * INPUT_FEATURES + i] = atof(tok);
-            ds.mins[i] = fmin(ds.mins[i], tmp[ds.rows * INPUT_FEATURES + i]);
-            ds.maxs[i] = fmax(ds.maxs[i], tmp[ds.rows * INPUT_FEATURES + i]);
-        }
-        ds.rows++;
-    }
-    
-    printf("Dataset loaded with %d rows\n", ds.rows);
-    
-    for (int i = 0; i < ds.rows * INPUT_FEATURES; i++)
-        tmp[i] = normalize(tmp[i], ds.mins[i % INPUT_FEATURES], ds.maxs[i % INPUT_FEATURES]);
-    
-    ds.data = tmp;
-    fclose(f);
-    return ds;
 }
 
 void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
@@ -260,9 +206,9 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
 
         // Print predictions
         if (step > 0 && step % 100 == 0) {
-            printf("\nPredictions at step %d:\n", step);
+            printf("\nPredictions at training iteration %d:\n", step);
             for (int s = 0; s < 5; s++) {
-                printf("Step %d: ", s);
+                printf("Sequence Step %d: ", s);
                 for (int f = 0; f < SEQUENCE_FEATURES; f++) {
                     double pred = denormalize(out->data[s * SEQUENCE_FEATURES + f], ds->mins[f + CONDITION_FEATURES], ds->maxs[f + CONDITION_FEATURES]);
                     double actual = denormalize(batch_data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES], ds->mins[f + CONDITION_FEATURES], ds->maxs[f + CONDITION_FEATURES]);
@@ -275,39 +221,6 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
     }
     
     free(batch_data);
-}
-
-void save_weights(const char* filename, 
-                 const Tensor* ws, const Tensor* wc,
-                 const Tensor* wq, const Tensor* wk,
-                 const Tensor* wv, const Tensor* wo,
-                 const Tensor* wf1, const Tensor* wf2,
-                 const Tensor* wout) {
-    FILE* f = fopen(filename, "wb");
-    if (!f) {
-        printf("Error opening file for writing weights\n");
-        return;
-    }
-
-    // Write sequence and condition weights
-    fwrite(ws->data, sizeof(double), ws->size, f);
-    fwrite(wc->data, sizeof(double), wc->size, f);
-
-    // Write layer weights
-    for (int l = 0; l < N_LAYERS; l++) {
-        fwrite(wq[l].data, sizeof(double), wq[l].size, f);
-        fwrite(wk[l].data, sizeof(double), wk[l].size, f);
-        fwrite(wv[l].data, sizeof(double), wv[l].size, f);
-        fwrite(wo[l].data, sizeof(double), wo[l].size, f);
-        fwrite(wf1[l].data, sizeof(double), wf1[l].size, f);
-        fwrite(wf2[l].data, sizeof(double), wf2[l].size, f);
-    }
-
-    // Write output weights
-    fwrite(wout->data, sizeof(double), wout->size, f);
-
-    fclose(f);
-    printf("Weights saved to %s\n", filename);
 }
 
 int main() {
