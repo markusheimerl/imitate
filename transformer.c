@@ -2,7 +2,6 @@
 
 void rmsnorm(Tensor *out, const Tensor *in) {
     const double inv_d = 1.0 / D_MODEL;
-    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
@@ -15,7 +14,6 @@ void rmsnorm(Tensor *out, const Tensor *in) {
 
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
     const double sqrt_2_pi = sqrt(2.0/M_PI);
-    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
@@ -43,7 +41,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     const double scale = 1.0 / sqrt(hd);
 
     // QKV Transform
-    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         for (int h = 0; h < N_HEAD; h++) {
@@ -62,7 +59,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     }
 
     // Attention with alibi mask
-    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int h = 0; h < N_HEAD; h++) {
             const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
@@ -84,7 +80,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
         }
 
     // Output projection
-    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double tmp[D_MODEL] = {0};
@@ -165,6 +160,7 @@ void update_weights(Tensor* w, double base_loss, double lr, const double* batch_
                    const Tensor* wout,
                    double* q_buf, double* k_buf, double* v_buf, double* s_buf, 
                    double* mid_buf) {
+    #pragma omp parallel for
     for (int i = 0; i < w->size; i++) {
         w->data[i] += EPSILON;
         forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
