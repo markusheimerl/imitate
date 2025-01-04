@@ -13,8 +13,7 @@ void rmsnorm(Tensor *out, const Tensor *in) {
 
 double gelu(double x) { return 0.5 * x * (1.0 + tanh(sqrt(2.0/M_PI) * (x + 0.044715 * x * x * x))); }
 
-void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in) {
-    double *mid = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++) {
             int idx = (b * SEQ_LENGTH + s);
@@ -31,15 +30,12 @@ void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *
                 out->data[idx * D_MODEL + d] = sum;
             }
         }
-    free(mid);
 }
 
-void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const Tensor *wk, const Tensor *wv, const Tensor *wo) {
+void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const Tensor *wk, 
+                        const Tensor *wv, const Tensor *wo,
+                        double *q, double *k, double *v, double *s) {
     int hd = D_MODEL/N_HEAD;
-    double *q = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *k = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *v = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *s = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
 
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++)
@@ -82,7 +78,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
 
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
-            double *ho = calloc(D_MODEL, sizeof(double));
+            double ho[D_MODEL] = {0};
             for (int h = 0; h < N_HEAD; h++)
                 for (int d = 0; d < hd; d++) {
                     double sum = 0;
@@ -95,9 +91,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
                 for (int i = 0; i < D_MODEL; i++) sum += ho[i] * wo->data[d*D_MODEL+i];
                 out->data[(b*SEQ_LENGTH*D_MODEL)+(t*D_MODEL)+d] = sum;
             }
-            free(ho);
         }
-    free(q); free(k); free(v); free(s);
 }
 
 void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
@@ -117,15 +111,16 @@ void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tenso
 double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
                    const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
                    const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
-                   const Tensor* wout) {
+                   const Tensor* wout,
+                   double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
     embed_sequence(hidden, batch_data, ws, wc);
 
     for (int l = 0; l < N_LAYERS; l++) {
         rmsnorm(temp, hidden);
-        multihead_attention(temp, temp, &wq[l], &wk[l], &wv[l], &wo[l]);
+        multihead_attention(temp, temp, &wq[l], &wk[l], &wv[l], &wo[l], q_buf, k_buf, v_buf, s_buf);
         for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
         rmsnorm(temp, hidden);
-        feedforward(temp, &wf1[l], &wf2[l], temp);
+        feedforward(temp, &wf1[l], &wf2[l], temp, mid_buf);
         for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
     }
 
@@ -134,8 +129,7 @@ double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tenso
             for (int f = 0; f < SEQUENCE_FEATURES; f++) {
                 double sum = 0;
                 for (int d = 0; d < D_MODEL; d++)
-                    sum += hidden->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * 
-                          wout->data[d * SEQUENCE_FEATURES + f];
+                    sum += hidden->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * wout->data[d * SEQUENCE_FEATURES + f];
                 out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] = sum;
             }
 
@@ -143,23 +137,23 @@ double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tenso
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++)
             for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                double pred = out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + 
-                                      (s * SEQUENCE_FEATURES) + f];
-                double target = batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + 
-                                         ((s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES];
+                double pred = out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f];
+                double target = batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + ((s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES];
                 double diff = pred - target;
                 loss += diff * diff;
             }
     return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
-void update_weights(Tensor* w, double base_loss, double lr, double* batch_data, Tensor* out, 
-                   Tensor* hidden, Tensor* temp, Tensor* ws, Tensor* wc, Tensor* wq, 
-                   Tensor* wk, Tensor* wv, Tensor* wo, Tensor* wf1, Tensor* wf2, 
-                   Tensor* wout) {
+void update_weights(Tensor* w, double base_loss, double lr, double* batch_data, 
+                   Tensor* out, Tensor* hidden, Tensor* temp, Tensor* ws, Tensor* wc, 
+                   Tensor* wq, Tensor* wk, Tensor* wv, Tensor* wo, Tensor* wf1, 
+                   Tensor* wf2, Tensor* wout,
+                   double* q_buf, double* k_buf, double* v_buf, double* s_buf, 
+                   double* mid_buf) {
     for (int i = 0; i < w->size; i++) {
         w->data[i] += EPSILON;
-        double new_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        double new_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,q_buf, k_buf, v_buf, s_buf, mid_buf);
         w->data[i] -= EPSILON;
         if (!isnan(new_loss)) {
             double grad = (new_loss - base_loss) / EPSILON;
@@ -173,7 +167,14 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                       Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
                       Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
     const double lr = LEARNING_RATE;
+    
+    // Preallocate all buffers
     double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
+    double* q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double* k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double* v_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double* s_buf = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
+    double* mid_buf = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
     
     for (int step = 0; step < TRAINING_STEPS; step++) {
         for (int b = 0; b < BATCH_SIZE; b++) {
@@ -187,22 +188,22 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
             }
         }
 
-        double base_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        double base_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         if (isnan(base_loss)) {printf("NaN detected at step %d, skipping update\n", step); continue;}
         printf("Step %d, Loss: %f\n", step, base_loss);
 
         // Update weights
         for (int l = 0; l < N_LAYERS; l++) {
-            update_weights(&wq[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wk[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wv[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wo[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wf1[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-            update_weights(&wf2[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+            update_weights(&wq[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            update_weights(&wk[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            update_weights(&wv[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            update_weights(&wo[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            update_weights(&wf1[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            update_weights(&wf2[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         }
-        update_weights(ws, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-        update_weights(wc, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
-        update_weights(wout, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout);
+        update_weights(ws, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        update_weights(wc, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        update_weights(wout, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
 
         // Print predictions
         if (step > 0 && step % 100 == 0) {
@@ -220,7 +221,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         }
     }
     
-    free(batch_data);
+    free(batch_data); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
 }
 
 int main() {
@@ -242,8 +243,7 @@ int main() {
         W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), D_MODEL * (D_MODEL * 4)};
         W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), (D_MODEL * 4) * D_MODEL};
         
-        for (int i = 0; i < D_MODEL * D_MODEL; i++)
-            W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
+        for (int i = 0; i < D_MODEL * D_MODEL; i++) W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
         for (int i = 0; i < W_ff1[l].size; i++) W_ff1[l].data[i] = randn() * ws;
         for (int i = 0; i < W_ff2[l].size; i++) W_ff2[l].data[i] = randn() * ws;
     }
@@ -261,12 +261,9 @@ int main() {
     train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
     save_weights("weights.bin", &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
 
-    // Cleanup
-    free(ds.data); free(ds.mins); free(ds.maxs);
-    free(hidden.data); free(temp.data); free(output.data); free(W_out.data);
+    free(ds.data); free(ds.mins); free(ds.maxs); free(hidden.data); free(temp.data); free(output.data); free(W_out.data);
     for (int l = 0; l < N_LAYERS; l++) {
-        free(W_q[l].data); free(W_k[l].data); free(W_v[l].data); free(W_o[l].data);
-        free(W_ff1[l].data); free(W_ff2[l].data);
+        free(W_q[l].data); free(W_k[l].data); free(W_v[l].data); free(W_o[l].data); free(W_ff1[l].data); free(W_ff2[l].data);
     }
     free(W_seq.data); free(W_cond.data);
     return 0;
