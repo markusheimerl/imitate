@@ -1,14 +1,15 @@
 #include "transformer.h"
 
 void rmsnorm(Tensor *out, const Tensor *in) {
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int s = 0; s < SEQ_LENGTH; s++) {
-            double ss = 0.0;
-            int idx = (b * SEQ_LENGTH + s) * D_MODEL;
-            for (int i = 0; i < D_MODEL; i++) ss += in->data[idx + i] * in->data[idx + i];
-            double rms = sqrt(ss / D_MODEL + 1e-5);
-            for (int i = 0; i < D_MODEL; i++) out->data[idx + i] = in->data[idx + i] / rms;
-        }
+    const double inv_d = 1.0 / D_MODEL;
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* x = in->data + b * D_MODEL;
+        double* y = out->data + b * D_MODEL;
+        double ss = 0.0;
+        for (int i = 0; i < D_MODEL; i++) ss += x[i] * x[i];
+        double scale = 1.0 / sqrt(ss * inv_d + 1e-5);
+        for (int i = 0; i < D_MODEL; i++) y[i] = x[i] * scale;
+    }
 }
 
 double gelu(double x) { return 0.5 * x * (1.0 + tanh(sqrt(2.0/M_PI) * (x + 0.044715 * x * x * x))); }
