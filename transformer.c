@@ -243,44 +243,60 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
 int main() {
     srand(time(NULL));
     Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
-    double ws = sqrt(2.0 / D_MODEL);
+    const double ws = sqrt(2.0 / D_MODEL);
     
+    // Initialize global weights
     Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), SEQUENCE_FEATURES * D_MODEL};
     Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), CONDITION_FEATURES * D_MODEL};
-    W_seq.size = SEQUENCE_FEATURES * D_MODEL;
-    W_cond.size = CONDITION_FEATURES * D_MODEL;
+    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), D_MODEL * SEQUENCE_FEATURES};
     
+    // Initialize per-layer weights
     Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS], W_ff1[N_LAYERS], W_ff2[N_LAYERS];
     for (int l = 0; l < N_LAYERS; l++) {
-        W_q[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
-        W_k[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
-        W_v[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
-        W_o[l] = (Tensor){malloc(D_MODEL * D_MODEL * sizeof(double)), D_MODEL * D_MODEL};
-        W_ff1[l] = (Tensor){malloc(D_MODEL * (D_MODEL * 4) * sizeof(double)), D_MODEL * (D_MODEL * 4)};
-        W_ff2[l] = (Tensor){malloc((D_MODEL * 4) * D_MODEL * sizeof(double)), (D_MODEL * 4) * D_MODEL};
+        const int attn_size = D_MODEL * D_MODEL;
+        const int ff_size1 = D_MODEL * (D_MODEL * 4);
+        const int ff_size2 = (D_MODEL * 4) * D_MODEL;
         
-        for (int i = 0; i < D_MODEL * D_MODEL; i++) W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
-        for (int i = 0; i < W_ff1[l].size; i++) W_ff1[l].data[i] = randn() * ws;
-        for (int i = 0; i < W_ff2[l].size; i++) W_ff2[l].data[i] = randn() * ws;
+        W_q[l] = (Tensor){malloc(attn_size * sizeof(double)), attn_size};
+        W_k[l] = (Tensor){malloc(attn_size * sizeof(double)), attn_size};
+        W_v[l] = (Tensor){malloc(attn_size * sizeof(double)), attn_size};
+        W_o[l] = (Tensor){malloc(attn_size * sizeof(double)), attn_size};
+        W_ff1[l] = (Tensor){malloc(ff_size1 * sizeof(double)), ff_size1};
+        W_ff2[l] = (Tensor){malloc(ff_size2 * sizeof(double)), ff_size2};
+        
+        // Initialize attention weights
+        for (int i = 0; i < attn_size; i++) W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
+        
+        // Initialize feedforward weights
+        for (int i = 0; i < ff_size1; i++) W_ff1[l].data[i] = randn() * ws;
+        for (int i = 0; i < ff_size2; i++) W_ff2[l].data[i] = randn() * ws;
     }
     
+    // Initialize global weights
     for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
     for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
+    for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
     
+    // Initialize buffers
     Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), BATCH_SIZE * SEQ_LENGTH * D_MODEL};
     Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), BATCH_SIZE * SEQ_LENGTH * D_MODEL};
     Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
-    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), D_MODEL * SEQUENCE_FEATURES};
-    
-    for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
 
+    // Train model
     train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
+    
+    // Save weights
     save_weights("weights.bin", &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
 
-    free(ds.data); free(ds.mins); free(ds.maxs); free(hidden.data); free(temp.data); free(output.data); free(W_out.data);
+    // Cleanup
+    free(ds.data); free(ds.mins); free(ds.maxs);
+    free(hidden.data); free(temp.data); free(output.data);
+    free(W_seq.data); free(W_cond.data); free(W_out.data);
+    
     for (int l = 0; l < N_LAYERS; l++) {
-        free(W_q[l].data); free(W_k[l].data); free(W_v[l].data); free(W_o[l].data); free(W_ff1[l].data); free(W_ff2[l].data);
+        free(W_q[l].data); free(W_k[l].data); free(W_v[l].data);
+        free(W_o[l].data); free(W_ff1[l].data); free(W_ff2[l].data);
     }
-    free(W_seq.data); free(W_cond.data);
+    
     return 0;
 }
