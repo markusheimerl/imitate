@@ -4,7 +4,6 @@
 #include <math.h>
 #include <time.h>
 
-#define MAX_LINE_LENGTH 1024
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
@@ -125,6 +124,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
 }
 
 Dataset load_csv(const char* filename) {
+    const static int MAX_LINE_LENGTH = 1024;
     Dataset ds = {NULL, 0, INPUT_FEATURES, calloc(INPUT_FEATURES, sizeof(double)), calloc(INPUT_FEATURES, sizeof(double))};
     char line[MAX_LINE_LENGTH];
     double* tmp = malloc(1000 * INPUT_FEATURES * sizeof(double));
