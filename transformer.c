@@ -99,17 +99,17 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
 }
 
 void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int s = 0; s < SEQ_LENGTH; s++)
-            for (int d = 0; d < D_MODEL; d++) {
-                int idx = (b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d;
-                int in_idx = (b * SEQ_LENGTH + s) * INPUT_FEATURES;
-                out->data[idx] = 0;
-                for (int f = 0; f < SEQUENCE_FEATURES; f++)
-                    out->data[idx] += in[in_idx + f + CONDITION_FEATURES] * ws->data[f * D_MODEL + d];
-                for (int f = 0; f < CONDITION_FEATURES; f++)
-                    out->data[idx] += in[in_idx + f] * wc->data[f * D_MODEL + d];
-            }
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* x = in + b * INPUT_FEATURES;
+        double* y = out->data + b * D_MODEL;
+        
+        for (int d = 0; d < D_MODEL; d++) {
+            double sum = 0.0;
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) sum += x[f + CONDITION_FEATURES] * ws->data[f * D_MODEL + d];
+            for (int f = 0; f < CONDITION_FEATURES; f++) sum += x[f] * wc->data[f * D_MODEL + d];
+            y[d] = sum;
+        }
+    }
 }
 
 double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
