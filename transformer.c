@@ -112,11 +112,11 @@ void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tenso
     }
 }
 
-double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
-                   const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
-                   const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
-                   const Tensor* wout,
-                   double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
+void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
+                 const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
+                 const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
+                 const Tensor* wout,
+                 double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
     embed_sequence(hidden, batch_data, ws, wc);
 
     for (int l = 0; l < N_LAYERS; l++) {
@@ -128,37 +128,44 @@ double forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tenso
         for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
     }
 
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int s = 0; s < SEQ_LENGTH; s++)
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                double sum = 0;
-                for (int d = 0; d < D_MODEL; d++)
-                    sum += hidden->data[(b * SEQ_LENGTH * D_MODEL) + (s * D_MODEL) + d] * wout->data[d * SEQUENCE_FEATURES + f];
-                out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f] = sum;
-            }
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* h = hidden->data + b * D_MODEL;
+        double* o = out->data + b * SEQUENCE_FEATURES;
+        for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+            double sum = 0.0;
+            const double* w = wout->data + f * D_MODEL;
+            for (int d = 0; d < D_MODEL; d++) sum += h[d] * w[d];
+            o[f] = sum;
+        }
+    }
+}
 
-    double loss = 0;
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int s = 0; s < SEQ_LENGTH; s++)
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                double pred = out->data[(b * SEQ_LENGTH * SEQUENCE_FEATURES) + (s * SEQUENCE_FEATURES) + f];
-                double target = batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + ((s + 1) * INPUT_FEATURES) + f + CONDITION_FEATURES];
-                double diff = pred - target;
-                loss += diff * diff;
-            }
+double compute_loss(const Tensor* out, const double* batch_data) {
+    double loss = 0.0;
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* pred = out->data + b * SEQUENCE_FEATURES;
+        const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
+        for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+            double diff = pred[f] - target[f];
+            loss += diff * diff;
+        }
+    }
     return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
-void update_weights(Tensor* w, double base_loss, double lr, double* batch_data, 
-                   Tensor* out, Tensor* hidden, Tensor* temp, Tensor* ws, Tensor* wc, 
-                   Tensor* wq, Tensor* wk, Tensor* wv, Tensor* wo, Tensor* wf1, 
-                   Tensor* wf2, Tensor* wout,
+void update_weights(Tensor* w, double base_loss, double lr, const double* batch_data, 
+                   Tensor* out, Tensor* hidden, Tensor* temp,
+                   const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
+                   const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
+                   const Tensor* wout,
                    double* q_buf, double* k_buf, double* v_buf, double* s_buf, 
                    double* mid_buf) {
     for (int i = 0; i < w->size; i++) {
         w->data[i] += EPSILON;
-        double new_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,q_buf, k_buf, v_buf, s_buf, mid_buf);
+        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        double new_loss = compute_loss(out, batch_data);
         w->data[i] -= EPSILON;
+        
         if (!isnan(new_loss)) {
             double grad = (new_loss - base_loss) / EPSILON;
             grad = fmax(-1.0, fmin(1.0, grad));
@@ -172,7 +179,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                       Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
     const double lr = LEARNING_RATE;
     
-    // Preallocate all buffers
+    // Allocate buffers
     double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
     double* q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double* k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -180,40 +187,45 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
     double* s_buf = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double* mid_buf = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
     
+    Tensor* global_weights[] = {ws, wc, wout};
+    
     for (int step = 0; step < TRAINING_STEPS; step++) {
+        // Sample random batches
         for (int b = 0; b < BATCH_SIZE; b++) {
             int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1);
-            for (int s = 0; s < SEQ_LENGTH + 1; s++) {
-                for (int f = 0; f < INPUT_FEATURES; f++) {
-                    batch_data[(b * (SEQ_LENGTH + 1) * INPUT_FEATURES) + 
-                              (s * INPUT_FEATURES) + f] = 
+            for (int s = 0; s < SEQ_LENGTH + 1; s++)
+                for (int f = 0; f < INPUT_FEATURES; f++)
+                    batch_data[(b * (SEQ_LENGTH + 1) + s) * INPUT_FEATURES + f] = 
                         ds->data[(seq_start + s) * INPUT_FEATURES + f];
-                }
-            }
         }
 
-        double base_loss = forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-        if (isnan(base_loss)) {printf("NaN detected at step %d, skipping update\n", step); continue;}
+        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        double base_loss = compute_loss(out, batch_data);
+        
+        if (isnan(base_loss)) {
+            printf("NaN detected at step %d, skipping update\n", step);
+            continue;
+        }
         printf("Step %d, Loss: %f\n", step, base_loss);
 
-        // Update weights
+        // Update per-layer weights
         for (int l = 0; l < N_LAYERS; l++) {
-            update_weights(&wq[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-            update_weights(&wk[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-            update_weights(&wv[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-            update_weights(&wo[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-            update_weights(&wf1[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-            update_weights(&wf2[l], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            Tensor* layer_weights[] = {&wq[l], &wk[l], &wv[l], &wo[l], &wf1[l], &wf2[l]};
+            for (int w = 0; w < 6; w++) {
+                update_weights(layer_weights[w], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            }
         }
-        update_weights(ws, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-        update_weights(wc, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-        update_weights(wout, base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        
+        // Update global weights
+        for (int w = 0; w < 3; w++) {
+            update_weights(global_weights[w], base_loss, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        }
 
-        // Print predictions
+        // Print predictions periodically
         if (step > 0 && step % 100 == 0) {
-            printf("\nPredictions at training iteration %d:\n", step);
+            printf("\nPredictions at step %d:\n", step);
             for (int s = 0; s < 5; s++) {
-                printf("Sequence Step %d: ", s);
+                printf("Step %d: ", s);
                 for (int f = 0; f < SEQUENCE_FEATURES; f++) {
                     double pred = denormalize(out->data[s * SEQUENCE_FEATURES + f], ds->mins[f + CONDITION_FEATURES], ds->maxs[f + CONDITION_FEATURES]);
                     double actual = denormalize(batch_data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES], ds->mins[f + CONDITION_FEATURES], ds->maxs[f + CONDITION_FEATURES]);
