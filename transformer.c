@@ -150,7 +150,7 @@ double compute_loss(const Tensor* out, const double* batch_data) {
             loss += diff * diff;
         }
     }
-    return loss / (2.0 * BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+    return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
 void update_weights(Tensor* w, double base_loss, double lr, const double* batch_data, 
