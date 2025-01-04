@@ -29,3 +29,35 @@ A minimal decoder transformer implementation
 
 9. **Sensitivity Analysis**:
    - Perform a sensitivity analysis to identify parameters that significantly affect the loss and prioritize these for more frequent updates.
+
+Here are the key concepts and improvements for finite difference-based training, explained without code examples:
+
+1. Adaptive Epsilon:
+Instead of using a fixed epsilon value, implement an adaptive epsilon that scales with the magnitude of each weight. This improves gradient estimation accuracy, especially for weights of varying scales.
+
+2. Central Difference Method:
+Replace the forward difference method with central difference. This involves evaluating the loss function at both positive and negative perturbations, providing a more accurate gradient estimate by reducing the impact of higher-order terms in the Taylor expansion.
+
+3. Gradient Accumulation:
+To reduce noise in gradient estimates, accumulate gradients over multiple samples before applying updates. This technique averages out some of the noise inherent in finite difference approximations.
+
+4. Gradient Smoothing:
+Implement an exponential moving average (EMA) for gradients. This smooths out noisy gradient estimates over time, potentially leading to more stable training.
+
+5. Random Perturbation Direction:
+Instead of perturbing each weight individually, use random direction perturbation. This involves generating a random vector, normalizing it, and using it to perturb all weights simultaneously. This can be more efficient and sometimes provides better exploration of the loss landscape.
+
+6. Careful Learning Rate Tuning:
+With finite differences, appropriate learning rate selection is crucial. Consider implementing a learning rate schedule that decreases over time, or an adaptive learning rate method.
+
+7. Regularization:
+Incorporate regularization techniques like L2 regularization (weight decay) to prevent overfitting and improve generalization.
+
+8. Gradient Clipping:
+Implement gradient clipping to prevent extremely large updates that can destabilize training, especially important with the potential noise in finite difference estimates.
+
+9. Batch Size Considerations:
+Experiment with different batch sizes. Larger batch sizes can help reduce noise in gradient estimates but may slow down training.
+
+10. Monitor Gradient Statistics:
+Keep track of gradient magnitudes and other statistics to gain insights into the training process and potential issues.
