@@ -27,16 +27,15 @@ double denormalize(double v, double min, double max) { return (v + 1.0) * (max -
 double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
 
 Dataset load_csv(const char* filename) {
-    const static int MAX_LINE_LENGTH = 1024;
     Dataset ds = {NULL, 0, INPUT_FEATURES, calloc(INPUT_FEATURES, sizeof(double)), calloc(INPUT_FEATURES, sizeof(double))};
-    char line[MAX_LINE_LENGTH];
+    char line[1024];
     double* tmp = malloc(1000 * INPUT_FEATURES * sizeof(double));
     FILE* f = fopen(filename, "r");
-    if (!f || !fgets(line, MAX_LINE_LENGTH, f)) { printf("File error\n"); exit(1); }
+    if (!f || !fgets(line, 1024, f)) { printf("File error\n"); exit(1); }
     
     for (int i = 0; i < INPUT_FEATURES; i++) ds.mins[i]=INFINITY, ds.maxs[i]=-INFINITY;
     
-    while (fgets(line, MAX_LINE_LENGTH, f)) {
+    while (fgets(line, 1024, f)) {
         if (ds.rows >= 1000) tmp = realloc(tmp, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
         char* tok = strtok(line, ",");
         for (int i = 0; i < INPUT_FEATURES && tok; i++, tok = strtok(NULL, ",")) {
@@ -47,33 +46,21 @@ Dataset load_csv(const char* filename) {
         ds.rows++;
     }
     
-    printf("Dataset loaded with %d rows\n", ds.rows);
-    
-    for (int i = 0; i < ds.rows * INPUT_FEATURES; i++)
-        tmp[i] = normalize(tmp[i], ds.mins[i % INPUT_FEATURES], ds.maxs[i % INPUT_FEATURES]);
+    for (int i = 0; i < ds.rows * INPUT_FEATURES; i++) tmp[i] = normalize(tmp[i], ds.mins[i % INPUT_FEATURES], ds.maxs[i % INPUT_FEATURES]);
     
     ds.data = tmp;
     fclose(f);
     return ds;
 }
 
-void save_weights(const char* filename, 
-                 const Tensor* ws, const Tensor* wc,
-                 const Tensor* wq, const Tensor* wk,
-                 const Tensor* wv, const Tensor* wo,
-                 const Tensor* wf1, const Tensor* wf2,
-                 const Tensor* wout) {
+void save_weights(const char* filename, const Tensor* ws, const Tensor* wc,
+                 const Tensor* wq, const Tensor* wk, const Tensor* wv, const Tensor* wo,
+                 const Tensor* wf1, const Tensor* wf2, const Tensor* wout) {
     FILE* f = fopen(filename, "wb");
-    if (!f) {
-        printf("Error opening file for writing weights\n");
-        return;
-    }
+    if (!f) { printf("Error opening file for writing weights\n"); return; }
 
-    // Write sequence and condition weights
     fwrite(ws->data, sizeof(double), ws->size, f);
     fwrite(wc->data, sizeof(double), wc->size, f);
-
-    // Write layer weights
     for (int l = 0; l < N_LAYERS; l++) {
         fwrite(wq[l].data, sizeof(double), wq[l].size, f);
         fwrite(wk[l].data, sizeof(double), wk[l].size, f);
@@ -82,12 +69,8 @@ void save_weights(const char* filename,
         fwrite(wf1[l].data, sizeof(double), wf1[l].size, f);
         fwrite(wf2[l].data, sizeof(double), wf2[l].size, f);
     }
-
-    // Write output weights
     fwrite(wout->data, sizeof(double), wout->size, f);
-
     fclose(f);
-    printf("Weights saved to %s\n", filename);
 }
 
 #endif // TRANSFORMER_H
