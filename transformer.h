@@ -26,6 +26,13 @@ double normalize(double v, double min, double max) { return max == min ? 0 : 2.0
 double denormalize(double v, double min, double max) { return (v + 1.0) * (max - min) / 2.0 + min; }
 double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
 
+void save_loss(const char* filename, double loss, int step) {
+    FILE* f = fopen(filename, step == 0 ? "w" : "a");
+    if (!f) { printf("Error opening loss file\n"); return; }
+    fprintf(f, "%d,%f\n", step, loss);
+    fclose(f);
+}
+
 Dataset load_csv(const char* filename) {
     Dataset ds = {NULL, 0, INPUT_FEATURES, calloc(INPUT_FEATURES, sizeof(double)), calloc(INPUT_FEATURES, sizeof(double))};
     char line[1024];

@@ -207,6 +207,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
             continue;
         }
         printf("Step %d, Loss: %f\n", step, base_loss);
+        save_loss("training_loss.csv", base_loss, step);
 
         // Update per-layer weights
         for (int l = 0; l < N_LAYERS; l++) {
