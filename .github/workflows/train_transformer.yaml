@@ -13,6 +13,16 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install matplotlib pandas
+
     - name: Decompress training data
       run: xz -d 2024-12-29_6-25-1_control_data.csv.xz
 
@@ -21,6 +31,9 @@ jobs:
 
     - name: Train transformer
       run: ./transformer.out
+
+    - name: Plot training loss
+      run: python plot_loss.py
 
     - name: Create Release
       id: create_release
@@ -42,3 +55,13 @@ jobs:
         asset_path: ./weights.bin
         asset_name: weights.bin
         asset_content_type: application/octet-stream
+
+    - name: Upload Loss Plot
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./training_loss.png
+        asset_name: training_loss.png
+        asset_content_type: image/png
