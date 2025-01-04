@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -O3 -march=native -ffast-math -funroll-loops -fvectorize -fslp-vectorize -fstrict-aliasing -fstrict-return -Wall -Wextra
+CFLAGS = -O3 -march=native -ffast-math -fomit-frame-pointer -fno-signed-zeros -fno-trapping-math -Wall -Wextra
 LDFLAGS = -flto -lm
 TARGET = transformer.out
 
