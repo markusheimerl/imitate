@@ -21,7 +21,7 @@
 #define TRAINING_STEPS 10000
 
 typedef struct { double *data; int rows, cols; double *mins, *maxs; } Dataset;
-typedef struct { double *data; int size; } Tensor;
+typedef struct { double *data; double *m; double *v; int size; } Tensor;
 
 double normalize(double v, double min, double max) { return max == min ? 0 : 2.0 * (v - min) / (max - min) - 1.0; }
 double denormalize(double v, double min, double max) { return (v + 1.0) * (max - min) / 2.0 + min; }
