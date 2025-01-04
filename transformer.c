@@ -12,25 +12,26 @@ void rmsnorm(Tensor *out, const Tensor *in) {
     }
 }
 
-double gelu(double x) { return 0.5 * x * (1.0 + tanh(sqrt(2.0/M_PI) * (x + 0.044715 * x * x * x))); }
-
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int s = 0; s < SEQ_LENGTH; s++) {
-            int idx = (b * SEQ_LENGTH + s);
-            for (int h = 0; h < D_MODEL * 4; h++) {
-                double sum = 0.0;
-                for (int d = 0; d < D_MODEL; d++) 
-                    sum += in->data[idx * D_MODEL + d] * w1->data[h * D_MODEL + d];
-                mid[idx * (D_MODEL * 4) + h] = gelu(sum);
-            }
-            for (int d = 0; d < D_MODEL; d++) {
-                double sum = 0.0;
-                for (int h = 0; h < D_MODEL * 4; h++)
-                    sum += mid[idx * (D_MODEL * 4) + h] * w2->data[d * (D_MODEL * 4) + h];
-                out->data[idx * D_MODEL + d] = sum;
-            }
+    const double sqrt_2_pi = sqrt(2.0/M_PI);
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* x = in->data + b * D_MODEL;
+        double* y = out->data + b * D_MODEL;
+        double* m = mid + b * (D_MODEL * 4);
+        
+        for (int h = 0; h < D_MODEL * 4; h++) {
+            double sum = 0.0;
+            for (int d = 0; d < D_MODEL; d++) sum += x[d] * w1->data[h * D_MODEL + d];
+            double t = sum + 0.044715 * sum * sum * sum;
+            m[h] = 0.5 * sum * (1.0 + tanh(sqrt_2_pi * t));
         }
+        
+        for (int d = 0; d < D_MODEL; d++) {
+            double sum = 0.0;
+            for (int h = 0; h < D_MODEL * 4; h++) sum += m[h] * w2->data[d * (D_MODEL * 4) + h];
+            y[d] = sum;
+        }
+    }
 }
 
 void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const Tensor *wk, 
