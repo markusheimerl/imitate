@@ -39,7 +39,6 @@ double gelu(double x) { return 0.5 * x * (1.0 + tanh(sqrt(2.0/M_PI) * (x + 0.044
 
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in) {
     double *mid = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
-    #pragma omp parallel for collapse(2)
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++) {
             int idx = (b * SEQ_LENGTH + s);
@@ -66,7 +65,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     double *v = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double *s = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
 
-    #pragma omp parallel for collapse(3)
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++)
             for (int h = 0; h < N_HEAD; h++)
@@ -106,7 +104,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
             }
         }
 
-    #pragma omp parallel for collapse(2)
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double *ho = calloc(D_MODEL, sizeof(double));
@@ -158,7 +155,6 @@ Dataset load_csv(const char* filename) {
 }
 
 void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
-    #pragma omp parallel for collapse(2)
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int s = 0; s < SEQ_LENGTH; s++)
             for (int d = 0; d < D_MODEL; d++) {
