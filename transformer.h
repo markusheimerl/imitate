@@ -175,7 +175,7 @@ void update_weights(Tensor* w, double base_loss, int step, double lr, const doub
         double new_loss = compute_loss(out, batch_data);
         w->data[i] -= EPSILON;
         
-        if (!isnan(new_loss)) {
+        if (new_loss >= 0.0 && new_loss < 1e6) {
             double grad = (new_loss - base_loss) / EPSILON;
             grad = fmax(-10.0, fmin(10.0, grad));
 
@@ -217,8 +217,8 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         double base_loss = compute_loss(out, batch_data);
         
-        if (isnan(base_loss)) {
-            printf("NaN detected at step %d, skipping update\n", step);
+        if (baseloss < 0.0 || baseloss > 1e6) {
+            printf("Unreasonable loss detected at step %d, skipping update\n", step);
             continue;
         }
         printf("Step %d, Loss: %f\n", step, base_loss);
