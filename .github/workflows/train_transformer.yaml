@@ -67,12 +67,24 @@ jobs:
         for ASSET in "${{ env.WEIGHTS_FILE }}" "${{ env.CSV_FILE }}" "training_loss.png" "transformer_flight.gif"; do
           if [ -f "$ASSET" ]; then
             echo "Uploading $ASSET..."
-            curl -X POST \
+            MIME_TYPE=$(file -b --mime-type "$ASSET")
+            UPLOAD_URL="${{ steps.create_release.outputs.upload_url }}"
+            UPLOAD_URL="${UPLOAD_URL%\{*}"  # Remove the {?name,label} suffix
+            
+            curl \
+              --fail \
+              -X POST \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Content-Type: $(file -b --mime-type $ASSET)" \
+              -H "Content-Type: $MIME_TYPE" \
               -H "Accept: application/vnd.github.v3+json" \
               --data-binary "@$ASSET" \
-              "${{ steps.create_release.outputs.upload_url }}?name=$(basename $ASSET)" || echo "Failed to upload $ASSET"
+              "${UPLOAD_URL}?name=$(basename "$ASSET")"
+            
+            if [ $? -eq 0 ]; then
+              echo "Successfully uploaded $ASSET"
+            else
+              echo "Failed to upload $ASSET"
+            fi
           else
             echo "Warning: $ASSET not found"
           fi
