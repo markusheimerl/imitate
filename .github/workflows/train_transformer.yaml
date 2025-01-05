@@ -58,12 +58,13 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        UPLOAD_URL=$(echo "${{ steps.release.outputs.upload_url }}" | cut -d'{' -f1)
         for f in *_weights.bin *_control_data.csv *_loss.png *_flight.gif; do
           [ -f "$f" ] && curl -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Content-Type: $(file -b --mime-type $f)" \
             -H "Accept: application/vnd.github.v3+json" \
             --data-binary "@$f" \
-            "${{ steps.release.outputs.upload_url%\{*}}?name=$f" \
+            "${UPLOAD_URL}?name=$f" \
             && echo "Uploaded $f" || echo "Failed: $f"
         done
