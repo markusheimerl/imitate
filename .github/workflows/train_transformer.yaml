@@ -51,14 +51,14 @@ jobs:
         plt.savefig("training_loss.png")
         '
 
+    - name: Set timestamp
+      run: echo "TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')" >> $GITHUB_ENV
+
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')
-        echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
       with:
         tag_name: release-${{ env.TIMESTAMP }}
         release_name: Training Results ${{ env.TIMESTAMP }}
@@ -70,6 +70,7 @@ jobs:
             - Trained model weights
             - Training loss visualization
             - Flight simulation animation
+        draft: false
         prerelease: false
 
     - name: Upload Assets
