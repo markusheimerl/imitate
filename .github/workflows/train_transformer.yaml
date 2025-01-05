@@ -23,7 +23,7 @@ jobs:
     - name: Build and generate data
       run: |
         make all
-        cd sim && make && ./sim 100 && cp *_control_data.csv .. && cd ..
+        cd sim && make && ./sim.out 100 && cp *_control_data.csv .. && cd ..
 
     - name: Train and evaluate
       run: |
