@@ -16,7 +16,7 @@ $(TRAIN_TARGET): train.c
 $(FLY_TARGET): fly.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-run:
+run: $(TRAIN_TARGET)
 	@# First, clean up any old data
 	rm -f *_control_data.csv
 	
