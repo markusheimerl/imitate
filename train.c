@@ -3,7 +3,6 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include <omp.h>
 #include <stdbool.h>
 
 #define CONDITION_FEATURES 4
