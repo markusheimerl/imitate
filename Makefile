@@ -16,7 +16,7 @@ $(TRAIN_TARGET): train.c
 $(FLY_TARGET): fly.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-run: $(TRAIN_TARGET)
+run: $(TRAIN_TARGET) $(FLY_TARGET)
 	cd sim && make log && ./sim.out 100 && cp *_control_data.csv .. && make clean && cd ..
 	./$(TRAIN_TARGET) `ls -t *_control_data.csv | head -1`
 	@python -c 'import matplotlib.pyplot as plt, pandas as pd, os; \
@@ -29,6 +29,7 @@ run: $(TRAIN_TARGET)
 	plt.title("Training Loss"); plt.xlabel("Step"); plt.ylabel("Loss"); \
 	plt.yscale("log"); plt.grid(True); plt.legend(); \
 	plt.savefig(f"{ts}_loss.png");'
+	./$(FLY_TARGET) `ls -t *_weights.bin | head -1`
 
 clean:
 	rm -f $(TRAIN_TARGET) $(FLY_TARGET) *_loss.csv *_flight.gif *_loss.png *_control_data.csv
