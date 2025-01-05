@@ -7,6 +7,7 @@
 #include <math.h>
 #include <time.h>
 #include <omp.h>
+#include <stdbool.h>
 
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10

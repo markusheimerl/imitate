@@ -1,6 +1,4 @@
 #include "transformer.h"
-#include <stdbool.h>
-#include <time.h>
 
 int main(int argc, char *argv[]) {
     if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) {
