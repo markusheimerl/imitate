@@ -17,29 +17,10 @@ jobs:
         sudo apt-get update && sudo apt-get install -y libomp-dev
         python -m pip install --upgrade pip matplotlib pandas
 
-    - name: Train
+    - name: Train and Fly
       run: |
         make all && make run
-        WEIGHTS=$(ls *_weights.bin)
-        ./fly.out $WEIGHTS || echo "Flight failed but continuing"
-        echo "WEIGHTS_FILE=$WEIGHTS" >> $GITHUB_ENV
-        echo "CSV_FILE=$(ls *_control_data.csv)" >> $GITHUB_ENV
-        echo "TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')" >> $GITHUB_ENV
-
-    - name: Plot loss
-      run: |
-        python -c '
-        import matplotlib.pyplot as plt, pandas as pd, os
-        f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]
-        ts = f.replace("_loss.csv", "")
-        df = pd.read_csv(f, names=["step", "loss"])
-        plt.figure(figsize=(10, 6))
-        plt.plot(df["step"], df["loss"], "b", alpha=0.5, label="Raw")
-        plt.plot(df["step"], df["loss"].rolling(10, center=True).mean(), "r", lw=2, label="Average")
-        plt.title("Training Loss"), plt.xlabel("Step"), plt.ylabel("Loss")
-        plt.yscale("log"), plt.grid(True), plt.legend()
-        plt.savefig(f"{ts}_loss.png")
-        '
+        ./fly.out $(ls *_weights.bin) || echo "Flight failed but continuing"
 
     - name: Create Release
       id: release
