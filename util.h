@@ -41,7 +41,7 @@ Dataset load_csv(const char* filename) {
     FILE* f = fopen(filename, "r");
     if (!f || !fgets(line, 1024, f)) { printf("File error\n"); exit(1); }
     
-    for (int i = 0; i < INPUT_FEATURES; i++) ds.mins[i]=INFINITY, ds.maxs[i]=-INFINITY;
+    for (int i = 0; i < INPUT_FEATURES; i++) ds.mins[i]=1e308, ds.maxs[i]=-1e308;
     
     while (fgets(line, 1024, f)) {
         if (ds.rows >= 1000) tmp = realloc(tmp, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
