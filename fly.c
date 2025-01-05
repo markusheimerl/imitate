@@ -130,7 +130,6 @@ int main(int argc, char *argv[]) {
             ge_add_frame(gif, frame_buffer, 6);
             t_render += DT_RENDER;
         }
-
         printf("Position: [%.3f, %.3f, %.3f]\nTarget: [%.3f, %.3f, %.3f]\nRotor speeds: [%.1f, %.1f, %.1f, %.1f]\n---\n",
                linear_position_W[0], linear_position_W[1], linear_position_W[2],
                linear_position_d_W[0], linear_position_d_W[1], linear_position_d_W[2],
