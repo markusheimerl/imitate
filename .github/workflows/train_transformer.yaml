@@ -56,10 +56,20 @@ jobs:
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')
+        echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
       with:
-        tag_name: weights-${{ github.sha }}
-        release_name: Model Weights ${{ github.sha }}
-        draft: false
+        tag_name: release-${{ env.TIMESTAMP }}
+        release_name: Training Results ${{ env.TIMESTAMP }}
+        body: |
+          Transformer Training Results
+          - Training completed: ${{ env.TIMESTAMP }}
+          - Commit: ${{ github.sha }}
+          - Contains:
+            - Trained model weights
+            - Training loss visualization
+            - Flight simulation animation
         prerelease: false
 
     - name: Upload Assets
