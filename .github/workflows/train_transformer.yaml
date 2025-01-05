@@ -58,7 +58,7 @@ jobs:
           Transformer Training Results
           - Training completed: ${{ env.TIMESTAMP }}
           - Commit: ${{ github.sha }}
-          - Contains: Trained weights, Loss visualization, Flight animation
+          - Contains: Trained weights, loss visualization, flight animation, simulation data
 
     - name: Upload Assets
       env:
