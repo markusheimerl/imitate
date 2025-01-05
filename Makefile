@@ -29,23 +29,15 @@ plot:
 	plt.savefig(f"{ts}_loss.png");'
 
 run: $(TRAIN_TARGET)
-	@# First, clean up any old data
-	rm -f *_control_data.csv
-
-	@# Build and run simulation
 	cd sim && \
-		make clean && \
 		make log && \
 		./sim.out 100 && \
 		cp *_control_data.csv .. && \
 		rm -f *_control_data.csv && \
 		cd ..
-
-	@# Train on the most recent data file
 	./$(TRAIN_TARGET) `ls -t *_control_data.csv | head -1`
-	
-	@# Generate loss plot
 	$(MAKE) plot
+	$(MAKE) clean
 
 clean:
 	rm -f $(TRAIN_TARGET) $(FLY_TARGET)
