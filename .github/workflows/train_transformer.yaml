@@ -43,14 +43,20 @@ jobs:
         # Read the loss data
         df = pd.read_csv("training_loss.csv", names=["step", "loss"])
 
+        # Calculate rolling average
+        window_size = 10
+        rolling_avg = df["loss"].rolling(window=window_size, center=True).mean()
+
         # Create the plot
         plt.figure(figsize=(10, 6))
-        plt.plot(df["step"], df["loss"])
+        plt.plot(df["step"], df["loss"], color="blue", alpha=0.5, label="Raw Loss")
+        plt.plot(df["step"], rolling_avg, color="red", linewidth=2, label="Rolling Average")
         plt.title("Training Loss Over Time")
         plt.xlabel("Step")
         plt.ylabel("Loss")
         plt.yscale("log")  # Use log scale for better visualization
         plt.grid(True)
+        plt.legend()
 
         # Save the plot
         plt.savefig("training_loss.png")
