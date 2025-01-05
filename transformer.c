@@ -253,14 +253,14 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
     free(batch_data); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     srand(time(NULL));
     Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
     const double ws = sqrt(2.0 / D_MODEL);
     
-    Tensor W_seq = {.data = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), .m = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double)), .v = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double)), .size = SEQUENCE_FEATURES * D_MODEL};
-    Tensor W_cond = {.data = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), .m = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double)), .v = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double)), .size = CONDITION_FEATURES * D_MODEL};
-    Tensor W_out = {.data = malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), .m = calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double)), .v = calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double)), .size = D_MODEL * SEQUENCE_FEATURES};
+    Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double)), calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double)), SEQUENCE_FEATURES * D_MODEL};
+    Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), calloc(CONDITION_FEATURES * D_MODEL, sizeof(double)), calloc(CONDITION_FEATURES * D_MODEL, sizeof(double)), CONDITION_FEATURES * D_MODEL};
+    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double)), calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double)), D_MODEL * SEQUENCE_FEATURES};
     
     Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS], W_ff1[N_LAYERS], W_ff2[N_LAYERS];
     for (int l = 0; l < N_LAYERS; l++) {
@@ -268,32 +268,37 @@ int main() {
         const int ff_size1 = D_MODEL * (D_MODEL * 4);
         const int ff_size2 = (D_MODEL * 4) * D_MODEL;
         
-        W_q[l] = (Tensor){.data = malloc(attn_size * sizeof(double)), .m = calloc(attn_size, sizeof(double)), .v = calloc(attn_size, sizeof(double)), .size = attn_size};
-        W_k[l] = (Tensor){.data = malloc(attn_size * sizeof(double)), .m = calloc(attn_size, sizeof(double)), .v = calloc(attn_size, sizeof(double)), .size = attn_size};
-        W_v[l] = (Tensor){.data = malloc(attn_size * sizeof(double)), .m = calloc(attn_size, sizeof(double)), .v = calloc(attn_size, sizeof(double)), .size = attn_size};
-        W_o[l] = (Tensor){.data = malloc(attn_size * sizeof(double)), .m = calloc(attn_size, sizeof(double)), .v = calloc(attn_size, sizeof(double)), .size = attn_size};
-        W_ff1[l] = (Tensor){.data = malloc(ff_size1 * sizeof(double)), .m = calloc(ff_size1, sizeof(double)), .v = calloc(ff_size1, sizeof(double)), .size = ff_size1};
-        W_ff2[l] = (Tensor){.data = malloc(ff_size2 * sizeof(double)), .m = calloc(ff_size2, sizeof(double)), .v = calloc(ff_size2, sizeof(double)), .size = ff_size2};
-        
-        for (int i = 0; i < attn_size; i++) W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
-        for (int i = 0; i < ff_size1; i++) W_ff1[l].data[i] = randn() * ws;
-        for (int i = 0; i < ff_size2; i++) W_ff2[l].data[i] = randn() * ws;
+        W_q[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
+        W_k[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
+        W_v[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
+        W_o[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
+        W_ff1[l] = (Tensor){malloc(ff_size1 * sizeof(double)), calloc(ff_size1, sizeof(double)), calloc(ff_size1, sizeof(double)), ff_size1};
+        W_ff2[l] = (Tensor){malloc(ff_size2 * sizeof(double)), calloc(ff_size2, sizeof(double)), calloc(ff_size2, sizeof(double)), ff_size2};
     }
-    
-    for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
-    for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
-    for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
-    
-    Tensor hidden = {.data = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), .m = NULL, .v = NULL, .size = BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor temp = {.data = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), .m = NULL, .v = NULL, .size = BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor output = {.data = malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), .m = NULL, .v = NULL, .size = BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
 
-    double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
-    double* q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double* k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double* v_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double* s_buf = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
-    double* mid_buf = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+    if (argc > 1 && load_weights(argv[1], &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out)) {
+        printf("Successfully loaded weights from %s\n", argv[1]);
+    } else {
+        printf("Initializing random weights\n");
+        for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
+        for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
+        for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
+        
+        for (int l = 0; l < N_LAYERS; l++) {
+            for (int i = 0; i < W_q[l].size; i++) {
+                W_q[l].data[i] = randn() * ws;
+                W_k[l].data[i] = randn() * ws;
+                W_v[l].data[i] = randn() * ws;
+                W_o[l].data[i] = randn() * ws;
+            }
+            for (int i = 0; i < W_ff1[l].size; i++) W_ff1[l].data[i] = randn() * ws;
+            for (int i = 0; i < W_ff2[l].size; i++) W_ff2[l].data[i] = randn() * ws;
+        }
+    }
+
+    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
+    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
+    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
     
     train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
     save_weights("weights.bin", &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
@@ -313,6 +318,5 @@ int main() {
         free(W_ff2[l].data); free(W_ff2[l].m); free(W_ff2[l].v);
     }
     
-    free(batch_data); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
     return 0;
 }
