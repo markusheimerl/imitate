@@ -66,7 +66,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
         for (int h = 0; h < N_HEAD; h++) {
             const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
             for (int i = 0; i < SEQ_LENGTH; i++) {
-                double max = -INFINITY, sum = 0.0;
+                double max = -1e9, sum = 0.0;
                 for (int j = 0; j <= i; j++) {
                     double dot = 0.0;
                     for (int d = 0; d < hd; d++) dot += q[(b * SEQ_LENGTH + i) * D_MODEL + h * hd + d] * k[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
@@ -78,7 +78,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
                     s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max);
                     sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
                 }
-                for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= sum;
+                for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
             }
         }
 
