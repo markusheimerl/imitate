@@ -96,7 +96,11 @@ int main(int argc, char *argv[]) {
     Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), 
                       create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
     uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
-    ge_GIF *gif = ge_new_gif("transformer_flight.gif", WIDTH, HEIGHT, 4, -1, 0);
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    char gif_name[32];
+    sprintf(gif_name, "%d-%d-%d_%d-%d-%d_flight.gif", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+    ge_GIF *gif = ge_new_gif(gif_name, WIDTH, HEIGHT, 4, -1, 0);
     transform_mesh(meshes[1], (double[3]){0.0, -0.5, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;

@@ -6,7 +6,7 @@ INCLUDES = -I./sim -I./sim/rasterizer
 TRAIN_TARGET = train.out
 FLY_TARGET = fly.out
 
-.PHONY: all clean run fly
+.PHONY: clean run
 
 all: $(TRAIN_TARGET) $(FLY_TARGET)
 
