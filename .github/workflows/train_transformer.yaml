@@ -21,13 +21,19 @@ jobs:
       run: |
         make run || echo "Something went wrong, moving on."
 
+    - name: Set Release Tag
+      id: tag
+      run: |
+        echo "RELEASE_TAG=release-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+        echo "TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)" >> $GITHUB_ENV
+
     - name: Create Release
       id: release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: release-${{ env.TIMESTAMP }}
+        tag_name: ${{ env.RELEASE_TAG }}
         release_name: Results ${{ env.TIMESTAMP }}
         body: |
           Training Results
