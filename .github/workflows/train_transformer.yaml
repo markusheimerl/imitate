@@ -1,15 +1,12 @@
 name: Train Transformer
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: write
 
 jobs:
   train:
     runs-on: ubuntu-24.04
-    
     steps:
     - uses: actions/checkout@v3
       with:
@@ -18,24 +15,25 @@ jobs:
     - name: Setup environment
       run: |
         sudo apt-get update && sudo apt-get install -y libomp-dev
+        python -m pip install --upgrade pip matplotlib pandas
 
     - name: Build and generate data
       run: |
         cd sim && make log && ./sim.out 100 && cp *_control_data.csv .. && cd ..
+        make all
 
     - name: Train and evaluate
       run: |
-        make all
         CSV_FILE=$(ls *_control_data.csv)
         ./train.out $CSV_FILE
         WEIGHTS_FILE=$(ls *_weights.bin)
-        ./fly.out $WEIGHTS_FILE || echo "Flight simulation failed but continuing workflow"
+        ./fly.out $WEIGHTS_FILE || echo "Flight simulation failed but continuing"
         echo "WEIGHTS_FILE=$WEIGHTS_FILE" >> $GITHUB_ENV
         echo "CSV_FILE=$CSV_FILE" >> $GITHUB_ENV
+        echo "TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')" >> $GITHUB_ENV
 
     - name: Plot training loss
       run: |
-        python -m pip install --upgrade pip matplotlib pandas
         python -c '
         import matplotlib.pyplot as plt, pandas as pd
         df = pd.read_csv("training_loss.csv", names=["step", "loss"])
@@ -43,16 +41,10 @@ jobs:
         plt.plot(df["step"], df["loss"], color="blue", alpha=0.5, label="Raw Loss")
         plt.plot(df["step"], df["loss"].rolling(window=10, center=True).mean(), color="red", linewidth=2, label="Rolling Average")
         plt.title("Training Loss Over Time")
-        plt.xlabel("Step")
-        plt.ylabel("Loss")
-        plt.yscale("log")
-        plt.grid(True)
-        plt.legend()
+        plt.xlabel("Step"), plt.ylabel("Loss")
+        plt.yscale("log"), plt.grid(True), plt.legend()
         plt.savefig("training_loss.png")
         '
-
-    - name: Set timestamp
-      run: echo "TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')" >> $GITHUB_ENV
 
     - name: Create Release
       id: create_release
@@ -66,21 +58,22 @@ jobs:
           Transformer Training Results
           - Training completed: ${{ env.TIMESTAMP }}
           - Commit: ${{ github.sha }}
-          - Contains:
-            - Trained model weights
-            - Training loss visualization
-            - Flight simulation animation
-        draft: false
-        prerelease: false
+          - Contains: Trained weights, Loss visualization, Flight animation
 
     - name: Upload Assets
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         for ASSET in "${{ env.WEIGHTS_FILE }}" "${{ env.CSV_FILE }}" "training_loss.png" "transformer_flight.gif"; do
-          curl -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: $(file -b --mime-type $ASSET)" \
-            --data-binary @"$ASSET" \
-            "${{ steps.create_release.outputs.upload_url }}?name=$(basename $ASSET)&label=$(basename $ASSET)"
+          if [ -f "$ASSET" ]; then
+            echo "Uploading $ASSET..."
+            curl -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Content-Type: $(file -b --mime-type $ASSET)" \
+              -H "Accept: application/vnd.github.v3+json" \
+              --data-binary "@$ASSET" \
+              "${{ steps.create_release.outputs.upload_url }}?name=$(basename $ASSET)" || echo "Failed to upload $ASSET"
+          else
+            echo "Warning: $ASSET not found"
+          fi
         done
