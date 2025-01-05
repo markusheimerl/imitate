@@ -1,4 +1,5 @@
 #include "transformer.h"
+#include <stdbool.h>
 #include <time.h>
 
 static void print_usage(const char* program_name) {
