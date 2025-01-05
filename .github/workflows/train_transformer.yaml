@@ -12,22 +12,21 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup environment
+    - name: Setup
       run: |
         sudo apt-get update && sudo apt-get install -y libomp-dev
         python -m pip install --upgrade pip matplotlib pandas
 
-    - name: Train and evaluate
+    - name: Train
       run: |
-        make all
-        make run
-        WEIGHTS_FILE=$(ls *_weights.bin)
-        ./fly.out $WEIGHTS_FILE || echo "Flight simulation failed but continuing"
-        echo "WEIGHTS_FILE=$WEIGHTS_FILE" >> $GITHUB_ENV
+        make all && make run
+        WEIGHTS=$(ls *_weights.bin)
+        ./fly.out $WEIGHTS || echo "Flight failed but continuing"
+        echo "WEIGHTS_FILE=$WEIGHTS" >> $GITHUB_ENV
         echo "CSV_FILE=$(ls *_control_data.csv)" >> $GITHUB_ENV
         echo "TIMESTAMP=$(date '+%Y-%m-%d_%H-%M')" >> $GITHUB_ENV
 
-    - name: Plot training loss
+    - name: Plot loss
       run: |
         python -c '
         import matplotlib.pyplot as plt, pandas as pd, os
@@ -43,45 +42,28 @@ jobs:
         '
 
     - name: Create Release
-      id: create_release
+      id: release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: release-${{ env.TIMESTAMP }}
-        release_name: Training Results ${{ env.TIMESTAMP }}
+        release_name: Results ${{ env.TIMESTAMP }}
         body: |
-          Transformer Training Results
-          - Training completed: ${{ env.TIMESTAMP }}
+          Training Results
+          - Time: ${{ env.TIMESTAMP }}
           - Commit: ${{ github.sha }}
-          - Contains: Trained weights, loss visualization, flight animation, simulation data
 
     - name: Upload Assets
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        for ASSET in "${{ env.WEIGHTS_FILE }}" "${{ env.CSV_FILE }}" "training_loss.png" "transformer_flight.gif"; do
-          if [ -f "$ASSET" ]; then
-            echo "Uploading $ASSET..."
-            MIME_TYPE=$(file -b --mime-type "$ASSET")
-            UPLOAD_URL="${{ steps.create_release.outputs.upload_url }}"
-            UPLOAD_URL="${UPLOAD_URL%\{*}"  # Remove the {?name,label} suffix
-            
-            curl \
-              --fail \
-              -X POST \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Content-Type: $MIME_TYPE" \
-              -H "Accept: application/vnd.github.v3+json" \
-              --data-binary "@$ASSET" \
-              "${UPLOAD_URL}?name=$(basename "$ASSET")"
-            
-            if [ $? -eq 0 ]; then
-              echo "Successfully uploaded $ASSET"
-            else
-              echo "Failed to upload $ASSET"
-            fi
-          else
-            echo "Warning: $ASSET not found"
-          fi
+        for f in *_weights.bin *_control_data.csv *_loss.png *_flight.gif; do
+          [ -f "$f" ] && curl -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: $(file -b --mime-type $f)" \
+            -H "Accept: application/vnd.github.v3+json" \
+            --data-binary "@$f" \
+            "${{ steps.release.outputs.upload_url%\{*}}?name=$f" \
+            && echo "Uploaded $f" || echo "Failed: $f"
         done
