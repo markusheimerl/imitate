@@ -16,7 +16,9 @@ $(TRAIN_TARGET): train.c
 $(FLY_TARGET): fly.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-plot:
+run: $(TRAIN_TARGET)
+	cd sim && make log && ./sim.out 100 && cp *_control_data.csv .. && make clean && cd ..
+	./$(TRAIN_TARGET) `ls -t *_control_data.csv | head -1`
 	@python -c 'import matplotlib.pyplot as plt, pandas as pd, os; \
 	f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]; \
 	ts = f.replace("_loss.csv", ""); \
@@ -28,19 +30,6 @@ plot:
 	plt.yscale("log"); plt.grid(True); plt.legend(); \
 	plt.savefig(f"{ts}_loss.png");'
 
-run: $(TRAIN_TARGET)
-	cd sim && \
-		make log && \
-		./sim.out 100 && \
-		cp *_control_data.csv .. && \
-		rm -f *_control_data.csv && \
-		cd ..
-	./$(TRAIN_TARGET) `ls -t *_control_data.csv | head -1`
-	$(MAKE) plot
-	$(MAKE) clean
-
 clean:
-	rm -f $(TRAIN_TARGET) $(FLY_TARGET)
-	rm -f *_loss.csv *_flight.gif *_loss.png
-	rm -f *_control_data.csv
+	rm -f $(TRAIN_TARGET) $(FLY_TARGET) *_loss.csv *_flight.gif *_loss.png *_control_data.csv
 	cd sim && make clean
