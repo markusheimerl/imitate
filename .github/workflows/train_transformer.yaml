@@ -30,15 +30,16 @@ jobs:
     - name: Plot training loss
       run: |
         python -c '
-        import matplotlib.pyplot as plt, pandas as pd
-        df = pd.read_csv("training_loss.csv", names=["step", "loss"])
+        import matplotlib.pyplot as plt, pandas as pd, os
+        f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]
+        ts = f.replace("_loss.csv", "")
+        df = pd.read_csv(f, names=["step", "loss"])
         plt.figure(figsize=(10, 6))
-        plt.plot(df["step"], df["loss"], color="blue", alpha=0.5, label="Raw Loss")
-        plt.plot(df["step"], df["loss"].rolling(window=10, center=True).mean(), color="red", linewidth=2, label="Rolling Average")
-        plt.title("Training Loss Over Time")
-        plt.xlabel("Step"), plt.ylabel("Loss")
+        plt.plot(df["step"], df["loss"], "b", alpha=0.5, label="Raw")
+        plt.plot(df["step"], df["loss"].rolling(10, center=True).mean(), "r", lw=2, label="Average")
+        plt.title("Training Loss"), plt.xlabel("Step"), plt.ylabel("Loss")
         plt.yscale("log"), plt.grid(True), plt.legend()
-        plt.savefig("training_loss.png")
+        plt.savefig(f"{ts}_loss.png")
         '
 
     - name: Create Release
