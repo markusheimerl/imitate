@@ -10,13 +10,13 @@
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define BATCH_SIZE 2
-#define SEQ_LENGTH 4
-#define D_MODEL 4
+#define SEQ_LENGTH 2
+#define D_MODEL 2
 #define N_HEAD 2
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
-#define TRAINING_STEPS 100000
+#define TRAINING_STEPS 20000
 
 typedef struct { double *data; int rows, cols; } Dataset;
 typedef struct { double *data; double *m, *v; int size; } Tensor;
@@ -257,28 +257,42 @@ void update_weights(Tensor* w, double base_loss, int step, double lr, const doub
     const double beta2 = 0.999;
     const double eps = 1e-8;
     const double weight_decay = 0.001;
+    const double deltas[4] = {EPSILON, -EPSILON, EPSILON/2, -EPSILON/2};
 
     #pragma omp parallel for
     for (int i = 0; i < w->size; i++) {
-        w->data[i] += EPSILON;
-        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-        double new_loss = compute_loss(out, batch_data);
-        w->data[i] -= EPSILON;
+        double grad_sum = 0.0;
+        double orig_val = w->data[i];
         
-        double grad = (new_loss - base_loss) / EPSILON;
-        grad = fmax(-10.0, fmin(10.0, grad));
+        for (int p = 0; p < 4; p++) {
+            w->data[i] = orig_val + deltas[p];
+            forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
+                        q_buf, k_buf, v_buf, s_buf, mid_buf);
+            double new_loss = compute_loss(out, batch_data);
+            grad_sum += (new_loss - base_loss) / deltas[p];
+        }
+        w->data[i] = orig_val;
+        
+        double grad = grad_sum / 4.0;
+        grad = fmax(-1.0, fmin(1.0, grad));
+
         w->m[i] = beta1 * w->m[i] + (1 - beta1) * grad;
         w->v[i] = beta2 * w->v[i] + (1 - beta2) * grad * grad;
+        
         double m_hat = w->m[i] / (1.0 - pow(beta1, step + 1));
         double v_hat = w->v[i] / (1.0 - pow(beta2, step + 1));
-        w->data[i] = w->data[i] * (1.0 - lr * weight_decay) - lr * m_hat / (sqrt(v_hat) + eps);
+        
+        double noise = 0.1 * randn() * sqrt(lr) / (step + 1);
+        w->data[i] = w->data[i] * (1.0 - lr * weight_decay) - 
+                     (lr * m_hat / (sqrt(v_hat) + eps) + noise);
     }
 }
 
 void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                       Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
                       Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
-    const double lr = LEARNING_RATE;
+    double lr = LEARNING_RATE;
+    double prev_loss = 1e9;
 
     time_t t = time(NULL);
     struct tm *tm = localtime(&t);
@@ -286,7 +300,6 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
     sprintf(loss_name, "%d-%d-%d_%d-%d-%d_loss.csv", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
     FILE* f = fopen(loss_name, "w");
 
-    // Allocate buffers
     double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
     double* q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double* k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -305,25 +318,37 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                         ds->data[(seq_start + s) * INPUT_FEATURES + f];
         }
 
-        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
+                    q_buf, k_buf, v_buf, s_buf, mid_buf);
         double base_loss = compute_loss(out, batch_data);
         
-        printf("Step %d, Loss: %f\n", step, base_loss);
+        if (base_loss > prev_loss * 1.1) {
+            lr *= 0.95;
+        } else if (base_loss < prev_loss * 0.95) {
+            lr *= 1.05;
+        }
+        lr = fmax(1e-6, fmin(1e-3, lr));
+        prev_loss = base_loss;
+        
+        printf("Step %d, Loss: %f, LR: %e\n", step, base_loss, lr);
         if (f) fprintf(f, "%d,%f\n", step, base_loss);
 
-        // Update per-layer weights
         for (int l = 0; l < N_LAYERS; l++) {
             Tensor* layer_weights[] = {&wq[l], &wk[l], &wv[l], &wo[l], &wf1[l], &wf2[l]};
             for (int w = 0; w < 6; w++) {
-                update_weights(layer_weights[w], base_loss, step, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+                update_weights(layer_weights[w], base_loss, step, lr, batch_data, 
+                             out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
+                             q_buf, k_buf, v_buf, s_buf, mid_buf);
             }
         }
         
-        // Update global weights
         for (int w = 0; w < 3; w++) {
-            update_weights(global_weights[w], base_loss, step, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+            update_weights(global_weights[w], base_loss, step, lr, batch_data, 
+                         out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
+                         q_buf, k_buf, v_buf, s_buf, mid_buf);
         }
     }
+    
     free(batch_data); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); fclose(f);
 }
 

@@ -14,13 +14,13 @@
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define BATCH_SIZE 2
-#define SEQ_LENGTH 4
-#define D_MODEL 4
+#define SEQ_LENGTH 2
+#define D_MODEL 2
 #define N_HEAD 2
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
-#define TRAINING_STEPS 100000
+#define TRAINING_STEPS 10000
 
 typedef struct { double *data; int rows, cols; } Dataset;
 typedef struct { double *data; double *m, *v; int size; } Tensor;
@@ -445,7 +445,10 @@ int main(int argc, char *argv[]) {
                            &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out,
                            q_buf, k_buf, v_buf, s_buf, mid_buf);
                 int last_seq = (SEQ_LENGTH - 1) * SEQUENCE_FEATURES;
-                for (int i = 0; i < 4; i++) omega_next[i] = output.data[last_seq + i + 6];
+                for (int i = 0; i < 4; i++){
+                    double pred = output.data[last_seq + i + 6];
+                    omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, pred));
+                }
             }
             update_rotor_speeds();
             t_control += DT_CONTROL;
