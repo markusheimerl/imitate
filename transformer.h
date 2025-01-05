@@ -193,6 +193,11 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                       Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
                       Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
     const double lr = LEARNING_RATE;
+
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    char loss_name[32];
+    sprintf(loss_name, "%d-%d-%d_%d-%d-%d_loss.csv", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
     
     // Allocate buffers
     double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
@@ -222,7 +227,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
             continue;
         }
         printf("Step %d, Loss: %f\n", step, base_loss);
-        save_loss("training_loss.csv", base_loss, step);
+        save_loss(loss_name, base_loss, step);
 
         // Update per-layer weights
         for (int l = 0; l < N_LAYERS; l++) {

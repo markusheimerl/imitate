@@ -34,6 +34,6 @@ run:
 
 clean:
 	rm -f $(TRAIN_TARGET) $(FLY_TARGET)
-	rm -f *_training_loss.csv *_transformer_flight.gif
+	rm -f *_loss.csv *_flight.gif
 	rm -f *_control_data.csv
 	cd sim && make clean
