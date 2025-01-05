@@ -17,10 +17,9 @@ jobs:
         sudo apt-get update && sudo apt-get install -y libomp-dev
         python -m pip install --upgrade pip matplotlib pandas
 
-    - name: Train and Fly
+    - name: Build, Train and Fly
       run: |
-        make all && make run
-        ./fly.out $(ls *_weights.bin) || echo "Flight failed but continuing"
+        make run
 
     - name: Create Release
       id: release
