@@ -1,8 +1,53 @@
 #include "transformer.h"
+#include <time.h>
+
+static void print_usage(const char* program_name) {
+    printf("Usage: %s <training_data.csv> [weights.bin]\n", program_name);
+    printf("  training_data.csv: Required. CSV file containing training data\n");
+    printf("  weights.bin: Optional. Pre-trained weights to load\n");
+}
+
+static bool has_extension(const char* filename, const char* ext) {
+    const char* dot = strrchr(filename, '.');
+    return dot && strcmp(dot, ext) == 0;
+}
 
 int main(int argc, char *argv[]) {
+    if (argc < 2 || argc > 3) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    char *csv_file = NULL;
+    char *weights_file = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (has_extension(argv[i], ".csv")) {
+            csv_file = argv[i];
+        } else if (has_extension(argv[i], ".bin")) {
+            weights_file = argv[i];
+        } else {
+            printf("Error: Unrecognized file type for '%s'\n", argv[i]);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (!csv_file) {
+        printf("Error: No training data (CSV file) specified\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    printf("Training data: %s\n", csv_file);
+    if (weights_file) {
+        printf("Loading weights from: %s\n", weights_file);
+    } else {
+        printf("Initializing random weights\n");
+    }
+
     srand(time(NULL));
-    Dataset ds = load_csv("2024-12-29_6-25-1_control_data.csv");
+    Dataset ds = load_csv(csv_file);
     const double ws = sqrt(2.0 / D_MODEL);
     
     Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double)), calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double)), SEQUENCE_FEATURES * D_MODEL};
@@ -23,10 +68,12 @@ int main(int argc, char *argv[]) {
         W_ff2[l] = (Tensor){malloc(ff_size2 * sizeof(double)), calloc(ff_size2, sizeof(double)), calloc(ff_size2, sizeof(double)), ff_size2};
     }
 
-    if (argc > 1 && load_weights(argv[1], &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out)) {
-        printf("Successfully loaded weights from %s\n", argv[1]);
+    if (weights_file && load_weights(weights_file, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out)) {
+        printf("Successfully loaded weights\n");
     } else {
-        printf("Initializing random weights\n");
+        if (weights_file) {
+            printf("Failed to load weights, initializing randomly\n");
+        }
         for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
         for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
         for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
@@ -48,7 +95,15 @@ int main(int argc, char *argv[]) {
     Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
     
     train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
-    save_weights("weights.bin", &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
+    
+    // Generate timestamp filename
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char filename[100];
+    sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    
+    save_weights(filename, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
+    printf("Saved weights to: %s\n", filename);
 
     free(ds.data); free(ds.mins); free(ds.maxs);
     free(hidden.data); free(temp.data); free(output.data);

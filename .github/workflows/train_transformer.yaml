@@ -15,54 +15,38 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
-
-    - name: Install dependencies
+    - name: Setup environment
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libomp-dev
-        python -m pip install --upgrade pip
-        pip install matplotlib pandas
+        sudo apt-get update && sudo apt-get install -y libomp-dev
+        python -m pip install --upgrade pip matplotlib pandas
 
-    - name: Decompress training data
-      run: xz -d 2024-12-29_6-25-1_control_data.csv.xz
+    - name: Build and generate data
+      run: |
+        make all
+        cd sim && make && ./sim 100 && cp *_control_data.csv .. && cd ..
 
-    - name: Build transformer
-      run: make
-
-    - name: Train transformer
-      run: ./transformer.out
+    - name: Train and evaluate
+      run: |
+        ./train.out
+        WEIGHTS_FILE=$(ls *_weights.bin)
+        ./fly.out $WEIGHTS_FILE
+        echo "WEIGHTS_FILE=$WEIGHTS_FILE" >> $GITHUB_ENV
 
     - name: Plot training loss
       run: |
         python -c '
-        import matplotlib.pyplot as plt
-        import pandas as pd
-
-        # Read the loss data
+        import matplotlib.pyplot as plt, pandas as pd
         df = pd.read_csv("training_loss.csv", names=["step", "loss"])
-
-        # Calculate rolling average
-        window_size = 10
-        rolling_avg = df["loss"].rolling(window=window_size, center=True).mean()
-
-        # Create the plot
         plt.figure(figsize=(10, 6))
         plt.plot(df["step"], df["loss"], color="blue", alpha=0.5, label="Raw Loss")
-        plt.plot(df["step"], rolling_avg, color="red", linewidth=2, label="Rolling Average")
+        plt.plot(df["step"], df["loss"].rolling(window=10, center=True).mean(), color="red", linewidth=2, label="Rolling Average")
         plt.title("Training Loss Over Time")
         plt.xlabel("Step")
         plt.ylabel("Loss")
-        plt.yscale("log")  # Use log scale for better visualization
+        plt.yscale("log")
         plt.grid(True)
         plt.legend()
-
-        # Save the plot
         plt.savefig("training_loss.png")
-        plt.close()
         '
 
     - name: Create Release
@@ -76,22 +60,14 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Upload Weights
-      uses: actions/upload-release-asset@v1
+    - name: Upload Assets
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./weights.bin
-        asset_name: weights.bin
-        asset_content_type: application/octet-stream
-
-    - name: Upload Loss Plot
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./training_loss.png
-        asset_name: training_loss.png
-        asset_content_type: image/png
+      run: |
+        for ASSET in "${{ env.WEIGHTS_FILE }}" "training_loss.png" "transformer_flight.gif"; do
+          curl -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: $(file -b --mime-type $ASSET)" \
+            --data-binary @"$ASSET" \
+            "${{ steps.create_release.outputs.upload_url }}?name=$(basename $ASSET)&label=$(basename $ASSET)"
+        done
