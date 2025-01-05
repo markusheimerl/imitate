@@ -217,7 +217,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         double base_loss = compute_loss(out, batch_data);
         
-        if (baseloss < 0.0 || baseloss > 1e6) {
+        if (base_loss < 0.0 || base_loss > 1e6) {
             printf("Unreasonable loss detected at step %d, skipping update\n", step);
             continue;
         }
