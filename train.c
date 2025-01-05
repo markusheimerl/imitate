@@ -2,49 +2,17 @@
 #include <stdbool.h>
 #include <time.h>
 
-static void print_usage(const char* program_name) {
-    printf("Usage: %s <training_data.csv> [weights.bin]\n", program_name);
-    printf("  training_data.csv: Required. CSV file containing training data\n");
-    printf("  weights.bin: Optional. Pre-trained weights to load\n");
-}
-
-static bool has_extension(const char* filename, const char* ext) {
-    const char* dot = strrchr(filename, '.');
-    return dot && strcmp(dot, ext) == 0;
-}
-
 int main(int argc, char *argv[]) {
-    if (argc < 2 || argc > 3) {
-        print_usage(argv[0]);
+    if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) {
+        printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]);
         return 1;
     }
 
-    char *csv_file = NULL;
-    char *weights_file = NULL;
-
-    for (int i = 1; i < argc; i++) {
-        if (has_extension(argv[i], ".csv")) {
-            csv_file = argv[i];
-        } else if (has_extension(argv[i], ".bin")) {
-            weights_file = argv[i];
-        } else {
-            printf("Error: Unrecognized file type for '%s'\n", argv[i]);
-            print_usage(argv[0]);
-            return 1;
-        }
-    }
-
-    if (!csv_file) {
-        printf("Error: No training data (CSV file) specified\n");
-        print_usage(argv[0]);
+    char *csv_file = argv[1];
+    char *weights_file = argc > 2 ? (strstr(argv[2], ".bin") ? argv[2] : NULL) : NULL;
+    if (argc > 2 && !weights_file) {
+        printf("Error: Invalid file '%s'\n", argv[2]);
         return 1;
-    }
-
-    printf("Training data: %s\n", csv_file);
-    if (weights_file) {
-        printf("Loading weights from: %s\n", weights_file);
-    } else {
-        printf("Initializing random weights\n");
     }
 
     srand(time(NULL));
@@ -72,9 +40,7 @@ int main(int argc, char *argv[]) {
     if (weights_file && load_weights(weights_file, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out)) {
         printf("Successfully loaded weights\n");
     } else {
-        if (weights_file) {
-            printf("Failed to load weights, initializing randomly\n");
-        }
+        if (weights_file) printf("Failed to load weights, initializing randomly\n");
         for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
         for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
         for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
@@ -97,7 +63,6 @@ int main(int argc, char *argv[]) {
     
     train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
     
-    // Generate timestamp filename
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
     char filename[100];
