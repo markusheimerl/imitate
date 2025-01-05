@@ -17,8 +17,7 @@ $(FLY_TARGET): fly.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
 plot:
-	@python -c ' \
-	import matplotlib.pyplot as plt, pandas as pd, os; \
+	@python -c 'import matplotlib.pyplot as plt, pandas as pd, os; \
 	f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]; \
 	ts = f.replace("_loss.csv", ""); \
 	df = pd.read_csv(f, names=["step", "loss"]); \
@@ -27,8 +26,7 @@ plot:
 	plt.plot(df["step"], df["loss"].rolling(10, center=True).mean(), "r", lw=2, label="Average"); \
 	plt.title("Training Loss"); plt.xlabel("Step"); plt.ylabel("Loss"); \
 	plt.yscale("log"); plt.grid(True); plt.legend(); \
-	plt.savefig(f"{ts}_loss.png"); \
-	'
+	plt.savefig(f"{ts}_loss.png");'
 
 run: $(TRAIN_TARGET)
 	@# First, clean up any old data
