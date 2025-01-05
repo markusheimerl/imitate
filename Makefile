@@ -22,4 +22,4 @@ fly: $(FLY_TARGET)
 	./$(FLY_TARGET) weights.bin
 
 clean:
-	rm -f $(TARGET) $(FLY_TARGET) training_loss.csv
+	rm -f $(TARGET) $(FLY_TARGET) training_loss.csv transformer_flight.gif
