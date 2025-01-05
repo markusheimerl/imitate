@@ -16,7 +16,7 @@
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
-#define TRAINING_STEPS 10000
+#define TRAINING_STEPS 100000
 
 typedef struct { double *data; int rows, cols; } Dataset;
 typedef struct { double *data; double *m, *v; int size; } Tensor;
@@ -323,23 +323,7 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         for (int w = 0; w < 3; w++) {
             update_weights(global_weights[w], base_loss, step, lr, batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         }
-
-        // Print predictions periodically
-        if (step > 0 && step % 100 == 0) {
-            printf("\nPredictions at step %d:\n", step);
-            for (int s = 0; s < 5; s++) {
-                printf("Step %d: ", s);
-                for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                    double pred = out->data[s * SEQUENCE_FEATURES + f];
-                    double actual = batch_data[(s + 1) * INPUT_FEATURES + f + CONDITION_FEATURES];
-                    printf("F%d(P:%.2f,A:%.2f) ", f, pred, actual);
-                }
-                printf("\n");
-            }
-            printf("\n");
-        }
     }
-    
     free(batch_data); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); fclose(f);
 }
 
