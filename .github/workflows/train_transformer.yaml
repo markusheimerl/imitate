@@ -1,6 +1,13 @@
 name: Train Transformer
 on:
   workflow_dispatch:
+    inputs:
+      training_steps:
+        description: 'Number of training steps'
+        required: true
+        default: '10000'
+        type: string
+
 permissions:
   contents: write
 
@@ -16,6 +23,10 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y libomp-dev
         python -m pip install --upgrade pip matplotlib pandas
+
+    - name: Update Training Steps
+      run: |
+        sed -i "s/#define TRAINING_STEPS [0-9]*/#define TRAINING_STEPS ${{ github.event.inputs.training_steps }}/" train.c
 
     - name: Build, Train and Fly
       run: |
@@ -39,6 +50,7 @@ jobs:
           Training Results
           - Time: ${{ env.TIMESTAMP }}
           - Commit: ${{ github.sha }}
+          - Training Steps: ${{ github.event.inputs.training_steps }}
 
     - name: Upload Assets
       env:
