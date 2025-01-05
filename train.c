@@ -14,8 +14,8 @@
 #define D_MODEL 4
 #define N_HEAD 2
 #define N_LAYERS 2
-#define EPSILON 1e-6
-#define LEARNING_RATE 0.0001
+#define EPSILON 1e-4
+#define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 10000
 
 typedef struct { double *data; int rows, cols; } Dataset;
@@ -256,7 +256,7 @@ void update_weights(Tensor* w, double base_loss, int step, double lr, const doub
     const double beta1 = 0.9;
     const double beta2 = 0.999;
     const double eps = 1e-8;
-    const double weight_decay = 0.01;
+    const double weight_decay = 0.001;
 
     #pragma omp parallel for
     for (int i = 0; i < w->size; i++) {
