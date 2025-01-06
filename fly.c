@@ -199,6 +199,8 @@ void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor*
 int main(int argc, char *argv[]) {
     if (argc != 2) { printf("Usage: %s <weights_file>\n", argv[0]); return 1; }
 
+    srand(time(NULL));
+
     // Initialize transformer weights
     Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), NULL, NULL, SEQUENCE_FEATURES * D_MODEL};
     Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), NULL, NULL, CONDITION_FEATURES * D_MODEL};
@@ -243,25 +245,40 @@ int main(int argc, char *argv[]) {
 
     // Set initial target position and orientation
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
-    linear_position_d_W[0] = 2.0; linear_position_d_W[1] = 2.0; linear_position_d_W[2] = 2.0; yaw_d = M_PI / 4;
+    for (int i = 0; i < 3; i++) linear_position_d_W[i] = (double)rand() / RAND_MAX * 10 - (i != 1 ? 5 : 0);
+    yaw_d = (double)rand() / RAND_MAX * 2 * M_PI;
+
+    // Initialize stable hover
+    for (int i = 0; i < 4; i++) {
+        omega[i] = OMEGA_STABLE;
+        omega_next[i] = OMEGA_STABLE;
+    }
 
     // Main simulation loop
     int history_len = 0;
     double history[SEQ_LENGTH][INPUT_FEATURES] = {0};
+    int target_count = 0;
 
-    while (1) {
+    while (target_count < 50) {
         // Check for stability and target reach
         bool stable = true, at_target = true;
         
         for (int i = 0; i < 3; i++) {
             if (fabs(angular_velocity_B[i]) > 0.005) stable = false;
             if (fabs(linear_position_W[i] - linear_position_d_W[i]) > 0.1) at_target = false;
-            if (fabs(linear_position_W[i]) > 1000.0 || fabs(linear_velocity_W[i]) > 100.0 || fabs(angular_velocity_B[i]) > 100.0) {
+            if (fabs(linear_position_W[i]) > 10.0 || fabs(linear_velocity_W[i]) > 100.0 || fabs(angular_velocity_B[i]) > 100.0) {
                 printf("Simulation diverged.\n"); return 1;
             }
         }
         
-        if (stable && at_target) break;
+        if (stable && at_target) {
+            // Set new random target
+            for (int i = 0; i < 3; i++) linear_position_d_W[i] = (double)rand() / RAND_MAX * 10 - (i != 1 ? 5 : 0);
+            yaw_d = (double)rand() / RAND_MAX * 2 * M_PI;
+            target_count++;
+            printf("New target %d: [%.3f, %.3f, %.3f], yaw: %.3f\n", target_count, 
+                   linear_position_d_W[0], linear_position_d_W[1], linear_position_d_W[2], yaw_d);
+        }
 
         // Physics update
         update_drone_physics(DT_PHYSICS);
