@@ -80,10 +80,10 @@ int load_weights(const char* filename, Tensor* ws, Tensor* wc,
     return read == expected;
 }
 
+// Given input X of shape [batch_size, seq_len, d_model]
+// RMSNorm(X)_b,s,d = X_b,s,d / sqrt(1/D * sum_i(X_b,s,i^2) + eps)
+// where b=batch index, s=sequence index, d=dimension index
 void rmsnorm(Tensor *out, const Tensor *in) {
-    // Given input X of shape [batch_size, seq_len, d_model]
-    // RMSNorm(X)_b,s,d = X_b,s,d / sqrt(1/D * sum_i(X_b,s,i^2) + eps)
-    // where b=batch index, s=sequence index, d=dimension index
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
@@ -95,25 +95,27 @@ void rmsnorm(Tensor *out, const Tensor *in) {
     }
 }
 
+// Given input X of shape [batch_size, seq_len, d_model]
+// For each element in batch and sequence:
+// 1. Linear: U = X*W1 where X:[1,d_model], W1:[d_model,4*d_model] -> U:[1,4*d_model]
+// 2. GELU (elementwise): G(U) = 0.5 * U * (1 + tanh(sqrt(2/pi) * (U + 0.044715 * U^3)))
+// 3. Linear: Y = G(U)*W2 where G(U):[1,4*d_model], W2:[4*d_model,d_model] -> Y:[1,d_model]
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
-    const double sqrt_2_pi = sqrt(2.0/M_PI);
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
-        double* m = mid + b * (D_MODEL * 4);
+        double* u = mid + b * (D_MODEL * 4);
         
-        for (int h = 0; h < D_MODEL * 4; h++) {
-            double sum = 0.0;
-            for (int d = 0; d < D_MODEL; d++) sum += x[d] * w1->data[h * D_MODEL + d];
-            double t = sum + 0.044715 * sum * sum * sum;
-            m[h] = 0.5 * sum * (1.0 + tanh(sqrt_2_pi * t));
+        for (int i = 0; i < D_MODEL * 4; i++) {
+            u[i] = 0.0;
+            for (int j = 0; j < D_MODEL; j++) u[i] += x[j] * w1->data[i * D_MODEL + j];
+            u[i] = 0.5 * u[i] * (1.0 + tanh(sqrt(2.0/M_PI) * u[i] + 0.044715 * u[i] * u[i] * u[i]));
         }
         
-        for (int d = 0; d < D_MODEL; d++) {
-            double sum = 0.0;
-            for (int h = 0; h < D_MODEL * 4; h++) sum += m[h] * w2->data[d * (D_MODEL * 4) + h];
-            y[d] = sum;
+        for (int i = 0; i < D_MODEL; i++) {
+            y[i] = 0.0;
+            for (int j = 0; j < D_MODEL * 4; j++) y[i] += u[j] * w2->data[i * (D_MODEL * 4) + j];
         }
     }
 }
