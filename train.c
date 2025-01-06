@@ -42,20 +42,19 @@ void save_weights(const char* filename, const Tensor* ws, const Tensor* wc,
                  const Tensor* wq, const Tensor* wk, const Tensor* wv, const Tensor* wo,
                  const Tensor* wf1, const Tensor* wf2, const Tensor* wout) {
     FILE* f = fopen(filename, "wb");
-    if (f) {
-        fwrite(ws->data, sizeof(double), ws->size, f);
-        fwrite(wc->data, sizeof(double), wc->size, f);
-        for (int l = 0; l < N_LAYERS; l++) {
-            fwrite(wq[l].data, sizeof(double), wq[l].size, f);
-            fwrite(wk[l].data, sizeof(double), wk[l].size, f);
-            fwrite(wv[l].data, sizeof(double), wv[l].size, f);
-            fwrite(wo[l].data, sizeof(double), wo[l].size, f);
-            fwrite(wf1[l].data, sizeof(double), wf1[l].size, f);
-            fwrite(wf2[l].data, sizeof(double), wf2[l].size, f);
-        }
-        fwrite(wout->data, sizeof(double), wout->size, f);
-        fclose(f);
-    }
+    if (!f) return;
+    
+    fwrite(ws->data, sizeof(double), ws->size, f);
+    fwrite(wc->data, sizeof(double), wc->size, f);
+    for (int l = 0; l < N_LAYERS; l++)
+        fwrite(wq[l].data, sizeof(double), wq[l].size, f),
+        fwrite(wk[l].data, sizeof(double), wk[l].size, f),
+        fwrite(wv[l].data, sizeof(double), wv[l].size, f),
+        fwrite(wo[l].data, sizeof(double), wo[l].size, f),
+        fwrite(wf1[l].data, sizeof(double), wf1[l].size, f),
+        fwrite(wf2[l].data, sizeof(double), wf2[l].size, f);
+    fwrite(wout->data, sizeof(double), wout->size, f);
+    fclose(f);
 }
 
 int load_weights(const char* filename, Tensor* ws, Tensor* wc,
