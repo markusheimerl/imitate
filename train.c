@@ -120,6 +120,14 @@ void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *
     }
 }
 
+// Given input X of shape [batch_size, seq_len, d_model]
+// 1. QKV projection for each head h:
+//    Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
+// 2. Scaled dot-product attention with ALiBi bias per head:
+//    score = (Q_h * K_h^T)/sqrt(d_head) - ALiBi_slope_h * distance_matrix
+//    A_h = softmax(score) * V_h  where softmax is causal (upper triangle masked)
+// 3. Concatenate heads and project:
+//    MultiHead(X) = concat(A_1,...,A_h) * Wo
 void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const Tensor *wk, 
                         const Tensor *wv, const Tensor *wo,
                         double *q, double *k, double *v, double *s) {
@@ -130,23 +138,18 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
-        for (int h = 0; h < N_HEAD; h++) {
+        for (int h = 0; h < N_HEAD; h++)
             for (int d = 0; d < hd; d++) {
                 double sq = 0.0, sk = 0.0, sv = 0.0;
                 const int w_idx = (h * hd + d) * D_MODEL;
-                for (int i = 0; i < D_MODEL; i++) {
-                    sq += x[i] * wq->data[w_idx + i];
-                    sk += x[i] * wk->data[w_idx + i];
-                    sv += x[i] * wv->data[w_idx + i];
-                }
+                for (int i = 0; i < D_MODEL; i++) sq += x[i] * wq->data[w_idx + i], sk += x[i] * wk->data[w_idx + i], sv += x[i] * wv->data[w_idx + i];
                 const int qkv_idx = b * D_MODEL + h * hd + d;
-                q[qkv_idx] = sq; k[qkv_idx] = sk; v[qkv_idx] = sv;
+                q[qkv_idx] = sq, k[qkv_idx] = sk, v[qkv_idx] = sv;
             }
-        }
     }
 
     // Attention with alibi mask
-    #pragma omp parallel for
+    #pragma omp parallel for collapse(2)
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int h = 0; h < N_HEAD; h++) {
             const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
@@ -158,17 +161,13 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
                     s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = dot * scale - slope * (i - j);
                     max = fmax(max, s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j]);
                 }
-                
-                for (int j = 0; j <= i; j++) {
-                    s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max);
-                    sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
-                }
+                for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max), sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
                 for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
             }
         }
 
     // Output projection
-    #pragma omp parallel for
+    #pragma omp parallel for collapse(2)
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double tmp[D_MODEL] = {0};
@@ -178,7 +177,6 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
                     for (int j = 0; j <= t; j++) sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * v[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
                     tmp[h * hd + d] = sum;
                 }
-            
             for (int d = 0; d < D_MODEL; d++) {
                 double sum = 0.0;
                 for (int i = 0; i < D_MODEL; i++) sum += tmp[i] * wo->data[d * D_MODEL + i];
