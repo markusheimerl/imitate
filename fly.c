@@ -248,7 +248,6 @@ int main(int argc, char *argv[]) {
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     int history_len = 0, target_count = 0;
     double history[SEQ_LENGTH][INPUT_FEATURES] = {0};
-    for (int i = 0; i < 4; i++) omega[i] = omega_next[i] = OMEGA_STABLE;
 
     while (target_count < 2) {
         if (history_len == SEQ_LENGTH) {
@@ -273,7 +272,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (VEC3_MAG2(linear_position_W) > 1000.0*1000.0 || VEC3_MAG2(linear_velocity_W) > 100.0*100.0 || VEC3_MAG2(angular_velocity_B) > 100.0*100.0) {
-            printf("Simulation diverged.\n"); return 1;
+            printf("\nSimulation diverged.\n"); return 1;
         }
 
         update_drone_physics(DT_PHYSICS);
