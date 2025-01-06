@@ -81,14 +81,16 @@ int load_weights(const char* filename, Tensor* ws, Tensor* wc,
 }
 
 void rmsnorm(Tensor *out, const Tensor *in) {
-    const double inv_d = 1.0 / D_MODEL;
+    // Given input X of shape [batch_size, seq_len, d_model]
+    // RMSNorm(X)_b,s,d = X_b,s,d / sqrt(1/D * sum_i(X_b,s,i^2) + eps)
+    // where b=batch index, s=sequence index, d=dimension index
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
         double ss = 0.0;
         for (int i = 0; i < D_MODEL; i++) ss += x[i] * x[i];
-        double scale = 1.0 / sqrt(ss * inv_d + 1e-5);
+        double scale = 1.0 / sqrt(ss / D_MODEL + 1e-5);
         for (int i = 0; i < D_MODEL; i++) y[i] = x[i] * scale;
     }
 }
