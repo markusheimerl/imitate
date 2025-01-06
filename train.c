@@ -82,22 +82,26 @@ int load_weights(const char* filename, double* ws, double* wc, double* wq, doubl
     return read == expected;
 }
 
+// Given input X of shape [seq_len, d_model]
+// RMSNorm(X)_s,d = X_s,d / sqrt(1/D * sum_i(X_s,i^2) + eps)
+// where s=sequence index, d=dimension index
 void rmsnorm(double *out, const double *in) {
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* x = in + s * D_MODEL;
         double* y = out + s * D_MODEL;
         double ss = 0.0;
-        for (int i = 0; i < D_MODEL; i++) {
-            ss += x[i] * x[i];
-        }
+        for (int i = 0; i < D_MODEL; i++) ss += x[i] * x[i];
         double scale = 1.0 / sqrt(ss / D_MODEL + 1e-5);
-        for (int i = 0; i < D_MODEL; i++) {
-            y[i] = x[i] * scale;
-        }
+        for (int i = 0; i < D_MODEL; i++) y[i] = x[i] * scale;
     }
 }
 
+// Given input X of shape [seq_len, d_model]
+// For each position in sequence:
+// 1. Linear: U = X*W1 where X:[1,d_model], W1:[d_model,4*d_model] -> U:[1,4*d_model]
+// 2. GELU (elementwise): G(U) = 0.5 * U * (1 + tanh(sqrt(2/pi) * (U + 0.044715 * U^3)))
+// 3. Linear: Y = G(U)*W2 where G(U):[1,4*d_model], W2:[4*d_model,d_model] -> Y:[1,d_model]
 void feedforward(double *out, const double *w1, const double *w2, const double *in, double *mid) {
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
@@ -107,21 +111,25 @@ void feedforward(double *out, const double *w1, const double *w2, const double *
         
         for (int i = 0; i < D_MODEL * 4; i++) {
             u[i] = 0.0;
-            for (int j = 0; j < D_MODEL; j++) {
-                u[i] += x[j] * w1[i * D_MODEL + j];
-            }
+            for (int j = 0; j < D_MODEL; j++) u[i] += x[j] * w1[i * D_MODEL + j];
             u[i] = 0.5 * u[i] * (1.0 + tanh(sqrt(2.0/M_PI) * u[i] + 0.044715 * u[i] * u[i] * u[i]));
         }
         
         for (int i = 0; i < D_MODEL; i++) {
             y[i] = 0.0;
-            for (int j = 0; j < D_MODEL * 4; j++) {
-                y[i] += u[j] * w2[i * (D_MODEL * 4) + j];
-            }
+            for (int j = 0; j < D_MODEL * 4; j++) y[i] += u[j] * w2[i * (D_MODEL * 4) + j];
         }
     }
 }
 
+// Given input X of shape [seq_len, d_model]
+// 1. QKV projection for each head h:
+//    Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
+// 2. Scaled dot-product attention with ALiBi bias per head:
+//    score = (Q_h * K_h^T)/sqrt(d_head) - ALiBi_slope_h * distance_matrix
+//    A_h = softmax(score) * V_h  where softmax is causal (upper triangle masked)
+// 3. Concatenate heads and project:
+//    MultiHead(X) = concat(A_1,...,A_h) * Wo
 void multihead_attention(double *out, const double *in, const double *wq, const double *wk, const double *wv, const double *wo, double *q, double *k, double *v, double *s) {
     const int hd = D_MODEL / N_HEAD;
     const double scale = 1.0 / sqrt(hd);
@@ -129,21 +137,14 @@ void multihead_attention(double *out, const double *in, const double *wq, const 
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* x = in + s * D_MODEL;
-        for (int h = 0; h < N_HEAD; h++) {
+        for (int h = 0; h < N_HEAD; h++)
             for (int d = 0; d < hd; d++) {
                 double sq = 0.0, sk = 0.0, sv = 0.0;
                 const int w_idx = (h * hd + d) * D_MODEL;
-                for (int i = 0; i < D_MODEL; i++) {
-                    sq += x[i] * wq[w_idx + i];
-                    sk += x[i] * wk[w_idx + i];
-                    sv += x[i] * wv[w_idx + i];
-                }
+                for (int i = 0; i < D_MODEL; i++) sq += x[i] * wq[w_idx + i], sk += x[i] * wk[w_idx + i], sv += x[i] * wv[w_idx + i];
                 const int qkv_idx = s * D_MODEL + h * hd + d;
-                q[qkv_idx] = sq;
-                k[qkv_idx] = sk;
-                v[qkv_idx] = sv;
+                q[qkv_idx] = sq, k[qkv_idx] = sk, v[qkv_idx] = sv;
             }
-        }
     }
 
     #pragma omp parallel for
@@ -153,9 +154,7 @@ void multihead_attention(double *out, const double *in, const double *wq, const 
             double max = -1e9, sum = 0.0;
             for (int j = 0; j <= i; j++) {
                 double dot = 0.0;
-                for (int d = 0; d < hd; d++) {
-                    dot += q[i * D_MODEL + h * hd + d] * k[j * D_MODEL + h * hd + d];
-                }
+                for (int d = 0; d < hd; d++) dot += q[i * D_MODEL + h * hd + d] * k[j * D_MODEL + h * hd + d];
                 s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = dot * scale - slope * (i - j);
                 max = fmax(max, s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j]);
             }
@@ -163,34 +162,33 @@ void multihead_attention(double *out, const double *in, const double *wq, const 
                 s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max);
                 sum += s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
             }
-            for (int j = 0; j <= i; j++) {
-                s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
-            }
+            for (int j = 0; j <= i; j++) s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
         }
     }
 
     #pragma omp parallel for
     for (int t = 0; t < SEQ_LENGTH; t++) {
         double tmp[D_MODEL] = {0};
-        for (int h = 0; h < N_HEAD; h++) {
+        for (int h = 0; h < N_HEAD; h++)
             for (int d = 0; d < hd; d++) {
                 double sum = 0.0;
-                for (int j = 0; j <= t; j++) {
-                    sum += s[(h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * v[j * D_MODEL + h * hd + d];
-                }
+                for (int j = 0; j <= t; j++) sum += s[(h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * v[j * D_MODEL + h * hd + d];
                 tmp[h * hd + d] = sum;
             }
-        }
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++) {
-                sum += tmp[i] * wo[d * D_MODEL + i];
-            }
+            for (int i = 0; i < D_MODEL; i++) sum += tmp[i] * wo[d * D_MODEL + i];
             out[t * D_MODEL + d] = sum;
         }
     }
 }
 
+// Forward pass through the transformer:
+// 1. Input embedding: sequence_features * Ws + condition_features * Wc
+// 2. N transformer layers of:
+//    x = x + attention(rmsnorm(x))
+//    x = x + ffn(rmsnorm(x))
+// 3. Output projection to sequence_features
 void forward_pass(const double* seq_data, double* out, double* hidden, double* temp, const double* ws, const double* wc, const double* wq, const double* wk, const double* wv, const double* wo, const double* wf1, const double* wf2, const double* wout, double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
@@ -198,12 +196,8 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
         double* y = hidden + s * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                sum += x[f + CONDITION_FEATURES] * ws[f * D_MODEL + d];
-            }
-            for (int f = 0; f < CONDITION_FEATURES; f++) {
-                sum += x[f] * wc[f * D_MODEL + d];
-            }
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) sum += x[f + CONDITION_FEATURES] * ws[f * D_MODEL + d];
+            for (int f = 0; f < CONDITION_FEATURES; f++) sum += x[f] * wc[f * D_MODEL + d];
             y[d] = sum;
         }
     }
@@ -215,17 +209,11 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
         
         rmsnorm(temp, hidden);
         multihead_attention(temp, temp, wq + layer_offset, wk + layer_offset, wv + layer_offset, wo + layer_offset, q_buf, k_buf, v_buf, s_buf);
-        
-        for (int i = 0; i < SEQ_LENGTH * D_MODEL; i++) {
-            hidden[i] += temp[i];
-        }
+        for (int i = 0; i < SEQ_LENGTH * D_MODEL; i++) hidden[i] += temp[i];
         
         rmsnorm(temp, hidden);
         feedforward(temp, wf1 + ff_offset1, wf2 + ff_offset2, temp, mid_buf);
-        
-        for (int i = 0; i < SEQ_LENGTH * D_MODEL; i++) {
-            hidden[i] += temp[i];
-        }
+        for (int i = 0; i < SEQ_LENGTH * D_MODEL; i++) hidden[i] += temp[i];
     }
 
     #pragma omp parallel for
@@ -234,26 +222,26 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
         double* o = out + s * SEQUENCE_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) {
             double sum = 0.0;
-            for (int d = 0; d < D_MODEL; d++) {
-                sum += h[d] * wout[f * D_MODEL + d];
-            }
+            for (int d = 0; d < D_MODEL; d++) sum += h[d] * wout[f * D_MODEL + d];
             o[f] = sum;
         }
     }
 }
 
+// MSE Loss = mean((pred - target)^2) over sequence and features
+// target is shifted by 1 in sequence dimension (predicting next vector in sequence)
 double compute_loss(const double* out, const double* seq_data) {
     double loss = 0.0;
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* pred = out + s * SEQUENCE_FEATURES;
         const double* target = seq_data + (s + 1) * INPUT_FEATURES + CONDITION_FEATURES;
-        for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-            loss += (pred[f] - target[f]) * (pred[f] - target[f]);
-        }
+        for (int f = 0; f < SEQUENCE_FEATURES; f++) loss += (pred[f] - target[f]) * (pred[f] - target[f]);
     }
     return loss / (SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
+// dx = dy * scale - x * scale^3 * (sum(dy * x))/(2*d*ss)
+// where scale = 1/sqrt(mean(x^2) + eps)
 void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const double* norm_x, int size) {
     const double inv_d = 1.0 / D_MODEL;
     #pragma omp parallel for
@@ -263,19 +251,17 @@ void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const dou
         double* d_x_s = d_x + s * size;
         double ss = 0.0, d_scale = 0.0;
         
-        for (int i = 0; i < size; i++) {
-            ss += x_s[i] * x_s[i];
-        }
+        for (int i = 0; i < size; i++) ss += x_s[i] * x_s[i];
         double scale = 1.0 / sqrt(ss * inv_d + 1e-5);
-        for (int i = 0; i < size; i++) {
-            d_scale += d_y_s[i] * x_s[i];
-        }
-        for (int i = 0; i < size; i++) {
-            d_x_s[i] = d_y_s[i] * scale - x_s[i] * scale * scale * scale * inv_d * d_scale / (2.0 * size);
-        }
+        for (int i = 0; i < size; i++) d_scale += d_y_s[i] * x_s[i];
+        for (int i = 0; i < size; i++) d_x_s[i] = d_y_s[i] * scale - x_s[i] * scale * scale * scale * inv_d * d_scale / (2.0 * size);
     }
 }
 
+// Backward pass through feedforward network:
+// 1. d_w2 = d_y * G(U)^T, d_G(U) = d_y * W2^T
+// 2. d_U = d_G(U) * G'(U) where G'(U) is GELU derivative
+// 3. d_w1 = d_U * X^T, d_x = d_U * W1^T
 void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double* d_y, const double* x, const double* w1, const double* w2, double* mid, double* d_mid) {
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
@@ -295,9 +281,7 @@ void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double*
         
         for (int h = 0; h < D_MODEL * 4; h++) {
             double sum = 0.0;
-            for (int d = 0; d < D_MODEL; d++) {
-                sum += x_s[d] * w1[h * D_MODEL + d];
-            }
+            for (int d = 0; d < D_MODEL; d++) sum += x_s[d] * w1[h * D_MODEL + d];
             double t = sum + 0.044715 * sum * sum * sum;
             double tanh_t = tanh(sqrt(2.0/M_PI) * t);
             double d_gelu = d_m_s[h] * 0.5 * (1.0 + tanh_t + sum * sqrt(2.0/M_PI) * (1.0 - tanh_t * tanh_t) * (1.0 + 0.134145 * sum * sum));
@@ -309,6 +293,15 @@ void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double*
     }
 }
 
+// Backward pass through attention:
+// 1. Output projection: d_v_head = d_y * Wo^T, d_Wo = d_y * v_head^T
+// 2. For each head, attention scores with ALiBi:
+//    d_v = d_v_head * A, d_A = d_v_head * V^T
+//    d_score = d_A * softmax'(score)
+//    d_q = d_score * K/sqrt(d_h), d_k = d_score * Q/sqrt(d_h)
+// 3. QKV projection:
+//    d_Wq = d_q * X^T, d_Wk = d_k * X^T, d_Wv = d_v * X^T
+//    d_x = d_q * Wq^T + d_k * Wk^T + d_v * Wv^T
 void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, double* d_wk, double* d_wv, double* d_wo, double* d_x, const double* d_out, const double* q, const double* k, const double* v, const double* s, const double* x, const double* wq, const double* wk, const double* wv, const double* wo) {
     const int hd = D_MODEL / N_HEAD;
     const double scale = 1.0 / sqrt(hd);
@@ -317,12 +310,11 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
     for (int t = 0; t < SEQ_LENGTH; t++) {
         double d_tmp[D_MODEL] = {0};
         const int out_idx = t * D_MODEL;
-        for (int d = 0; d < D_MODEL; d++) {
+        for (int d = 0; d < D_MODEL; d++)
             for (int i = 0; i < D_MODEL; i++) {
                 d_tmp[i] += d_out[out_idx + d] * wo[d * D_MODEL + i];
                 d_wo[d * D_MODEL + i] += d_out[out_idx + d] * v[out_idx + i];
             }
-        }
         
         for (int h = 0; h < N_HEAD; h++) {
             const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
@@ -353,7 +345,7 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const int x_idx = s * D_MODEL;
-        for (int h = 0; h < N_HEAD; h++) {
+        for (int h = 0; h < N_HEAD; h++)
             for (int d = 0; d < hd; d++) {
                 const int w_idx = (h * hd + d) * D_MODEL;
                 const int qkv_idx = x_idx + h * hd + d;
@@ -364,10 +356,15 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
                     d_x[x_idx + i] += d_q[qkv_idx] * wq[w_idx + i] + d_k[qkv_idx] * wk[w_idx + i] + d_v[qkv_idx] * wv[w_idx + i];
                 }
             }
-        }
     }
 }
 
+// Backward pass through transformer:
+// 1. Output projection gradients
+// 2. For each layer from top to bottom:
+//    d_x = d_x + ffn_backward(rmsnorm_backward(d_x))
+//    d_x = d_x + attention_backward(rmsnorm_backward(d_x))
+// 3. Input embedding gradients
 void backward_pass(double* grads, const double* seq_data, const double* out, const double* hidden, const double* ws, const double* wc, const double* wq, const double* wk, const double* wv, const double* wo, const double* wf1, const double* wf2, const double* wout, double* d_hidden, double* d_temp, double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf, double* d_mid) {
     memset(grads, 0, ((SEQUENCE_FEATURES + CONDITION_FEATURES) * D_MODEL + D_MODEL * SEQUENCE_FEATURES + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL)) * sizeof(double));
     memset(d_hidden, 0, SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -403,22 +400,24 @@ void backward_pass(double* grads, const double* seq_data, const double* out, con
         const double* x = seq_data + s * INPUT_FEATURES;
         const double* d_h = d_hidden + s * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-                grads[f * D_MODEL + d] += d_h[d] * x[f + CONDITION_FEATURES];
-            }
-            for (int f = 0; f < CONDITION_FEATURES; f++) {
-                grads[SEQUENCE_FEATURES * D_MODEL + f * D_MODEL + d] += d_h[d] * x[f];
-            }
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) grads[f * D_MODEL + d] += d_h[d] * x[f + CONDITION_FEATURES];
+            for (int f = 0; f < CONDITION_FEATURES; f++) grads[SEQUENCE_FEATURES * D_MODEL + f * D_MODEL + d] += d_h[d] * x[f];
         }
     }
 }
 
+// Train transformer using backpropagation and Adam optimizer:
+// 1. Forward pass to compute loss
+// 2. Backward pass to compute gradients
+// 3. Update weights using Adam:
+//    m = beta1 * m + (1-beta1) * g
+//    v = beta2 * v + (1-beta2) * g^2
+//    w = w - lr * m_hat / (sqrt(v_hat) + eps)
 void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, double* ws, double* wc, double* wq, double* wk, double* wv, double* wo, double* wf1, double* wf2, double* wout, double* ws_m, double* ws_v, double* wc_m, double* wc_v, double* wq_m, double* wq_v, double* wk_m, double* wk_v, double* wv_m, double* wv_v, double* wo_m, double* wo_v, double* wf1_m, double* wf1_v, double* wf2_m, double* wf2_v, double* wout_m, double* wout_v) {
     double lr = LEARNING_RATE, prev_loss = 1e9;
     time_t t = time(NULL);
     struct tm *tm = localtime(&t);
-    char loss_name[100];
-    sprintf(loss_name, "%d-%d-%d_%d-%d-%d_loss.csv", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+    char loss_name[100]; sprintf(loss_name, "%d-%d-%d_%d-%d-%d_loss.csv", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
     FILE* f = fopen(loss_name, "w");
     if (f) fprintf(f, "step,loss\n");
 
