@@ -4,15 +4,16 @@
 #include <math.h>
 #include <time.h>
 #include <stdbool.h>
+#include <omp.h>
 
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 2
+#define BATCH_SIZE 4
 #define SEQ_LENGTH 32
 #define D_MODEL 256
 #define N_HEAD 4
-#define N_LAYERS 2
+#define N_LAYERS 4
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 10000
@@ -94,6 +95,7 @@ int load_weights(const char* filename, Tensor* ws, Tensor* wc,
 
 void rmsnorm(Tensor *out, const Tensor *in) {
     const double inv_d = 1.0 / D_MODEL;
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
@@ -106,6 +108,7 @@ void rmsnorm(Tensor *out, const Tensor *in) {
 
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
     const double sqrt_2_pi = sqrt(2.0/M_PI);
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         double* y = out->data + b * D_MODEL;
@@ -133,6 +136,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     const double scale = 1.0 / sqrt(hd);
 
     // QKV Transform
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in->data + b * D_MODEL;
         for (int h = 0; h < N_HEAD; h++) {
@@ -151,6 +155,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
     }
 
     // Attention with alibi mask
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int h = 0; h < N_HEAD; h++) {
             const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
@@ -172,6 +177,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
         }
 
     // Output projection
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double tmp[D_MODEL] = {0};
@@ -191,6 +197,7 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
 }
 
 void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = in + b * INPUT_FEATURES;
         double* y = out->data + b * D_MODEL;
@@ -247,6 +254,7 @@ double compute_loss(const Tensor* out, const double* batch_data) {
 
 void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const double* norm_x, int size) {
     const double inv_d = 1.0 / D_MODEL;
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x_b = x + b * size, *y_b = norm_x + b * size, *d_y_b = d_y + b * size;
         double* d_x_b = d_x + b * size;
@@ -263,6 +271,7 @@ void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const dou
 void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double* d_y, const double* x,
                          const double* w1, const double* w2, double* mid, double* d_mid) {
     const double sqrt_2_pi = sqrt(2.0/M_PI);
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x_b = x + b * D_MODEL, *d_y_b = d_y + b * D_MODEL;
         double* d_x_b = d_x + b * D_MODEL, *m_b = mid + b * (D_MODEL * 4), *d_m_b = d_mid + b * (D_MODEL * 4);
@@ -297,6 +306,7 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
     const int hd = D_MODEL / N_HEAD;
     const double scale = 1.0 / sqrt(hd);
     
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE; b++) {
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double d_tmp[D_MODEL] = {0};
@@ -342,6 +352,7 @@ void backward_pass(double* grads, const double* batch_data, const Tensor* out, c
            wv[0].size + wo[0].size + wf1[0].size + wf2[0].size)) * sizeof(double));
     memset(d_hidden, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* pred = out->data + b * SEQUENCE_FEATURES;
         const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + 
@@ -379,6 +390,7 @@ void backward_pass(double* grads, const double* batch_data, const Tensor* out, c
         rmsnorm_backward(d_hidden, d_temp, hidden->data, hidden->data, D_MODEL);
     }
     
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = batch_data + b * INPUT_FEATURES;
         double* w_grad_s = grads, *w_grad_c = grads + ws->size;

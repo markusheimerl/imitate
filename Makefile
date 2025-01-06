@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -O3 -march=native -ffast-math
+CFLAGS = -O3 -march=native -ffast-math -fopenmp
 LDFLAGS = -flto -lm
 INCLUDES = -I./sim -I./sim/rasterizer
 
