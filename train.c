@@ -9,12 +9,10 @@
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 4
 #define SEQ_LENGTH 32
 #define D_MODEL 32
 #define N_HEAD 4
 #define N_LAYERS 2
-#define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 10000
 
@@ -80,14 +78,14 @@ int load_weights(const char* filename, Tensor* ws, Tensor* wc,
     return read == expected;
 }
 
-// Given input X of shape [batch_size, seq_len, d_model]
-// RMSNorm(X)_b,s,d = X_b,s,d / sqrt(1/D * sum_i(X_b,s,i^2) + eps)
-// where b=batch index, s=sequence index, d=dimension index
+// Given input X of shape [seq_len, d_model]
+// RMSNorm(X)_s,d = X_s,d / sqrt(1/D * sum_i(X_s,i^2) + eps)
+// where s=sequence index, d=dimension index
 void rmsnorm(Tensor *out, const Tensor *in) {
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x = in->data + b * D_MODEL;
-        double* y = out->data + b * D_MODEL;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x = in->data + s * D_MODEL;
+        double* y = out->data + s * D_MODEL;
         double ss = 0.0;
         for (int i = 0; i < D_MODEL; i++) ss += x[i] * x[i];
         double scale = 1.0 / sqrt(ss / D_MODEL + 1e-5);
@@ -95,17 +93,17 @@ void rmsnorm(Tensor *out, const Tensor *in) {
     }
 }
 
-// Given input X of shape [batch_size, seq_len, d_model]
-// For each element in batch and sequence:
+// Given input X of shape [seq_len, d_model]
+// For each position in sequence:
 // 1. Linear: U = X*W1 where X:[1,d_model], W1:[d_model,4*d_model] -> U:[1,4*d_model]
 // 2. GELU (elementwise): G(U) = 0.5 * U * (1 + tanh(sqrt(2/pi) * (U + 0.044715 * U^3)))
 // 3. Linear: Y = G(U)*W2 where G(U):[1,4*d_model], W2:[4*d_model,d_model] -> Y:[1,d_model]
 void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *in, double *mid) {
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x = in->data + b * D_MODEL;
-        double* y = out->data + b * D_MODEL;
-        double* u = mid + b * (D_MODEL * 4);
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x = in->data + s * D_MODEL;
+        double* y = out->data + s * D_MODEL;
+        double* u = mid + s * (D_MODEL * 4);
         
         for (int i = 0; i < D_MODEL * 4; i++) {
             u[i] = 0.0;
@@ -120,7 +118,7 @@ void feedforward(Tensor *out, const Tensor *w1, const Tensor *w2, const Tensor *
     }
 }
 
-// Given input X of shape [batch_size, seq_len, d_model]
+// Given input X of shape [seq_len, d_model]
 // 1. QKV projection for each head h:
 //    Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
 // 2. Scaled dot-product attention with ALiBi bias per head:
@@ -136,109 +134,127 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
 
     // QKV Transform
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x = in->data + b * D_MODEL;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x = in->data + s * D_MODEL;
         for (int h = 0; h < N_HEAD; h++)
             for (int d = 0; d < hd; d++) {
                 double sq = 0.0, sk = 0.0, sv = 0.0;
                 const int w_idx = (h * hd + d) * D_MODEL;
-                for (int i = 0; i < D_MODEL; i++) sq += x[i] * wq->data[w_idx + i], sk += x[i] * wk->data[w_idx + i], sv += x[i] * wv->data[w_idx + i];
-                const int qkv_idx = b * D_MODEL + h * hd + d;
+                for (int i = 0; i < D_MODEL; i++) 
+                    sq += x[i] * wq->data[w_idx + i],
+                    sk += x[i] * wk->data[w_idx + i],
+                    sv += x[i] * wv->data[w_idx + i];
+                const int qkv_idx = s * D_MODEL + h * hd + d;
                 q[qkv_idx] = sq, k[qkv_idx] = sk, v[qkv_idx] = sv;
             }
     }
 
     // Attention with alibi mask
-    #pragma omp parallel for collapse(2)
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int h = 0; h < N_HEAD; h++) {
-            const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
-            for (int i = 0; i < SEQ_LENGTH; i++) {
-                double max = -1e9, sum = 0.0;
-                for (int j = 0; j <= i; j++) {
-                    double dot = 0.0;
-                    for (int d = 0; d < hd; d++) dot += q[(b * SEQ_LENGTH + i) * D_MODEL + h * hd + d] * k[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
-                    s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = dot * scale - slope * (i - j);
-                    max = fmax(max, s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j]);
-                }
-                for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max), sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
-                for (int j = 0; j <= i; j++) s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
+    #pragma omp parallel for
+    for (int h = 0; h < N_HEAD; h++) {
+        const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
+        for (int i = 0; i < SEQ_LENGTH; i++) {
+            double max = -1e9, sum = 0.0;
+            for (int j = 0; j <= i; j++) {
+                double dot = 0.0;
+                for (int d = 0; d < hd; d++) 
+                    dot += q[i * D_MODEL + h * hd + d] * k[j * D_MODEL + h * hd + d];
+                s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = dot * scale - slope * (i - j);
+                max = fmax(max, s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j]);
             }
+            for (int j = 0; j <= i; j++) {
+                s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max);
+                sum += s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
+            }
+            for (int j = 0; j <= i; j++) 
+                s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
         }
+    }
 
     // Output projection
-    #pragma omp parallel for collapse(2)
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int t = 0; t < SEQ_LENGTH; t++) {
-            double tmp[D_MODEL] = {0};
-            for (int h = 0; h < N_HEAD; h++)
-                for (int d = 0; d < hd; d++) {
-                    double sum = 0.0;
-                    for (int j = 0; j <= t; j++) sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * v[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
-                    tmp[h * hd + d] = sum;
-                }
-            for (int d = 0; d < D_MODEL; d++) {
+    #pragma omp parallel for
+    for (int t = 0; t < SEQ_LENGTH; t++) {
+        double tmp[D_MODEL] = {0};
+        for (int h = 0; h < N_HEAD; h++)
+            for (int d = 0; d < hd; d++) {
                 double sum = 0.0;
-                for (int i = 0; i < D_MODEL; i++) sum += tmp[i] * wo->data[d * D_MODEL + i];
-                out->data[(b * SEQ_LENGTH + t) * D_MODEL + d] = sum;
+                for (int j = 0; j <= t; j++) 
+                    sum += s[(h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * 
+                          v[j * D_MODEL + h * hd + d];
+                tmp[h * hd + d] = sum;
             }
+        for (int d = 0; d < D_MODEL; d++) {
+            double sum = 0.0;
+            for (int i = 0; i < D_MODEL; i++) 
+                sum += tmp[i] * wo->data[d * D_MODEL + i];
+            out->data[t * D_MODEL + d] = sum;
         }
+    }
 }
 
+// Forward pass through the transformer:
 // 1. Input embedding: sequence_features * Ws + condition_features * Wc
 // 2. N transformer layers of:
 //    x = x + attention(rmsnorm(x))
 //    x = x + ffn(rmsnorm(x))
 // 3. Output projection to sequence_features
-void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
+void forward_pass(const double* seq_data, Tensor* out, Tensor* hidden, Tensor* temp,
                  const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
                  const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
                  const Tensor* wout,
                  double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
     
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x = batch_data + b * INPUT_FEATURES;
-        double* y = hidden->data + b * D_MODEL;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x = seq_data + s * INPUT_FEATURES;
+        double* y = hidden->data + s * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) sum += x[f + CONDITION_FEATURES] * ws->data[f * D_MODEL + d];
-            for (int f = 0; f < CONDITION_FEATURES; f++) sum += x[f] * wc->data[f * D_MODEL + d];
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) 
+                sum += x[f + CONDITION_FEATURES] * ws->data[f * D_MODEL + d];
+            for (int f = 0; f < CONDITION_FEATURES; f++) 
+                sum += x[f] * wc->data[f * D_MODEL + d];
             y[d] = sum;
         }
     }
 
     for (int l = 0; l < N_LAYERS; l++) {
         rmsnorm(temp, hidden);
-        multihead_attention(temp, temp, &wq[l], &wk[l], &wv[l], &wo[l], q_buf, k_buf, v_buf, s_buf);
-        for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
+        multihead_attention(temp, temp, &wq[l], &wk[l], &wv[l], &wo[l], 
+                          q_buf, k_buf, v_buf, s_buf);
+        for (int i = 0; i < hidden->size; i++) 
+            hidden->data[i] += temp->data[i];
+        
         rmsnorm(temp, hidden);
         feedforward(temp, &wf1[l], &wf2[l], temp, mid_buf);
-        for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
+        for (int i = 0; i < hidden->size; i++) 
+            hidden->data[i] += temp->data[i];
     }
 
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* h = hidden->data + b * D_MODEL;
-        double* o = out->data + b * SEQUENCE_FEATURES;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* h = hidden->data + s * D_MODEL;
+        double* o = out->data + s * SEQUENCE_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) {
             double sum = 0.0;
-            for (int d = 0; d < D_MODEL; d++) sum += h[d] * wout->data[f * D_MODEL + d];
+            for (int d = 0; d < D_MODEL; d++) 
+                sum += h[d] * wout->data[f * D_MODEL + d];
             o[f] = sum;
         }
     }
 }
 
-// MSE Loss = mean((pred - target)^2) over batch, sequence, and features
+// MSE Loss = mean((pred - target)^2) over sequence and features
 // target is shifted by 1 in sequence dimension (predicting next vector in sequence)
-double compute_loss(const Tensor* out, const double* batch_data) {
+double compute_loss(const Tensor* out, const double* seq_data) {
     double loss = 0.0;
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* pred = out->data + b * SEQUENCE_FEATURES;
-        const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
-        for (int f = 0; f < SEQUENCE_FEATURES; f++) loss += (pred[f] - target[f]) * (pred[f] - target[f]);
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* pred = out->data + s * SEQUENCE_FEATURES;
+        const double* target = seq_data + (s + 1) * INPUT_FEATURES + CONDITION_FEATURES;
+        for (int f = 0; f < SEQUENCE_FEATURES; f++) 
+            loss += (pred[f] - target[f]) * (pred[f] - target[f]);
     }
-    return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+    return loss / (SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
 // dx = dy * scale - x * scale^3 * (sum(dy * x))/(2*d*ss)
@@ -246,92 +262,104 @@ double compute_loss(const Tensor* out, const double* batch_data) {
 void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const double* norm_x, int size) {
     const double inv_d = 1.0 / D_MODEL;
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x_b = x + b * size, *d_y_b = d_y + b * size;
-        double* d_x_b = d_x + b * size;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x_s = x + s * size;
+        const double* d_y_s = d_y + s * size;
+        double* d_x_s = d_x + s * size;
         double ss = 0.0, d_scale = 0.0;
-        for (int i = 0; i < size; i++) ss += x_b[i] * x_b[i];
-        double scale = 1.0 / sqrt(ss * inv_d + EPSILON);
-        for (int i = 0; i < size; i++) d_scale += d_y_b[i] * x_b[i];
-        for (int i = 0; i < size; i++) d_x_b[i] = d_y_b[i] * scale - x_b[i] * scale * scale * scale * inv_d * d_scale / (2.0 * size);
+        
+        for (int i = 0; i < size; i++) ss += x_s[i] * x_s[i];
+        double scale = 1.0 / sqrt(ss * inv_d + 1e-5);
+        for (int i = 0; i < size; i++) d_scale += d_y_s[i] * x_s[i];
+        for (int i = 0; i < size; i++) 
+            d_x_s[i] = d_y_s[i] * scale - x_s[i] * scale * scale * scale * inv_d * d_scale / (2.0 * size);
     }
 }
 
-// 1. dy -> dm = dy * W2^T
-// 2. dW2 = dy^T * m
-// 3. dx = dgelu(W1*x) * W1^T
-// 4. dW1 = dgelu(W1*x) * x^T
-// where dgelu(x) = 0.5 * (1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)) + x*sqrt(2/pi)*(1-tanh^2)*(1 + 0.134145*x^2))
 void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double* d_y, const double* x,
                          const double* w1, const double* w2, double* mid, double* d_mid) {
     #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x_b = x + b * D_MODEL, *d_y_b = d_y + b * D_MODEL;
-        double* d_x_b = d_x + b * D_MODEL, *m_b = mid + b * (D_MODEL * 4), *d_m_b = d_mid + b * (D_MODEL * 4);
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x_s = x + s * D_MODEL;
+        const double* d_y_s = d_y + s * D_MODEL;
+        double* d_x_s = d_x + s * D_MODEL;
+        double* m_s = mid + s * (D_MODEL * 4);
+        double* d_m_s = d_mid + s * (D_MODEL * 4);
         
         for (int h = 0; h < D_MODEL * 4; h++) {
-            d_m_b[h] = 0.0;
-            for (int d = 0; d < D_MODEL; d++) d_m_b[h] += d_y_b[d] * w2[d * (D_MODEL * 4) + h], d_w2[d * (D_MODEL * 4) + h] += d_y_b[d] * m_b[h];
+            d_m_s[h] = 0.0;
+            for (int d = 0; d < D_MODEL; d++) {
+                d_m_s[h] += d_y_s[d] * w2[d * (D_MODEL * 4) + h];
+                d_w2[d * (D_MODEL * 4) + h] += d_y_s[d] * m_s[h];
+            }
         }
         
         for (int h = 0; h < D_MODEL * 4; h++) {
             double sum = 0.0;
-            for (int d = 0; d < D_MODEL; d++) sum += x_b[d] * w1[h * D_MODEL + d];
+            for (int d = 0; d < D_MODEL; d++) 
+                sum += x_s[d] * w1[h * D_MODEL + d];
             double t = sum + 0.044715 * sum * sum * sum;
             double tanh_t = tanh(sqrt(2.0/M_PI) * t);
-            double d_gelu = d_m_b[h] * 0.5 * (1.0 + tanh_t + sum * sqrt(2.0/M_PI) * (1.0 - tanh_t * tanh_t) * (1.0 + 0.134145 * sum * sum));
-            for (int d = 0; d < D_MODEL; d++) d_w1[h * D_MODEL + d] += d_gelu * x_b[d], d_x_b[d] += d_gelu * w1[h * D_MODEL + d];
+            double d_gelu = d_m_s[h] * 0.5 * (1.0 + tanh_t + sum * sqrt(2.0/M_PI) * 
+                           (1.0 - tanh_t * tanh_t) * (1.0 + 0.134145 * sum * sum));
+            for (int d = 0; d < D_MODEL; d++) {
+                d_w1[h * D_MODEL + d] += d_gelu * x_s[d];
+                d_x_s[d] += d_gelu * w1[h * D_MODEL + d];
+            }
         }
     }
 }
 
-void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, double* d_wk, double* d_wv, 
-                       double* d_wo, double* d_x, const double* d_out, const double* q, const double* k, 
-                       const double* v, const double* s, const double* x, const double* wq, const double* wk, 
+void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, double* d_wk, 
+                       double* d_wv, double* d_wo, double* d_x, const double* d_out, 
+                       const double* q, const double* k, const double* v, const double* s, 
+                       const double* x, const double* wq, const double* wk, 
                        const double* wv, const double* wo) {
     const int hd = D_MODEL / N_HEAD;
     const double scale = 1.0 / sqrt(hd);
     
     // Output projection backward
-    #pragma omp parallel for collapse(2)
-    for (int b = 0; b < BATCH_SIZE; b++)
-        for (int t = 0; t < SEQ_LENGTH; t++) {
-            double d_tmp[D_MODEL] = {0};
-            const int out_idx = (b * SEQ_LENGTH + t) * D_MODEL;
-            for (int d = 0; d < D_MODEL; d++)
-                for (int i = 0; i < D_MODEL; i++) d_tmp[i] += d_out[out_idx + d] * wo[d * D_MODEL + i], d_wo[d * D_MODEL + i] += d_out[out_idx + d] * v[out_idx + i];
+    #pragma omp parallel for
+    for (int t = 0; t < SEQ_LENGTH; t++) {
+        double d_tmp[D_MODEL] = {0};
+        const int out_idx = t * D_MODEL;
+        for (int d = 0; d < D_MODEL; d++)
+            for (int i = 0; i < D_MODEL; i++) {
+                d_tmp[i] += d_out[out_idx + d] * wo[d * D_MODEL + i];
+                d_wo[d * D_MODEL + i] += d_out[out_idx + d] * v[out_idx + i];
+            }
+        
+        // Attention + ALiBi backward
+        for (int h = 0; h < N_HEAD; h++) {
+            const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
+            const int s_off = (h * SEQ_LENGTH + t) * SEQ_LENGTH;
             
-            // Attention + ALiBi backward
-            for (int h = 0; h < N_HEAD; h++) {
-                const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
-                const int s_off = (b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH;
+            for (int j = 0; j <= t; j++) {
+                double d_score = 0.0;
+                for (int d = 0; d < hd; d++) {
+                    const int qt_idx = t * D_MODEL + h * hd + d;
+                    const int qj_idx = j * D_MODEL + h * hd + d;
+                    d_score += d_tmp[h * hd + d] * v[qj_idx];
+                    d_v[qj_idx] += d_tmp[h * hd + d] * s[s_off + j];
+                }
                 
-                for (int j = 0; j <= t; j++) {
-                    double d_score = 0.0;
-                    for (int d = 0; d < hd; d++) {
-                        const int qt_idx = (b * SEQ_LENGTH + t) * D_MODEL + h * hd + d;
-                        const int qj_idx = (b * SEQ_LENGTH + j) * D_MODEL + h * hd + d;
-                        d_score += d_tmp[h * hd + d] * v[qj_idx];
-                        d_v[qj_idx] += d_tmp[h * hd + d] * s[s_off + j];
-                    }
-                    
-                    d_score = (d_score - slope * (t - j)) * scale;
-                    const double d_s = s[s_off + j] * ((j == t) ? (1 - s[s_off + j]) : -s[s_off + j]) * d_score;
-                    
-                    for (int d = 0; d < hd; d++) {
-                        const int qt_idx = (b * SEQ_LENGTH + t) * D_MODEL + h * hd + d;
-                        const int qj_idx = (b * SEQ_LENGTH + j) * D_MODEL + h * hd + d;
-                        d_q[qt_idx] += d_s * k[qj_idx];
-                        d_k[qj_idx] += d_s * q[qt_idx];
-                    }
+                d_score = (d_score - slope * (t - j)) * scale;
+                const double d_s = s[s_off + j] * ((j == t) ? (1 - s[s_off + j]) : -s[s_off + j]) * d_score;
+                
+                for (int d = 0; d < hd; d++) {
+                    const int qt_idx = t * D_MODEL + h * hd + d;
+                    const int qj_idx = j * D_MODEL + h * hd + d;
+                    d_q[qt_idx] += d_s * k[qj_idx];
+                    d_k[qj_idx] += d_s * q[qt_idx];
                 }
             }
         }
+    }
 
     // QKV projection backward
     #pragma omp parallel for
-    for (int bst = 0; bst < BATCH_SIZE * SEQ_LENGTH; bst++) {
-        const int x_idx = bst * D_MODEL;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const int x_idx = s * D_MODEL;
         for (int h = 0; h < N_HEAD; h++)
             for (int d = 0; d < hd; d++) {
                 const int w_idx = (h * hd + d) * D_MODEL;
@@ -340,60 +368,73 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
                     d_wq[w_idx + i] += d_q[qkv_idx] * x[x_idx + i];
                     d_wk[w_idx + i] += d_k[qkv_idx] * x[x_idx + i];
                     d_wv[w_idx + i] += d_v[qkv_idx] * x[x_idx + i];
-                    d_x[x_idx + i] += d_q[qkv_idx] * wq[w_idx + i] + d_k[qkv_idx] * wk[w_idx + i] + d_v[qkv_idx] * wv[w_idx + i];
+                    d_x[x_idx + i] += d_q[qkv_idx] * wq[w_idx + i] + 
+                                     d_k[qkv_idx] * wk[w_idx + i] + 
+                                     d_v[qkv_idx] * wv[w_idx + i];
                 }
             }
     }
 }
 
-void backward_pass(double* grads, const double* batch_data, const Tensor* out, const Tensor* hidden,
-                  const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, const Tensor* wv, 
-                  const Tensor* wo, const Tensor* wf1, const Tensor* wf2, const Tensor* wout,
-                  double* d_hidden, double* d_temp, double* q_buf, double* k_buf, double* v_buf, 
-                  double* s_buf, double* mid_buf, double* d_mid) {
+void backward_pass(double* grads, const double* seq_data, const Tensor* out, const Tensor* hidden,
+                  const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
+                  const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
+                  const Tensor* wout, double* d_hidden, double* d_temp, double* q_buf, 
+                  double* k_buf, double* v_buf, double* s_buf, double* mid_buf, double* d_mid) {
     
-    const size_t layer_size = wq[0].size + wk[0].size + wv[0].size + wo[0].size + wf1[0].size + wf2[0].size;
-    memset(grads, 0, (ws->size + wc->size + wout->size + N_LAYERS * layer_size) * sizeof(double));
-    memset(d_hidden, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    memset(grads, 0, (ws->size + wc->size + wout->size + 
+           N_LAYERS * (wq[0].size + wk[0].size + wv[0].size + 
+           wo[0].size + wf1[0].size + wf2[0].size)) * sizeof(double));
+    memset(d_hidden, 0, SEQ_LENGTH * D_MODEL * sizeof(double));
     
     // Output layer backward
-    #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* pred = out->data + b * SEQUENCE_FEATURES;
-        const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* pred = out->data + s * SEQUENCE_FEATURES;
+        const double* target = seq_data + (s + 1) * INPUT_FEATURES + CONDITION_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-            const double d_out = 2.0 * (pred[f] - target[f]) / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
-            const int w_off = ws->size + wc->size + f * D_MODEL;
-            for (int d = 0; d < D_MODEL; d++) grads[w_off + d] += d_out * hidden->data[b * D_MODEL + d], d_hidden[b * D_MODEL + d] += d_out * wout->data[f * D_MODEL + d];
+            const double d_out = 2.0 * (pred[f] - target[f]) / (SEQ_LENGTH * SEQUENCE_FEATURES);
+            for (int d = 0; d < D_MODEL; d++) {
+                grads[ws->size + wc->size + f * D_MODEL + d] += 
+                    d_out * hidden->data[s * D_MODEL + d];
+                d_hidden[s * D_MODEL + d] += d_out * wout->data[f * D_MODEL + d];
+            }
         }
     }
     
-    // Transformer layers backward
     double* layer_grads = grads + ws->size + wc->size + wout->size;
     for (int l = N_LAYERS - 1; l >= 0; l--) {
-        const size_t l_off = l * layer_size;
-        memcpy(d_temp, d_hidden, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-        feedforward_backward(d_hidden, layer_grads + l_off, layer_grads + l_off + wf1[0].size, d_temp, hidden->data, wf1[l].data, wf2[l].data, mid_buf, d_mid);
+        const size_t l_off = l * (wq[0].size + wk[0].size + wv[0].size + 
+                                 wo[0].size + wf1[0].size + wf2[0].size);
+        
+        memcpy(d_temp, d_hidden, SEQ_LENGTH * D_MODEL * sizeof(double));
+        feedforward_backward(d_hidden, 
+                           layer_grads + l_off + wq[0].size + wk[0].size + wv[0].size + wo[0].size,
+                           layer_grads + l_off + wq[0].size + wk[0].size + wv[0].size + wo[0].size + wf1[0].size,
+                           d_temp, hidden->data, wf1[l].data, wf2[l].data, mid_buf, d_mid);
+        
         rmsnorm_backward(d_temp, d_hidden, hidden->data, hidden->data, D_MODEL);
-        memcpy(d_hidden, d_temp, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+        memcpy(d_hidden, d_temp, SEQ_LENGTH * D_MODEL * sizeof(double));
+        
         attention_backward(q_buf, k_buf, v_buf,
-                         layer_grads + l_off + wf1[0].size + wf2[0].size,
-                         layer_grads + l_off + wf1[0].size + wf2[0].size + wq[0].size,
-                         layer_grads + l_off + wf1[0].size + wf2[0].size + wq[0].size + wk[0].size,
-                         layer_grads + l_off + wf1[0].size + wf2[0].size + wq[0].size + wk[0].size + wv[0].size,
+                         layer_grads + l_off,
+                         layer_grads + l_off + wq[0].size,
+                         layer_grads + l_off + wq[0].size + wk[0].size,
+                         layer_grads + l_off + wq[0].size + wk[0].size + wv[0].size,
                          d_temp, d_hidden, q_buf, k_buf, v_buf, s_buf, hidden->data,
                          wq[l].data, wk[l].data, wv[l].data, wo[l].data);
+        
         rmsnorm_backward(d_hidden, d_temp, hidden->data, hidden->data, D_MODEL);
     }
     
     // Input embedding backward
-    #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x = batch_data + b * INPUT_FEATURES;
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* x = seq_data + s * INPUT_FEATURES;
+        const double* d_h = d_hidden + s * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
-            const double d_h = d_hidden[b * D_MODEL + d];
-            for (int f = 0; f < SEQUENCE_FEATURES; f++) grads[f * D_MODEL + d] += d_h * x[f + CONDITION_FEATURES];
-            for (int f = 0; f < CONDITION_FEATURES; f++) grads[ws->size + f * D_MODEL + d] += d_h * x[f];
+            for (int f = 0; f < SEQUENCE_FEATURES; f++)
+                grads[f * D_MODEL + d] += d_h[d] * x[f + CONDITION_FEATURES];
+            for (int f = 0; f < CONDITION_FEATURES; f++)
+                grads[ws->size + f * D_MODEL + d] += d_h[d] * x[f];
         }
     }
 }
@@ -414,30 +455,27 @@ void train_backprop(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                                N_LAYERS * (wq[0].size + wk[0].size + wv[0].size + 
                                          wo[0].size + wf1[0].size + wf2[0].size);
     
-    double *batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
+    double *seq_data = malloc((SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
     double *grads = malloc(total_params * sizeof(double));
-    double *d_hidden = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *d_temp = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *v_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *s_buf = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
-    double *mid_buf = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
-    double *d_mid = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+    double *d_hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *d_temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *q_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *k_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *s_buf = malloc(N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
+    double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+    double *d_mid = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
 
     const double beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.01;
 
     for (int step = 0; step < TRAINING_STEPS; step++) {
-        for (int b = 0; b < BATCH_SIZE; b++) {
-            int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1);
-            memcpy(batch_data + b * (SEQ_LENGTH + 1) * INPUT_FEATURES,
-                   ds->data + seq_start * INPUT_FEATURES,
-                   (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
-        }
+        int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1);
+        memcpy(seq_data, ds->data + seq_start * INPUT_FEATURES,
+               (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
 
-        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,
+        forward_pass(seq_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,
                     q_buf, k_buf, v_buf, s_buf, mid_buf);
-        double loss = compute_loss(out, batch_data);
+        double loss = compute_loss(out, seq_data);
         
         if (step > 0) {
             lr *= (loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0;
@@ -448,9 +486,10 @@ void train_backprop(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
         if (f) fprintf(f, "%d,%f\n", step, loss);
 
-        backward_pass(grads, batch_data, out, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,
+        backward_pass(grads, seq_data, out, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,
                      d_hidden, d_temp, q_buf, k_buf, v_buf, s_buf, mid_buf, d_mid);
         
+        // Update weights with Adam optimizer
         size_t offset = 0;
         Tensor* weights[] = {ws, wc, wout};
         for (int w = 0; w < 3; w++) {
@@ -481,23 +520,16 @@ void train_backprop(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
         }
     }
     
-    free(batch_data); free(grads); free(d_hidden); free(d_temp);
-    free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); free(d_mid);
+    free(seq_data); free(grads); free(d_hidden); free(d_temp);
+    free(q_buf); free(k_buf); free(v_buf); free(s_buf); 
+    free(mid_buf); free(d_mid);
     if (f) fclose(f);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) {
-        printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]);
-        return 1;
-    }
-
-    char *csv_file = argv[1];
-    char *weights_file = argc > 2 ? (strstr(argv[2], ".bin") ? argv[2] : NULL) : NULL;
-    if (argc > 2 && !weights_file) {
-        printf("Error: Invalid file '%s'\n", argv[2]);
-        return 1;
-    }
+    if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) { printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]); return 1; }
+    char *csv_file = argv[1], *weights_file = argc > 2 ? (strstr(argv[2], ".bin") ? argv[2] : NULL) : NULL;
+    if (argc > 2 && !weights_file) { printf("Error: Invalid file '%s'\n", argv[2]); return 1; }
 
     srand(time(NULL));
     Dataset ds = load_csv(csv_file);
@@ -509,10 +541,7 @@ int main(int argc, char *argv[]) {
     
     Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS], W_ff1[N_LAYERS], W_ff2[N_LAYERS];
     for (int l = 0; l < N_LAYERS; l++) {
-        const int attn_size = D_MODEL * D_MODEL;
-        const int ff_size1 = D_MODEL * (D_MODEL * 4);
-        const int ff_size2 = (D_MODEL * 4) * D_MODEL;
-        
+        const int attn_size = D_MODEL * D_MODEL, ff_size1 = D_MODEL * (D_MODEL * 4), ff_size2 = (D_MODEL * 4) * D_MODEL;
         W_q[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
         W_k[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
         W_v[l] = (Tensor){malloc(attn_size * sizeof(double)), calloc(attn_size, sizeof(double)), calloc(attn_size, sizeof(double)), attn_size};
@@ -521,6 +550,10 @@ int main(int argc, char *argv[]) {
         W_ff2[l] = (Tensor){malloc(ff_size2 * sizeof(double)), calloc(ff_size2, sizeof(double)), calloc(ff_size2, sizeof(double)), ff_size2};
     }
 
+    Tensor hidden = {malloc(SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, SEQ_LENGTH * D_MODEL};
+    Tensor temp = {malloc(SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, SEQ_LENGTH * D_MODEL};
+    Tensor output = {malloc(SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, SEQ_LENGTH * SEQUENCE_FEATURES};
+
     if (weights_file && load_weights(weights_file, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out)) {
         printf("Successfully loaded weights\n");
     } else {
@@ -528,39 +561,24 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < W_seq.size; i++) W_seq.data[i] = randn() * ws;
         for (int i = 0; i < W_cond.size; i++) W_cond.data[i] = randn() * ws;
         for (int i = 0; i < W_out.size; i++) W_out.data[i] = randn() * ws;
-        
         for (int l = 0; l < N_LAYERS; l++) {
-            for (int i = 0; i < W_q[l].size; i++) {
-                W_q[l].data[i] = randn() * ws;
-                W_k[l].data[i] = randn() * ws;
-                W_v[l].data[i] = randn() * ws;
-                W_o[l].data[i] = randn() * ws;
-            }
+            for (int i = 0; i < W_q[l].size; i++) W_q[l].data[i] = W_k[l].data[i] = W_v[l].data[i] = W_o[l].data[i] = randn() * ws;
             for (int i = 0; i < W_ff1[l].size; i++) W_ff1[l].data[i] = randn() * ws;
             for (int i = 0; i < W_ff2[l].size; i++) W_ff2[l].data[i] = randn() * ws;
         }
     }
 
-    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
-    
     train_backprop(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
     
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char filename[100];
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    
+    time_t t = time(NULL); struct tm tm = *localtime(&t);
+    char filename[100]; sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     save_weights(filename, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
     printf("Saved weights to: %s\n", filename);
 
-    free(ds.data);
-    free(hidden.data); free(temp.data); free(output.data);
+    free(ds.data); free(hidden.data); free(temp.data); free(output.data);
     free(W_seq.data); free(W_seq.m); free(W_seq.v);
     free(W_cond.data); free(W_cond.m); free(W_cond.v);
     free(W_out.data); free(W_out.m); free(W_out.v);
-    
     for (int l = 0; l < N_LAYERS; l++) {
         free(W_q[l].data); free(W_q[l].m); free(W_q[l].v);
         free(W_k[l].data); free(W_k[l].m); free(W_k[l].v);
@@ -569,6 +587,5 @@ int main(int argc, char *argv[]) {
         free(W_ff1[l].data); free(W_ff1[l].m); free(W_ff1[l].v);
         free(W_ff2[l].data); free(W_ff2[l].m); free(W_ff2[l].v);
     }
-    
     return 0;
 }
