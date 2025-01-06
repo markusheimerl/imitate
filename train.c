@@ -8,14 +8,14 @@
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
-#define BATCH_SIZE 2
-#define SEQ_LENGTH 2
-#define D_MODEL 2
-#define N_HEAD 2
+#define BATCH_SIZE 4
+#define SEQ_LENGTH 64
+#define D_MODEL 64
+#define N_HEAD 4
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
-#define TRAINING_STEPS 20000
+#define TRAINING_STEPS 1000
 
 typedef struct { double *data; int rows, cols; } Dataset;
 typedef struct { double *data; double *m, *v; int size; } Tensor;
@@ -245,68 +245,129 @@ double compute_loss(const Tensor* out, const double* batch_data) {
     return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
-void update_weights(Tensor* w, double base_loss, int step, double lr, const double* batch_data, 
-                   Tensor* out, Tensor* hidden, Tensor* temp,
-                   const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
-                   const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
-                   const Tensor* wout,
-                   double* q_buf, double* k_buf, double* v_buf, double* s_buf, 
-                   double* mid_buf) {
-    const double beta1 = 0.9;
-    const double beta2 = 0.999;
-    const double eps = 1e-8;
-    const double weight_decay = 0.001;
-    const double deltas[4] = {EPSILON, -EPSILON, EPSILON/2, -EPSILON/2};
-
-    #pragma omp parallel for
-    for (int i = 0; i < w->size; i++) {
-        double grad_sum = 0.0;
-        double orig_val = w->data[i];
+void backward_pass(double* grads, const double* batch_data, const Tensor* out, 
+                  const Tensor* hidden, const Tensor* ws, const Tensor* wc,
+                  const Tensor* wq, const Tensor* wk, const Tensor* wv, 
+                  const Tensor* wo, const Tensor* wf1, const Tensor* wf2,
+                  const Tensor* wout,
+                  double* d_hidden, double* d_temp,
+                  double* q_buf, double* k_buf, double* v_buf, double* s_buf) {
+    
+    // Clear gradients
+    memset(grads, 0, (ws->size + wc->size + wout->size + 
+           N_LAYERS * (wq[0].size + wk[0].size + wv[0].size + 
+                      wo[0].size + wf1[0].size + wf2[0].size)) * sizeof(double));
+    
+    // Output layer gradients
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* pred = out->data + b * SEQUENCE_FEATURES;
+        const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + 
+                             (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
+        const double* h = hidden->data + b * D_MODEL;
         
-        for (int p = 0; p < 4; p++) {
-            w->data[i] = orig_val + deltas[p];
-            forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
-                        q_buf, k_buf, v_buf, s_buf, mid_buf);
-            double new_loss = compute_loss(out, batch_data);
-            grad_sum += (new_loss - base_loss) / deltas[p];
+        for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+            double d_out = 2.0 * (pred[f] - target[f]) / 
+                          (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+            double* w_grad = grads + ws->size + wc->size + f * D_MODEL;
+            for (int d = 0; d < D_MODEL; d++) {
+                w_grad[d] += d_out * h[d];
+                d_hidden[b * D_MODEL + d] += d_out * wout->data[f * D_MODEL + d];
+            }
         }
-        w->data[i] = orig_val;
+    }
+    
+    // Backward through transformer layers
+    for (int l = N_LAYERS - 1; l >= 0; l--) {
+        // FFN backward
+        double* d_ff_out = d_temp;
+        memcpy(d_ff_out, d_hidden, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
         
-        double grad = grad_sum / 4.0;
-        grad = fmax(-1.0, fmin(1.0, grad));
-
-        w->m[i] = beta1 * w->m[i] + (1 - beta1) * grad;
-        w->v[i] = beta2 * w->v[i] + (1 - beta2) * grad * grad;
+        // Attention backward
+        double* d_attn = d_hidden;
+        for (int b = 0; b < BATCH_SIZE; b++) {
+            for (int h = 0; h < N_HEAD; h++) {
+                const int hd = D_MODEL / N_HEAD;
+                const double scale = 1.0 / sqrt(hd);
+                
+                for (int t = SEQ_LENGTH - 1; t >= 0; t--) {
+                    // Gradient for attention scores
+                    for (int j = 0; j <= t; j++) {
+                        double d_score = 0.0;
+                        for (int d = 0; d < hd; d++) {
+                            d_score += d_attn[(b * SEQ_LENGTH + t) * D_MODEL + h * hd + d] *
+                                     v_buf[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d];
+                        }
+                        s_buf[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j] = 
+                            d_score * scale;
+                    }
+                    
+                    // Update Q, K, V gradients
+                    double* w_grad_q = grads + ws->size + wc->size + wout->size + 
+                                     l * (wq[0].size + wk[0].size + wv[0].size + 
+                                         wo[0].size + wf1[0].size + wf2[0].size);
+                    double* w_grad_k = w_grad_q + wq[0].size;
+                    double* w_grad_v = w_grad_k + wk[0].size;
+                    
+                    for (int d = 0; d < hd; d++) {
+                        const int qkv_idx = (b * SEQ_LENGTH + t) * D_MODEL + h * hd + d;
+                        for (int i = 0; i < D_MODEL; i++) {
+                            w_grad_q[(h * hd + d) * D_MODEL + i] += 
+                                d_attn[qkv_idx] * hidden->data[(b * SEQ_LENGTH + t) * D_MODEL + i];
+                            if (t > 0) {
+                                w_grad_k[(h * hd + d) * D_MODEL + i] += 
+                                    d_attn[qkv_idx] * hidden->data[(b * SEQ_LENGTH + t - 1) * D_MODEL + i];
+                                w_grad_v[(h * hd + d) * D_MODEL + i] += 
+                                    d_attn[qkv_idx] * hidden->data[(b * SEQ_LENGTH + t - 1) * D_MODEL + i];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Input embeddings gradients
+    for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
+        const double* x = batch_data + b * INPUT_FEATURES;
+        double* w_grad_s = grads;
+        double* w_grad_c = grads + ws->size;
         
-        double m_hat = w->m[i] / (1.0 - pow(beta1, step + 1));
-        double v_hat = w->v[i] / (1.0 - pow(beta2, step + 1));
-        
-        double noise = 0.1 * randn() * sqrt(lr) / (step + 1);
-        w->data[i] = w->data[i] * (1.0 - lr * weight_decay) - 
-                     (lr * m_hat / (sqrt(v_hat) + eps) + noise);
+        for (int d = 0; d < D_MODEL; d++) {
+            for (int f = 0; f < SEQUENCE_FEATURES; f++)
+                w_grad_s[f * D_MODEL + d] += d_hidden[b * D_MODEL + d] * x[f + CONDITION_FEATURES];
+            for (int f = 0; f < CONDITION_FEATURES; f++)
+                w_grad_c[f * D_MODEL + d] += d_hidden[b * D_MODEL + d] * x[f];
+        }
     }
 }
 
-void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
-                      Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
-                      Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
+void train_backprop(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
+                   Tensor* ws, Tensor* wc, Tensor* wq, Tensor* wk, Tensor* wv, 
+                   Tensor* wo, Tensor* wf1, Tensor* wf2, Tensor* wout) {
     double lr = LEARNING_RATE;
     double prev_loss = 1e9;
-
+    
     time_t t = time(NULL);
     struct tm *tm = localtime(&t);
     char loss_name[100];
-    sprintf(loss_name, "%d-%d-%d_%d-%d-%d_loss.csv", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+    sprintf(loss_name, "%d-%d-%d_%d-%d-%d_loss.csv", 
+            tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, 
+            tm->tm_hour, tm->tm_min, tm->tm_sec);
     FILE* f = fopen(loss_name, "w");
 
+    const size_t total_params = ws->size + wc->size + wout->size + 
+                               N_LAYERS * (wq[0].size + wk[0].size + wv[0].size + 
+                                         wo[0].size + wf1[0].size + wf2[0].size);
+    
     double* batch_data = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
+    double* grads = malloc(total_params * sizeof(double));
+    double* d_hidden = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
+    double* d_temp = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double* q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double* k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double* v_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     double* s_buf = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double* mid_buf = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
-    
-    Tensor* global_weights[] = {ws, wc, wout};
     
     for (int step = 0; step < TRAINING_STEPS; step++) {
         for (int b = 0; b < BATCH_SIZE; b++) {
@@ -317,38 +378,68 @@ void train_finite_diff(Dataset* ds, Tensor* out, Tensor* hidden, Tensor* temp,
                         ds->data[(seq_start + s) * INPUT_FEATURES + f];
         }
 
-        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
+        forward_pass(batch_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,
                     q_buf, k_buf, v_buf, s_buf, mid_buf);
-        double base_loss = compute_loss(out, batch_data);
+        double loss = compute_loss(out, batch_data);
         
-        if (base_loss > prev_loss * 1.1) {
+        if (loss > prev_loss * 1.1) {
             lr *= 0.95;
-        } else if (base_loss < prev_loss * 0.95) {
+        } else if (loss < prev_loss * 0.95) {
             lr *= 1.05;
         }
         lr = fmax(1e-6, fmin(1e-3, lr));
-        prev_loss = base_loss;
+        prev_loss = loss;
         
-        printf("Step %d, Loss: %f, LR: %e\n", step, base_loss, lr);
-        if (f) fprintf(f, "%d,%f\n", step, base_loss);
+        printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
+        if (f) fprintf(f, "%d,%f\n", step, loss);
 
+        backward_pass(grads, batch_data, out, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout,
+                     d_hidden, d_temp, q_buf, k_buf, v_buf, s_buf);
+        
+        const double beta1 = 0.9;
+        const double beta2 = 0.999;
+        const double eps = 1e-8;
+        const double weight_decay = 0.001;
+        
+        size_t offset = 0;
+        Tensor* weights[] = {ws, wc, wout};
+        for (int w = 0; w < 3; w++) {
+            for (int i = 0; i < weights[w]->size; i++) {
+                double grad = grads[offset + i];
+                weights[w]->m[i] = beta1 * weights[w]->m[i] + (1 - beta1) * grad;
+                weights[w]->v[i] = beta2 * weights[w]->v[i] + (1 - beta2) * grad * grad;
+                
+                double m_hat = weights[w]->m[i] / (1.0 - pow(beta1, step + 1));
+                double v_hat = weights[w]->v[i] / (1.0 - pow(beta2, step + 1));
+                
+                weights[w]->data[i] = weights[w]->data[i] * (1.0 - lr * weight_decay) - 
+                                     lr * m_hat / (sqrt(v_hat) + eps);
+            }
+            offset += weights[w]->size;
+        }
+        
         for (int l = 0; l < N_LAYERS; l++) {
             Tensor* layer_weights[] = {&wq[l], &wk[l], &wv[l], &wo[l], &wf1[l], &wf2[l]};
             for (int w = 0; w < 6; w++) {
-                update_weights(layer_weights[w], base_loss, step, lr, batch_data, 
-                             out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
-                             q_buf, k_buf, v_buf, s_buf, mid_buf);
+                for (int i = 0; i < layer_weights[w]->size; i++) {
+                    double grad = grads[offset + i];
+                    layer_weights[w]->m[i] = beta1 * layer_weights[w]->m[i] + (1 - beta1) * grad;
+                    layer_weights[w]->v[i] = beta2 * layer_weights[w]->v[i] + (1 - beta2) * grad * grad;
+                    
+                    double m_hat = layer_weights[w]->m[i] / (1.0 - pow(beta1, step + 1));
+                    double v_hat = layer_weights[w]->v[i] / (1.0 - pow(beta2, step + 1));
+                    
+                    layer_weights[w]->data[i] = layer_weights[w]->data[i] * (1.0 - lr * weight_decay) - 
+                                               lr * m_hat / (sqrt(v_hat) + eps);
+                }
+                offset += layer_weights[w]->size;
             }
-        }
-        
-        for (int w = 0; w < 3; w++) {
-            update_weights(global_weights[w], base_loss, step, lr, batch_data, 
-                         out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, 
-                         q_buf, k_buf, v_buf, s_buf, mid_buf);
         }
     }
     
-    free(batch_data); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); fclose(f);
+    free(batch_data); free(grads); free(d_hidden); free(d_temp);
+    free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
+    if (f) fclose(f);
 }
 
 int main(int argc, char *argv[]) {
@@ -410,7 +501,7 @@ int main(int argc, char *argv[]) {
     Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
     Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
     
-    train_finite_diff(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
+    train_backprop(&ds, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out);
     
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
