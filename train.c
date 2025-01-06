@@ -196,11 +196,16 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
         }
 }
 
-void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tensor* wc) {
+void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
+                 const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
+                 const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
+                 const Tensor* wout,
+                 double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
+    
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x = in + b * INPUT_FEATURES;
-        double* y = out->data + b * D_MODEL;
+        const double* x = batch_data + b * INPUT_FEATURES;
+        double* y = hidden->data + b * D_MODEL;
         
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
@@ -209,14 +214,6 @@ void embed_sequence(Tensor* out, const double* in, const Tensor* ws, const Tenso
             y[d] = sum;
         }
     }
-}
-
-void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
-                 const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
-                 const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
-                 const Tensor* wout,
-                 double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
-    embed_sequence(hidden, batch_data, ws, wc);
 
     for (int l = 0; l < N_LAYERS; l++) {
         rmsnorm(temp, hidden);
@@ -227,6 +224,7 @@ void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor*
         for (int i = 0; i < hidden->size; i++) hidden->data[i] += temp->data[i];
     }
 
+    #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* h = hidden->data + b * D_MODEL;
         double* o = out->data + b * SEQUENCE_FEATURES;
