@@ -15,7 +15,7 @@
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
-#define TRAINING_STEPS 1000
+#define TRAINING_STEPS 10000
 
 typedef struct { double *data; int rows, cols; } Dataset;
 typedef struct { double *data; double *m, *v; int size; } Tensor;
