@@ -241,19 +241,19 @@ double compute_loss(const Tensor* out, const double* batch_data) {
     return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
 
+// dx = dy * scale - x * scale^3 * (sum(dy * x))/(2*d*ss)
+// where scale = 1/sqrt(mean(x^2) + eps)
 void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const double* norm_x, int size) {
     const double inv_d = 1.0 / D_MODEL;
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
-        const double* x_b = x + b * size, *y_b = norm_x + b * size, *d_y_b = d_y + b * size;
+        const double* x_b = x + b * size, *d_y_b = d_y + b * size;
         double* d_x_b = d_x + b * size;
-        double ss = 0.0;
+        double ss = 0.0, d_scale = 0.0;
         for (int i = 0; i < size; i++) ss += x_b[i] * x_b[i];
         double scale = 1.0 / sqrt(ss * inv_d + EPSILON);
-        double d_scale = 0.0;
         for (int i = 0; i < size; i++) d_scale += d_y_b[i] * x_b[i];
-        for (int i = 0; i < size; i++) 
-            d_x_b[i] = d_y_b[i] * scale - x_b[i] * scale * scale * scale * inv_d * d_scale / (2.0 * size);
+        for (int i = 0; i < size; i++) d_x_b[i] = d_y_b[i] * scale - x_b[i] * scale * scale * scale * inv_d * d_scale / (2.0 * size);
     }
 }
 
