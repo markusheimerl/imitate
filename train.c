@@ -292,39 +292,57 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
     const int hd = D_MODEL / N_HEAD;
     const double scale = 1.0 / sqrt(hd);
     
-    #pragma omp parallel for
-    for (int b = 0; b < BATCH_SIZE; b++) {
+    // Output projection backward
+    #pragma omp parallel for collapse(2)
+    for (int b = 0; b < BATCH_SIZE; b++)
         for (int t = 0; t < SEQ_LENGTH; t++) {
             double d_tmp[D_MODEL] = {0};
-            const double* d_o = d_out + (b * SEQ_LENGTH + t) * D_MODEL;
+            const int out_idx = (b * SEQ_LENGTH + t) * D_MODEL;
+            for (int d = 0; d < D_MODEL; d++)
+                for (int i = 0; i < D_MODEL; i++) d_tmp[i] += d_out[out_idx + d] * wo[d * D_MODEL + i], d_wo[d * D_MODEL + i] += d_out[out_idx + d] * v[out_idx + i];
             
-            for (int d = 0; d < D_MODEL; d++) {
-                for (int i = 0; i < D_MODEL; i++) {
-                    d_tmp[i] += d_o[d] * wo[d * D_MODEL + i];
-                    d_wo[d * D_MODEL + i] += d_o[d] * ((b * SEQ_LENGTH + t) * D_MODEL + i < 
-                        D_MODEL * BATCH_SIZE * SEQ_LENGTH ? v[(b * SEQ_LENGTH + t) * D_MODEL + i] : 0);
-                }
-            }
-            
+            // Attention + ALiBi backward
             for (int h = 0; h < N_HEAD; h++) {
-                for (int d = 0; d < hd; d++) {
-                    double d_v_sum = 0.0;
-                    for (int j = 0; j <= t; j++) {
-                        double d_score = d_tmp[h * hd + d] * v[(b * SEQ_LENGTH + j) * D_MODEL + h * hd + d] * scale;
-                        if (j < t) d_score *= (1.0 - s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j]);
-                        
-                        for (int i = 0; i < D_MODEL; i++) {
-                            d_wq[(h * hd + d) * D_MODEL + i] += d_score * x[(b * SEQ_LENGTH + t) * D_MODEL + i];
-                            d_wk[(h * hd + d) * D_MODEL + i] += d_score * x[(b * SEQ_LENGTH + j) * D_MODEL + i];
-                        }
-                        d_v_sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * 
-                            d_tmp[h * hd + d];
+                const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
+                const int s_off = (b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH;
+                
+                for (int j = 0; j <= t; j++) {
+                    double d_score = 0.0;
+                    for (int d = 0; d < hd; d++) {
+                        const int qt_idx = (b * SEQ_LENGTH + t) * D_MODEL + h * hd + d;
+                        const int qj_idx = (b * SEQ_LENGTH + j) * D_MODEL + h * hd + d;
+                        d_score += d_tmp[h * hd + d] * v[qj_idx];
+                        d_v[qj_idx] += d_tmp[h * hd + d] * s[s_off + j];
                     }
-                    for (int i = 0; i < D_MODEL; i++)
-                        d_wv[(h * hd + d) * D_MODEL + i] += d_v_sum * x[(b * SEQ_LENGTH + t) * D_MODEL + i];
+                    
+                    d_score = (d_score - slope * (t - j)) * scale;
+                    const double d_s = s[s_off + j] * ((j == t) ? (1 - s[s_off + j]) : -s[s_off + j]) * d_score;
+                    
+                    for (int d = 0; d < hd; d++) {
+                        const int qt_idx = (b * SEQ_LENGTH + t) * D_MODEL + h * hd + d;
+                        const int qj_idx = (b * SEQ_LENGTH + j) * D_MODEL + h * hd + d;
+                        d_q[qt_idx] += d_s * k[qj_idx];
+                        d_k[qj_idx] += d_s * q[qt_idx];
+                    }
                 }
             }
         }
+
+    // QKV projection backward
+    #pragma omp parallel for
+    for (int bst = 0; bst < BATCH_SIZE * SEQ_LENGTH; bst++) {
+        const int x_idx = bst * D_MODEL;
+        for (int h = 0; h < N_HEAD; h++)
+            for (int d = 0; d < hd; d++) {
+                const int w_idx = (h * hd + d) * D_MODEL;
+                const int qkv_idx = x_idx + h * hd + d;
+                for (int i = 0; i < D_MODEL; i++) {
+                    d_wq[w_idx + i] += d_q[qkv_idx] * x[x_idx + i];
+                    d_wk[w_idx + i] += d_k[qkv_idx] * x[x_idx + i];
+                    d_wv[w_idx + i] += d_v[qkv_idx] * x[x_idx + i];
+                    d_x[x_idx + i] += d_q[qkv_idx] * wq[w_idx + i] + d_k[qkv_idx] * wk[w_idx + i] + d_v[qkv_idx] * wv[w_idx + i];
+                }
+            }
     }
 }
 
