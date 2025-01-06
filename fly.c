@@ -15,8 +15,8 @@
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define BATCH_SIZE 2
 #define SEQ_LENGTH 32
-#define D_MODEL 32
-#define N_HEAD 2
+#define D_MODEL 256
+#define N_HEAD 4
 #define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
