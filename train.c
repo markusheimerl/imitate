@@ -229,15 +229,14 @@ void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor*
     }
 }
 
+// MSE Loss = mean((pred - target)^2) over batch, sequence, and features
+// target is shifted by 1 in sequence dimension (predicting next vector in sequence)
 double compute_loss(const Tensor* out, const double* batch_data) {
     double loss = 0.0;
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* pred = out->data + b * SEQUENCE_FEATURES;
         const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
-        for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-            double diff = pred[f] - target[f];
-            loss += diff * diff;
-        }
+        for (int f = 0; f < SEQUENCE_FEATURES; f++) loss += (pred[f] - target[f]) * (pred[f] - target[f]);
     }
     return loss / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
 }
