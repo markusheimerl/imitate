@@ -352,57 +352,48 @@ void backward_pass(double* grads, const double* batch_data, const Tensor* out, c
                   double* d_hidden, double* d_temp, double* q_buf, double* k_buf, double* v_buf, 
                   double* s_buf, double* mid_buf, double* d_mid) {
     
-    memset(grads, 0, (ws->size + wc->size + wout->size + N_LAYERS * (wq[0].size + wk[0].size + 
-           wv[0].size + wo[0].size + wf1[0].size + wf2[0].size)) * sizeof(double));
+    const size_t layer_size = wq[0].size + wk[0].size + wv[0].size + wo[0].size + wf1[0].size + wf2[0].size;
+    memset(grads, 0, (ws->size + wc->size + wout->size + N_LAYERS * layer_size) * sizeof(double));
     memset(d_hidden, 0, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
     
+    // Output layer backward
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* pred = out->data + b * SEQUENCE_FEATURES;
-        const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + 
-                             (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
+        const double* target = batch_data + ((b / SEQ_LENGTH) * (SEQ_LENGTH + 1) + (b % SEQ_LENGTH + 1)) * INPUT_FEATURES + CONDITION_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) {
-            double d_out = 2.0 * (pred[f] - target[f]) / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
-            double* w_grad = grads + ws->size + wc->size + f * D_MODEL;
-            for (int d = 0; d < D_MODEL; d++) {
-                w_grad[d] += d_out * hidden->data[b * D_MODEL + d];
-                d_hidden[b * D_MODEL + d] += d_out * wout->data[f * D_MODEL + d];
-            }
+            const double d_out = 2.0 * (pred[f] - target[f]) / (BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES);
+            const int w_off = ws->size + wc->size + f * D_MODEL;
+            for (int d = 0; d < D_MODEL; d++) grads[w_off + d] += d_out * hidden->data[b * D_MODEL + d], d_hidden[b * D_MODEL + d] += d_out * wout->data[f * D_MODEL + d];
         }
     }
     
+    // Transformer layers backward
     double* layer_grads = grads + ws->size + wc->size + wout->size;
     for (int l = N_LAYERS - 1; l >= 0; l--) {
+        const size_t l_off = l * layer_size;
         memcpy(d_temp, d_hidden, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-        feedforward_backward(d_hidden, layer_grads + l * (wf1[0].size + wf2[0].size),
-                           layer_grads + l * (wf1[0].size + wf2[0].size) + wf1[0].size,
-                           d_temp, hidden->data, wf1[l].data, wf2[l].data, mid_buf, d_mid);
-        
+        feedforward_backward(d_hidden, layer_grads + l_off, layer_grads + l_off + wf1[0].size, d_temp, hidden->data, wf1[l].data, wf2[l].data, mid_buf, d_mid);
         rmsnorm_backward(d_temp, d_hidden, hidden->data, hidden->data, D_MODEL);
-        
         memcpy(d_hidden, d_temp, BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
         attention_backward(q_buf, k_buf, v_buf,
-                         layer_grads + l * (wq[0].size + wk[0].size + wv[0].size + wo[0].size),
-                         layer_grads + l * (wq[0].size + wk[0].size + wv[0].size + wo[0].size) + wq[0].size,
-                         layer_grads + l * (wq[0].size + wk[0].size + wv[0].size + wo[0].size) + 
-                             wq[0].size + wk[0].size,
-                         layer_grads + l * (wq[0].size + wk[0].size + wv[0].size + wo[0].size) + 
-                             wq[0].size + wk[0].size + wv[0].size,
+                         layer_grads + l_off + wf1[0].size + wf2[0].size,
+                         layer_grads + l_off + wf1[0].size + wf2[0].size + wq[0].size,
+                         layer_grads + l_off + wf1[0].size + wf2[0].size + wq[0].size + wk[0].size,
+                         layer_grads + l_off + wf1[0].size + wf2[0].size + wq[0].size + wk[0].size + wv[0].size,
                          d_temp, d_hidden, q_buf, k_buf, v_buf, s_buf, hidden->data,
                          wq[l].data, wk[l].data, wv[l].data, wo[l].data);
-        
         rmsnorm_backward(d_hidden, d_temp, hidden->data, hidden->data, D_MODEL);
     }
     
+    // Input embedding backward
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = batch_data + b * INPUT_FEATURES;
-        double* w_grad_s = grads, *w_grad_c = grads + ws->size;
         for (int d = 0; d < D_MODEL; d++) {
-            for (int f = 0; f < SEQUENCE_FEATURES; f++)
-                w_grad_s[f * D_MODEL + d] += d_hidden[b * D_MODEL + d] * x[f + CONDITION_FEATURES];
-            for (int f = 0; f < CONDITION_FEATURES; f++)
-                w_grad_c[f * D_MODEL + d] += d_hidden[b * D_MODEL + d] * x[f];
+            const double d_h = d_hidden[b * D_MODEL + d];
+            for (int f = 0; f < SEQUENCE_FEATURES; f++) grads[f * D_MODEL + d] += d_h * x[f + CONDITION_FEATURES];
+            for (int f = 0; f < CONDITION_FEATURES; f++) grads[ws->size + f * D_MODEL + d] += d_h * x[f];
         }
     }
 }
