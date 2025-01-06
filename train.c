@@ -8,7 +8,6 @@
 
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
-#define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define SEQ_LENGTH 64
 #define D_MODEL 64
 #define N_HEAD 4
@@ -21,14 +20,14 @@ typedef struct { double *data; int rows, cols; } Dataset;
 double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
 
 Dataset load_csv(const char* filename) {
-    Dataset ds = {malloc(1000 * INPUT_FEATURES * sizeof(double)), 0, INPUT_FEATURES};
+    Dataset ds = {malloc(1000 * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double)), 0, (CONDITION_FEATURES + SEQUENCE_FEATURES)};
     char line[1024]; FILE* f = fopen(filename, "r");
     if (!f || !fgets(line, 1024, f)) { printf("File error\n"); exit(1); }
     
     while (fgets(line, 1024, f)) {
-        if (ds.rows >= 1000) ds.data = realloc(ds.data, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
+        if (ds.rows >= 1000) ds.data = realloc(ds.data, (ds.rows*2) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
         char* tok = strtok(line, ",");
-        for (int i = 0; i < INPUT_FEATURES && tok; i++, tok = strtok(NULL, ",")) ds.data[ds.rows * INPUT_FEATURES + i] = atof(tok);
+        for (int i = 0; i < (CONDITION_FEATURES + SEQUENCE_FEATURES) && tok; i++, tok = strtok(NULL, ",")) ds.data[ds.rows * (CONDITION_FEATURES + SEQUENCE_FEATURES) + i] = atof(tok);
         ds.rows++;
     }
     fclose(f);
@@ -192,7 +191,7 @@ void multihead_attention(double *out, const double *in, const double *wq, const 
 void forward_pass(const double* seq_data, double* out, double* hidden, double* temp, const double* ws, const double* wc, const double* wq, const double* wk, const double* wv, const double* wo, const double* wf1, const double* wf2, const double* wout, double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
-        const double* x = seq_data + s * INPUT_FEATURES;
+        const double* x = seq_data + s * (CONDITION_FEATURES + SEQUENCE_FEATURES);
         double* y = hidden + s * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
@@ -234,7 +233,7 @@ double compute_loss(const double* out, const double* seq_data) {
     double loss = 0.0;
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* pred = out + s * SEQUENCE_FEATURES;
-        const double* target = seq_data + (s + 1) * INPUT_FEATURES + CONDITION_FEATURES;
+        const double* target = seq_data + (s + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + CONDITION_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) loss += (pred[f] - target[f]) * (pred[f] - target[f]);
     }
     return loss / (SEQ_LENGTH * SEQUENCE_FEATURES);
@@ -371,7 +370,7 @@ void backward_pass(double* grads, const double* seq_data, const double* out, con
     
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* pred = out + s * SEQUENCE_FEATURES;
-        const double* target = seq_data + (s + 1) * INPUT_FEATURES + CONDITION_FEATURES;
+        const double* target = seq_data + (s + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + CONDITION_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) {
             const double d_out = 2.0 * (pred[f] - target[f]) / (SEQ_LENGTH * SEQUENCE_FEATURES);
             for (int d = 0; d < D_MODEL; d++) {
@@ -397,7 +396,7 @@ void backward_pass(double* grads, const double* seq_data, const double* out, con
     }
     
     for (int s = 0; s < SEQ_LENGTH; s++) {
-        const double* x = seq_data + s * INPUT_FEATURES;
+        const double* x = seq_data + s * (CONDITION_FEATURES + SEQUENCE_FEATURES);
         const double* d_h = d_hidden + s * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
             for (int f = 0; f < SEQUENCE_FEATURES; f++) grads[f * D_MODEL + d] += d_h[d] * x[f + CONDITION_FEATURES];
@@ -422,7 +421,7 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
     if (f) fprintf(f, "step,loss\n");
 
     const size_t total_params = (SEQUENCE_FEATURES + CONDITION_FEATURES + SEQUENCE_FEATURES) * D_MODEL + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
-    double *seq_data = malloc((SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
+    double *seq_data = malloc((SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
     double *grads = malloc(total_params * sizeof(double));
     double *d_hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *d_temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -437,7 +436,7 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
 
     for (int step = 0; step < TRAINING_STEPS; step++) {
         int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1);
-        memcpy(seq_data, ds->data + seq_start * INPUT_FEATURES, (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
+        memcpy(seq_data, ds->data + seq_start * (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
 
         forward_pass(seq_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         double loss = compute_loss(out, seq_data);
