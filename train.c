@@ -319,8 +319,7 @@ void attention_backward(double* d_q, double* d_k, double* d_v, double* d_wq, dou
                         
                         for (int i = 0; i < D_MODEL; i++) {
                             d_wq[(h * hd + d) * D_MODEL + i] += d_score * x[(b * SEQ_LENGTH + t) * D_MODEL + i];
-                            if (j > 0) d_wk[(h * hd + d) * D_MODEL + i] += d_score * 
-                                x[(b * SEQ_LENGTH + j - 1) * D_MODEL + i];
+                            d_wk[(h * hd + d) * D_MODEL + i] += d_score * x[(b * SEQ_LENGTH + j) * D_MODEL + i];
                         }
                         d_v_sum += s[(b * N_HEAD * SEQ_LENGTH + h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * 
                             d_tmp[h * hd + d];
