@@ -185,6 +185,11 @@ void multihead_attention(Tensor *out, const Tensor *in, const Tensor *wq, const 
         }
 }
 
+// 1. Input embedding: sequence_features * Ws + condition_features * Wc
+// 2. N transformer layers of:
+//    x = x + attention(rmsnorm(x))
+//    x = x + ffn(rmsnorm(x))
+// 3. Output projection to sequence_features
 void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor* temp,
                  const Tensor* ws, const Tensor* wc, const Tensor* wq, const Tensor* wk, 
                  const Tensor* wv, const Tensor* wo, const Tensor* wf1, const Tensor* wf2, 
@@ -195,7 +200,6 @@ void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor*
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x = batch_data + b * INPUT_FEATURES;
         double* y = hidden->data + b * D_MODEL;
-        
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
             for (int f = 0; f < SEQUENCE_FEATURES; f++) sum += x[f + CONDITION_FEATURES] * ws->data[f * D_MODEL + d];
@@ -219,8 +223,7 @@ void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor*
         double* o = out->data + b * SEQUENCE_FEATURES;
         for (int f = 0; f < SEQUENCE_FEATURES; f++) {
             double sum = 0.0;
-            const double* w = wout->data + f * D_MODEL;
-            for (int d = 0; d < D_MODEL; d++) sum += h[d] * w[d];
+            for (int d = 0; d < D_MODEL; d++) sum += h[d] * wout->data[f * D_MODEL + d];
             o[f] = sum;
         }
     }
