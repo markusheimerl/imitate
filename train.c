@@ -24,23 +24,16 @@ typedef struct { double *data; double *m, *v; int size; } Tensor;
 double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
 
 Dataset load_csv(const char* filename) {
-    Dataset ds = {NULL, 0, INPUT_FEATURES};
-    char line[1024];
-    double* tmp = malloc(1000 * INPUT_FEATURES * sizeof(double));
-    FILE* f = fopen(filename, "r");
+    Dataset ds = {malloc(1000 * INPUT_FEATURES * sizeof(double)), 0, INPUT_FEATURES};
+    char line[1024]; FILE* f = fopen(filename, "r");
     if (!f || !fgets(line, 1024, f)) { printf("File error\n"); exit(1); }
     
     while (fgets(line, 1024, f)) {
-        if (ds.rows >= 1000) tmp = realloc(tmp, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
+        if (ds.rows >= 1000) ds.data = realloc(ds.data, (ds.rows*2) * INPUT_FEATURES * sizeof(double));
         char* tok = strtok(line, ",");
-        for (int i = 0; i < INPUT_FEATURES && tok; i++, tok = strtok(NULL, ",")) {
-            double val = atof(tok);
-            tmp[ds.rows * INPUT_FEATURES + i] = val;
-        }
+        for (int i = 0; i < INPUT_FEATURES && tok; i++, tok = strtok(NULL, ",")) ds.data[ds.rows * INPUT_FEATURES + i] = atof(tok);
         ds.rows++;
     }
-    
-    ds.data = tmp;
     fclose(f);
     return ds;
 }
