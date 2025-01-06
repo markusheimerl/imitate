@@ -34,7 +34,12 @@ Dataset load_csv(const char* filename) {
     return ds;
 }
 
-void save_weights(const char* filename, const double* ws, const double* wc, const double* wq, const double* wk, const double* wv, const double* wo, const double* wf1, const double* wf2, const double* wout) {
+void save_weights(const double* ws, const double* wc, const double* wq, const double* wk, const double* wv, const double* wo, const double* wf1, const double* wf2, const double* wout) {
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char filename[100]; 
+    sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    
     FILE* f = fopen(filename, "wb");
     if (!f) return;
     
@@ -53,6 +58,7 @@ void save_weights(const char* filename, const double* ws, const double* wc, cons
     }
     fwrite(wout, sizeof(double), D_MODEL * SEQUENCE_FEATURES, f);
     fclose(f);
+    printf("Saved weights to: %s\n", filename);
 }
 
 int load_weights(const char* filename, double* ws, double* wc, double* wq, double* wk, double* wv, double* wo, double* wf1, double* wf2, double* wout) {
@@ -420,9 +426,8 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
     FILE* f = fopen(loss_name, "w");
     if (f) fprintf(f, "step,loss\n");
 
-    const size_t total_params = (SEQUENCE_FEATURES + CONDITION_FEATURES + SEQUENCE_FEATURES) * D_MODEL + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
     double *seq_data = malloc((SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-    double *grads = malloc(total_params * sizeof(double));
+    double *grads = malloc(((SEQUENCE_FEATURES + CONDITION_FEATURES + SEQUENCE_FEATURES) * D_MODEL + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL)) * sizeof(double));
     double *d_hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *d_temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *q_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -435,16 +440,12 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
     const double beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.01;
 
     for (int step = 0; step < TRAINING_STEPS; step++) {
-        int seq_start = rand() % (ds->rows - SEQ_LENGTH - 1);
-        memcpy(seq_data, ds->data + seq_start * (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-
+        memcpy(seq_data, ds->data + (rand() % (ds->rows - SEQ_LENGTH - 1)) * (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
         forward_pass(seq_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
         double loss = compute_loss(out, seq_data);
         
-        if (step > 0) {
-            lr *= (loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0;
-            lr = fmax(1e-6, fmin(1e-3, lr));
-        }
+        if (step > 0) lr *= (loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0;
+        lr = fmax(1e-6, fmin(1e-3, lr));
         prev_loss = loss;
         
         printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
@@ -454,9 +455,7 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
         
         size_t offset = 0;
         const size_t sizes[] = {SEQUENCE_FEATURES * D_MODEL, CONDITION_FEATURES * D_MODEL, SEQUENCE_FEATURES * D_MODEL};
-        double *weights[] = {ws, wc, wout};
-        double *m[] = {ws_m, wc_m, wout_m};
-        double *v[] = {ws_v, wc_v, wout_v};
+        double *weights[] = {ws, wc, wout}, *m[] = {ws_m, wc_m, wout_m}, *v[] = {ws_v, wc_v, wout_v};
         
         for (int w = 0; w < 3; w++) {
             for (int i = 0; i < sizes[w]; i++) {
@@ -498,25 +497,16 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
 
 int main(int argc, char *argv[]) {
     if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) { printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]); return 1; }
-    char *csv_file = argv[1], *weights_file = argc > 2 ? (strstr(argv[2], ".bin") ? argv[2] : NULL) : NULL;
+    char *weights_file = argc > 2 ? (strstr(argv[2], ".bin") ? argv[2] : NULL) : NULL;
     if (argc > 2 && !weights_file) { printf("Error: Invalid file '%s'\n", argv[2]); return 1; }
 
     srand(time(NULL));
-    Dataset ds = load_csv(csv_file);
+    Dataset ds = load_csv(argv[1]);
     const double ws = sqrt(2.0 / D_MODEL);
     
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
-    double *W_seq_m = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
-    double *W_seq_v = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
-    
     double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
-    double *W_cond_m = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
-    double *W_cond_v = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
-    
     double *W_out = malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double));
-    double *W_out_m = calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double));
-    double *W_out_v = calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double));
-    
     double *W_q = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
     double *W_k = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
     double *W_v = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
@@ -524,6 +514,9 @@ int main(int argc, char *argv[]) {
     double *W_ff1 = malloc(N_LAYERS * D_MODEL * (D_MODEL * 4) * sizeof(double));
     double *W_ff2 = malloc(N_LAYERS * (D_MODEL * 4) * D_MODEL * sizeof(double));
     
+    double *W_seq_m = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
+    double *W_cond_m = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
+    double *W_out_m = calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double));
     double *W_q_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
     double *W_k_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
     double *W_v_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
@@ -531,6 +524,9 @@ int main(int argc, char *argv[]) {
     double *W_ff1_m = calloc(N_LAYERS * D_MODEL * (D_MODEL * 4), sizeof(double));
     double *W_ff2_m = calloc(N_LAYERS * (D_MODEL * 4) * D_MODEL, sizeof(double));
     
+    double *W_seq_v = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
+    double *W_cond_v = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
+    double *W_out_v = calloc(D_MODEL * SEQUENCE_FEATURES, sizeof(double));
     double *W_q_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
     double *W_k_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
     double *W_v_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
@@ -542,9 +538,7 @@ int main(int argc, char *argv[]) {
     double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *output = malloc(SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double));
 
-    if (weights_file && load_weights(weights_file, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) {
-        printf("Successfully loaded weights\n");
-    } else {
+    if (!weights_file || !load_weights(weights_file, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) {
         if (weights_file) printf("Failed to load weights, initializing randomly\n");
         for (int i = 0; i < SEQUENCE_FEATURES * D_MODEL; i++) W_seq[i] = randn() * ws;
         for (int i = 0; i < CONDITION_FEATURES * D_MODEL; i++) W_cond[i] = randn() * ws;
@@ -552,14 +546,10 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < N_LAYERS * D_MODEL * D_MODEL; i++) W_q[i] = W_k[i] = W_v[i] = W_o[i] = randn() * ws;
         for (int i = 0; i < N_LAYERS * D_MODEL * (D_MODEL * 4); i++) W_ff1[i] = randn() * ws;
         for (int i = 0; i < N_LAYERS * (D_MODEL * 4) * D_MODEL; i++) W_ff2[i] = randn() * ws;
-    }
+    } else printf("Successfully loaded weights\n");
 
     train_backprop(&ds, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, W_seq_m, W_seq_v, W_cond_m, W_cond_v, W_q_m, W_q_v, W_k_m, W_k_v, W_v_m, W_v_v, W_o_m, W_o_v, W_ff1_m, W_ff1_v, W_ff2_m, W_ff2_v, W_out_m, W_out_v);
-    
-    time_t t = time(NULL); struct tm tm = *localtime(&t);
-    char filename[100]; sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    save_weights(filename, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
-    printf("Saved weights to: %s\n", filename);
+    save_weights(W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
 
     free(ds.data); free(hidden); free(temp); free(output);
     free(W_seq); free(W_seq_m); free(W_seq_v);
