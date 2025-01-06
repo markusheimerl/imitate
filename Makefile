@@ -22,10 +22,10 @@ run: $(TRAIN_TARGET) $(FLY_TARGET)
 	@python -c 'import matplotlib.pyplot as plt, pandas as pd, os; \
 	f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]; \
 	ts = f.replace("_loss.csv", ""); \
-	df = pd.read_csv(f, names=["step", "loss"]); \
+	df = pd.read_csv(f); \
 	plt.figure(figsize=(10, 6)); \
 	plt.plot(df["step"], df["loss"], "b", alpha=0.5, label="Raw"); \
-	plt.plot(df["step"], df["loss"].rolling(10, center=True).mean(), "r", lw=2, label="Average"); \
+	plt.plot(df["step"], df["loss"].rolling(10, min_periods=1, center=True).mean(), "r", lw=2, label="Average"); \
 	plt.title("Training Loss"); plt.xlabel("Step"); plt.ylabel("Loss"); \
 	plt.yscale("log"); plt.grid(True); plt.legend(); \
 	plt.savefig(f"{ts}_loss.png");'
