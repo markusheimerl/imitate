@@ -62,26 +62,21 @@ int load_weights(const char* filename, Tensor* ws, Tensor* wc,
                 Tensor* wf1, Tensor* wf2, Tensor* wout) {
     FILE* f = fopen(filename, "rb");
     if (!f) return 0;
-
-    size_t read = fread(ws->data, sizeof(double), ws->size, f) +
-                  fread(wc->data, sizeof(double), wc->size, f);
+    
+    size_t read = fread(ws->data, sizeof(double), ws->size, f), expected = ws->size + wc->size + wout->size;
+    read += fread(wc->data, sizeof(double), wc->size, f);
     
     for (int l = 0; l < N_LAYERS; l++)
-        read += fread(wq[l].data, sizeof(double), wq[l].size, f) +
-                fread(wk[l].data, sizeof(double), wk[l].size, f) +
-                fread(wv[l].data, sizeof(double), wv[l].size, f) +
-                fread(wo[l].data, sizeof(double), wo[l].size, f) +
-                fread(wf1[l].data, sizeof(double), wf1[l].size, f) +
-                fread(wf2[l].data, sizeof(double), wf2[l].size, f);
+        read += fread(wq[l].data, sizeof(double), wq[l].size, f),
+        read += fread(wk[l].data, sizeof(double), wk[l].size, f),
+        read += fread(wv[l].data, sizeof(double), wv[l].size, f),
+        read += fread(wo[l].data, sizeof(double), wo[l].size, f),
+        read += fread(wf1[l].data, sizeof(double), wf1[l].size, f),
+        read += fread(wf2[l].data, sizeof(double), wf2[l].size, f),
+        expected += wq[l].size + wk[l].size + wv[l].size + wo[l].size + wf1[l].size + wf2[l].size;
     
     read += fread(wout->data, sizeof(double), wout->size, f);
     fclose(f);
-
-    size_t expected = ws->size + wc->size + wout->size;
-    for (int l = 0; l < N_LAYERS; l++)
-        expected += wq[l].size + wk[l].size + wv[l].size + 
-                   wo[l].size + wf1[l].size + wf2[l].size;
-
     return read == expected;
 }
 
