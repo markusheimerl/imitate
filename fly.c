@@ -15,9 +15,9 @@
 #define INPUT_FEATURES (CONDITION_FEATURES + SEQUENCE_FEATURES)
 #define BATCH_SIZE 4
 #define SEQ_LENGTH 32
-#define D_MODEL 256
+#define D_MODEL 32
 #define N_HEAD 4
-#define N_LAYERS 4
+#define N_LAYERS 2
 #define EPSILON 1e-4
 #define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 10000
@@ -195,6 +195,7 @@ void forward_pass(const double* batch_data, Tensor* out, Tensor* hidden, Tensor*
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
+#define VEC3_MAG2(v) ((v)[0]*(v)[0] + (v)[1]*(v)[1] + (v)[2]*(v)[2])
 
 int main(int argc, char *argv[]) {
     if (argc != 2) { printf("Usage: %s <weights_file>\n", argv[0]); return 1; }
@@ -221,7 +222,7 @@ int main(int argc, char *argv[]) {
         printf("Failed to load weights from %s\n", argv[1]); return 1;
     }
 
-    // Allocate buffers for transformer operations
+    // Allocate transformer buffers
     double *transformer_input = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
     Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
     Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
@@ -237,83 +238,72 @@ int main(int argc, char *argv[]) {
     uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
     
     time_t t = time(NULL);
-    struct tm *tm = localtime(&t);
-    char gif_name[32];
-    sprintf(gif_name, "%d-%d-%d_%d-%d-%d_flight.gif", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
-    ge_GIF *gif = ge_new_gif(gif_name, WIDTH, HEIGHT, 4, -1, 0);
+    struct tm tm = *localtime(&t);
+    char filename[100];
+    sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
     transform_mesh(meshes[1], (double[3]){0.0, -0.5, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
 
-    // Set initial target position and orientation
+    // Initialize simulation
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
-    for (int i = 0; i < 3; i++) linear_position_d_W[i] = (double)rand() / RAND_MAX * 10 - (i != 1 ? 5 : 0);
-    yaw_d = (double)rand() / RAND_MAX * 2 * M_PI;
-
-    // Initialize stable hover
-    for (int i = 0; i < 4; i++) {
-        omega[i] = OMEGA_STABLE;
-        omega_next[i] = OMEGA_STABLE;
-    }
-
-    // Main simulation loop
-    int history_len = 0;
+    int history_len = 0, target_count = 0;
     double history[SEQ_LENGTH][INPUT_FEATURES] = {0};
-    int target_count = 0;
+    for (int i = 0; i < 4; i++) omega[i] = omega_next[i] = OMEGA_STABLE;
 
-    while (target_count < 50) {
-        // Check for stability and target reach
-        bool stable = true, at_target = true;
-        
-        for (int i = 0; i < 3; i++) {
-            if (fabs(angular_velocity_B[i]) > 0.005) stable = false;
-            if (fabs(linear_position_W[i] - linear_position_d_W[i]) > 0.1) at_target = false;
-            if (fabs(linear_position_W[i]) > 10.0 || fabs(linear_velocity_W[i]) > 100.0 || fabs(angular_velocity_B[i]) > 100.0) {
-                printf("Simulation diverged.\n"); return 1;
+    while (target_count < 2) {
+        if (history_len == SEQ_LENGTH) {
+            bool velocity_achieved = true;
+            for (int i = 0; i < 3; i++) {
+                if (fabs(angular_velocity_B[i]) > 0.01 || fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.1) {
+                    velocity_achieved = false;
+                    break;
+                }
+            }
+            double current_yaw = fmod(atan2(R_W_B[2], R_W_B[8]) + M_PI, 2*M_PI) - M_PI;
+            double desired_yaw = fmod(yaw_d + M_PI, 2*M_PI) - M_PI;
+            if (fabs(current_yaw - desired_yaw) > 0.1) velocity_achieved = false;
+
+            if (velocity_achieved) {
+                for (int i = 0; i < 3; i++) linear_velocity_d_B[i] = (double)rand() / RAND_MAX * 1.0 - 0.5;
+                linear_velocity_d_B[1] *= 0.2;
+                yaw_d = (double)rand() / RAND_MAX * 2 * M_PI;
+                target_count++;
+                printf("\n=== New Target %d ===\nDesired velocity (body): [%.3f, %.3f, %.3f], yaw: %.3f\n", target_count, linear_velocity_d_B[0], linear_velocity_d_B[1], linear_velocity_d_B[2], yaw_d);
             }
         }
-        
-        if (stable && at_target) {
-            // Set new random target
-            for (int i = 0; i < 3; i++) linear_position_d_W[i] = (double)rand() / RAND_MAX * 10 - (i != 1 ? 5 : 0);
-            yaw_d = (double)rand() / RAND_MAX * 2 * M_PI;
-            target_count++;
-            printf("New target %d: [%.3f, %.3f, %.3f], yaw: %.3f\n", target_count, 
-                   linear_position_d_W[0], linear_position_d_W[1], linear_position_d_W[2], yaw_d);
+
+        if (VEC3_MAG2(linear_position_W) > 1000.0*1000.0 || VEC3_MAG2(linear_velocity_W) > 100.0*100.0 || VEC3_MAG2(angular_velocity_B) > 100.0*100.0) {
+            printf("Simulation diverged.\n"); return 1;
         }
 
-        // Physics update
         update_drone_physics(DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
-        // Control update
         if (t_control <= t_physics) {
-            // Update history
-            if (history_len == SEQ_LENGTH) {
-                memmove(history[0], history[1], (SEQ_LENGTH-1) * INPUT_FEATURES * sizeof(double));
-            } else {
-                history_len++;
-            }
+            if (history_len == SEQ_LENGTH) memmove(history[0], history[1], (SEQ_LENGTH-1) * INPUT_FEATURES * sizeof(double));
+            else history_len++;
             
             double *current = history[history_len-1];
-            memcpy(current, linear_position_d_W, 3 * sizeof(double));
+            memcpy(current, linear_velocity_d_B, 3 * sizeof(double));
             current[3] = yaw_d;
             memcpy(current + 4, angular_velocity_B, 3 * sizeof(double));
             memcpy(current + 7, linear_acceleration_B, 3 * sizeof(double));
             memcpy(current + 10, omega, 4 * sizeof(double));
 
-            // Run transformer if we have enough history
             if (history_len == SEQ_LENGTH) {
                 memcpy(transformer_input, history, SEQ_LENGTH * INPUT_FEATURES * sizeof(double));
                 forward_pass(transformer_input, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
-                
-                double *predictions = &output.data[(SEQ_LENGTH - 1) * SEQUENCE_FEATURES + 6];
-                for (int i = 0; i < 4; i++) omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, predictions[i]));
+                memcpy(omega_next, &output.data[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
+                for (int i = 0; i < 4; i++) omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
             }
             
             update_rotor_speeds();
             t_control += DT_CONTROL;
+
+            printf("\rPos: [%5.2f, %5.2f, %5.2f] Vel (body): [%5.2f, %5.2f, %5.2f] Rotors: [%5.2f, %5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
+            fflush(stdout);
         }
 
-        // Rendering update
         if (t_render <= t_physics) {
             transform_mesh(meshes[0], linear_position_W, 0.5, R_W_B);
             memset(frame_buffer, 0, WIDTH * HEIGHT * 3);
@@ -322,19 +312,12 @@ int main(int argc, char *argv[]) {
             ge_add_frame(gif, frame_buffer, 6);
             t_render += DT_RENDER;
         }
-
-        printf("Position: [%.3f, %.3f, %.3f]\nTarget: [%.3f, %.3f, %.3f]\nRotor speeds: [%.1f, %.1f, %.1f, %.1f]\n---\n",
-               linear_position_W[0], linear_position_W[1], linear_position_W[2],
-               linear_position_d_W[0], linear_position_d_W[1], linear_position_d_W[2],
-               omega[0], omega[1], omega[2], omega[3]);
     }
 
-    // Cleanup
     free(frame_buffer); free_meshes(meshes, 2); ge_close_gif(gif);
     free(transformer_input); free(hidden.data); free(temp.data); free(output.data);
     free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
     free(W_seq.data); free(W_cond.data); free(W_out.data);
-    
     for (int l = 0; l < N_LAYERS; l++) {
         free(W_q[l].data); free(W_k[l].data); free(W_v[l].data); free(W_o[l].data);
         free(W_ff1[l].data); free(W_ff2[l].data);
