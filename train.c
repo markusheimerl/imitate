@@ -257,9 +257,13 @@ void rmsnorm_backward(double* d_x, const double* d_y, const double* x, const dou
     }
 }
 
+// 1. dy -> dm = dy * W2^T
+// 2. dW2 = dy^T * m
+// 3. dx = dgelu(W1*x) * W1^T
+// 4. dW1 = dgelu(W1*x) * x^T
+// where dgelu(x) = 0.5 * (1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)) + x*sqrt(2/pi)*(1-tanh^2)*(1 + 0.134145*x^2))
 void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double* d_y, const double* x,
                          const double* w1, const double* w2, double* mid, double* d_mid) {
-    const double sqrt_2_pi = sqrt(2.0/M_PI);
     #pragma omp parallel for
     for (int b = 0; b < BATCH_SIZE * SEQ_LENGTH; b++) {
         const double* x_b = x + b * D_MODEL, *d_y_b = d_y + b * D_MODEL;
@@ -267,23 +271,16 @@ void feedforward_backward(double* d_x, double* d_w1, double* d_w2, const double*
         
         for (int h = 0; h < D_MODEL * 4; h++) {
             d_m_b[h] = 0.0;
-            for (int d = 0; d < D_MODEL; d++) {
-                d_m_b[h] += d_y_b[d] * w2[d * (D_MODEL * 4) + h];
-                d_w2[d * (D_MODEL * 4) + h] += d_y_b[d] * m_b[h];
-            }
+            for (int d = 0; d < D_MODEL; d++) d_m_b[h] += d_y_b[d] * w2[d * (D_MODEL * 4) + h], d_w2[d * (D_MODEL * 4) + h] += d_y_b[d] * m_b[h];
         }
         
         for (int h = 0; h < D_MODEL * 4; h++) {
             double sum = 0.0;
             for (int d = 0; d < D_MODEL; d++) sum += x_b[d] * w1[h * D_MODEL + d];
             double t = sum + 0.044715 * sum * sum * sum;
-            double tanh_t = tanh(sqrt_2_pi * t);
-            double d_gelu = d_m_b[h] * 0.5 * (1.0 + tanh_t + sum * sqrt_2_pi * (1.0 - tanh_t * tanh_t) * 
-                                             (1.0 + 0.134145 * sum * sum));
-            for (int d = 0; d < D_MODEL; d++) {
-                d_w1[h * D_MODEL + d] += d_gelu * x_b[d];
-                d_x_b[d] += d_gelu * w1[h * D_MODEL + d];
-            }
+            double tanh_t = tanh(sqrt(2.0/M_PI) * t);
+            double d_gelu = d_m_b[h] * 0.5 * (1.0 + tanh_t + sum * sqrt(2.0/M_PI) * (1.0 - tanh_t * tanh_t) * (1.0 + 0.134145 * sum * sum));
+            for (int d = 0; d < D_MODEL; d++) d_w1[h * D_MODEL + d] += d_gelu * x_b[d], d_x_b[d] += d_gelu * w1[h * D_MODEL + d];
         }
     }
 }
