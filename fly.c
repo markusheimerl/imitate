@@ -5,6 +5,9 @@
 #include <time.h>
 #include <stdbool.h>
 #include <omp.h>
+#include "gif.h"
+#include "rasterizer.h"
+#include "quad.h"
 
 #define CONDITION_FEATURES 4
 #define SEQUENCE_FEATURES 10
@@ -240,63 +243,54 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
 
 int main(int argc, char *argv[]) {
     if (argc != 2) { printf("Usage: %s <weights_file>\n", argv[0]); return 1; }
-
     srand(time(NULL));
 
     // Initialize transformer weights
-    Tensor W_seq = {malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double)), NULL, NULL, SEQUENCE_FEATURES * D_MODEL};
-    Tensor W_cond = {malloc(CONDITION_FEATURES * D_MODEL * sizeof(double)), NULL, NULL, CONDITION_FEATURES * D_MODEL};
-    Tensor W_out = {malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, D_MODEL * SEQUENCE_FEATURES};
-    
-    Tensor W_q[N_LAYERS], W_k[N_LAYERS], W_v[N_LAYERS], W_o[N_LAYERS], W_ff1[N_LAYERS], W_ff2[N_LAYERS];
-    for (int l = 0; l < N_LAYERS; l++) {
-        const int attn_size = D_MODEL * D_MODEL, ff_size1 = D_MODEL * (D_MODEL * 4), ff_size2 = (D_MODEL * 4) * D_MODEL;
-        W_q[l] = (Tensor){malloc(attn_size * sizeof(double)), NULL, NULL, attn_size};
-        W_k[l] = (Tensor){malloc(attn_size * sizeof(double)), NULL, NULL, attn_size};
-        W_v[l] = (Tensor){malloc(attn_size * sizeof(double)), NULL, NULL, attn_size};
-        W_o[l] = (Tensor){malloc(attn_size * sizeof(double)), NULL, NULL, attn_size};
-        W_ff1[l] = (Tensor){malloc(ff_size1 * sizeof(double)), NULL, NULL, ff_size1};
-        W_ff2[l] = (Tensor){malloc(ff_size2 * sizeof(double)), NULL, NULL, ff_size2};
-    }
+    double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
+    double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
+    double *W_out = malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double));
+    double *W_q = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
+    double *W_k = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
+    double *W_v = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
+    double *W_o = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
+    double *W_ff1 = malloc(N_LAYERS * D_MODEL * (D_MODEL * 4) * sizeof(double));
+    double *W_ff2 = malloc(N_LAYERS * (D_MODEL * 4) * D_MODEL * sizeof(double));
 
-    if (!load_weights(argv[1], &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out)) {
+    if (!load_weights(argv[1], W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) {
         printf("Failed to load weights from %s\n", argv[1]); return 1;
     }
 
     // Allocate transformer buffers
-    double *transformer_input = malloc(BATCH_SIZE * (SEQ_LENGTH + 1) * INPUT_FEATURES * sizeof(double));
-    Tensor hidden = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor temp = {malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * D_MODEL};
-    Tensor output = {malloc(BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double)), NULL, NULL, BATCH_SIZE * SEQ_LENGTH * SEQUENCE_FEATURES};
-    double *q_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *k_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *v_buf = malloc(BATCH_SIZE * SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *s_buf = malloc(BATCH_SIZE * N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
-    double *mid_buf = malloc(BATCH_SIZE * SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+    double *transformer_input = malloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+    double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *output = malloc(SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double));
+    double *q_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *k_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *s_buf = malloc(N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
+    double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
 
     // Initialize visualization
     Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
     uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
     
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char filename[100];
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    time_t t = time(NULL); struct tm tm = *localtime(&t);
+    char filename[100]; sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
     transform_mesh(meshes[1], (double[3]){0.0, -0.5, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
 
     // Initialize simulation
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     int history_len = 0, target_count = 0;
-    double history[SEQ_LENGTH][INPUT_FEATURES] = {0};
+    double history[SEQ_LENGTH][CONDITION_FEATURES + SEQUENCE_FEATURES] = {0};
 
     while (target_count < 2) {
         if (history_len == SEQ_LENGTH) {
             bool velocity_achieved = true;
             for (int i = 0; i < 3; i++) {
                 if (fabs(angular_velocity_B[i]) > 0.01 || fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.1) {
-                    velocity_achieved = false;
-                    break;
+                    velocity_achieved = false; break;
                 }
             }
             double current_yaw = fmod(atan2(R_W_B[2], R_W_B[8]) + M_PI, 2*M_PI) - M_PI;
@@ -320,7 +314,7 @@ int main(int argc, char *argv[]) {
         t_physics += DT_PHYSICS;
         
         if (t_control <= t_physics) {
-            if (history_len == SEQ_LENGTH) memmove(history[0], history[1], (SEQ_LENGTH-1) * INPUT_FEATURES * sizeof(double));
+            if (history_len == SEQ_LENGTH) memmove(history[0], history[1], (SEQ_LENGTH-1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
             else history_len++;
             
             double *current = history[history_len-1];
@@ -331,15 +325,14 @@ int main(int argc, char *argv[]) {
             memcpy(current + 10, omega, 4 * sizeof(double));
 
             if (history_len == SEQ_LENGTH) {
-                memcpy(transformer_input, history, SEQ_LENGTH * INPUT_FEATURES * sizeof(double));
-                forward_pass(transformer_input, &output, &hidden, &temp, &W_seq, &W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, &W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
-                memcpy(omega_next, &output.data[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
+                memcpy(transformer_input, history, SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+                forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
+                memcpy(omega_next, &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
                 for (int i = 0; i < 4; i++) omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
             }
             
             update_rotor_speeds();
             t_control += DT_CONTROL;
-
             printf("\rPos: [%5.2f, %5.2f, %5.2f] Vel (body): [%5.2f, %5.2f, %5.2f] Rotors: [%5.2f, %5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
             fflush(stdout);
         }
@@ -355,13 +348,7 @@ int main(int argc, char *argv[]) {
     }
 
     free(frame_buffer); free_meshes(meshes, 2); ge_close_gif(gif);
-    free(transformer_input); free(hidden.data); free(temp.data); free(output.data);
-    free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
-    free(W_seq.data); free(W_cond.data); free(W_out.data);
-    for (int l = 0; l < N_LAYERS; l++) {
-        free(W_q[l].data); free(W_k[l].data); free(W_v[l].data); free(W_o[l].data);
-        free(W_ff1[l].data); free(W_ff2[l].data);
-    }
-    
+    free(transformer_input); free(hidden); free(temp); free(output); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
+    free(W_seq); free(W_cond); free(W_out); free(W_q); free(W_k); free(W_v); free(W_o); free(W_ff1); free(W_ff2);
     return 0;
 }
