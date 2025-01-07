@@ -37,6 +37,7 @@ jobs:
         fi
 
     - name: Train and Generate Visualizations
+      continue-on-error: true
       run: |
         if [ -f "previous_weights.bin" ]; then
           make clean
