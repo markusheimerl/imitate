@@ -330,7 +330,7 @@ int main(int argc, char *argv[]) {
                 }
 
                 if (t_physics >= t_status) {
-                    printf("\rPos: [%5.2f, %5.2f, %5.2f] Vel (body): [%5.2f, %5.2f, %5.2f] Angular: [%5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2]);
+                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f] R: [%5.2f, %5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
                     fflush(stdout);
                     t_status = t_physics + 0.1;
                 }
