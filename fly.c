@@ -86,8 +86,6 @@ int main(int argc, char *argv[]) {
                     forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
                     const double* pred = &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES];
                     memcpy(omega_next, pred + 6, 4 * sizeof(double));
-                    printf("\nPredicted rotor speeds:\n");
-                    printf("Omega: [%5.2f, %5.2f, %5.2f, %5.2f]\n", omega_next[0], omega_next[1], omega_next[2], omega_next[3]);
                 }
 
                 update_rotor_speeds();
