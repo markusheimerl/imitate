@@ -9,19 +9,34 @@
 #include "rasterizer.h"
 #include "quad.h"
 #include "transformer.h"
+#include <time.h>
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
 #define VEC3_MAG2(v) ((v)[0]*(v)[0] + (v)[1]*(v)[1] + (v)[2]*(v)[2])
-
+void dump_history_to_csv(FILE* csv_file, const double* history) {
+    for (int s = 0; s < SEQ_LENGTH; s++) {
+        const double* state = history + s * (CONDITION_FEATURES + SEQUENCE_FEATURES);
+        fprintf(csv_file, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n",
+            state[0], state[1], state[2],                    // vel_d_B
+            state[3], state[4], state[5],                    // ang_vel
+            state[6], state[7], state[8],                    // acc
+            state[9], state[10], state[11], state[12]);      // omega
+    }
+}
 int main(int argc, char *argv[]) {
     if (argc != 2) { printf("Usage: %s <weights_file>\n", argv[0]); return 1; }
     
+
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
     char filename[100];
-    
+        char csv_filename[100];
+sprintf(csv_filename, "%d-%d-%d_%d-%d-%d_flight_data.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+FILE *csv_file = fopen(csv_filename, "w");
+fprintf(csv_file, "vel_d_B[0],vel_d_B[1],vel_d_B[2],ang_vel[0],ang_vel[1],ang_vel[2],acc[0],acc[1],acc[2],omega[0],omega[1],omega[2],omega[3]\n");
+
     sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
     uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
@@ -67,6 +82,7 @@ int main(int argc, char *argv[]) {
         while (!velocity_achieved || t_physics < min_time) {
             if (VEC3_MAG2(linear_position_W) > 100.0*100.0 || VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || VEC3_MAG2(angular_velocity_B) > 10.0*10.0) {
                 printf("\nSimulation diverged.\n");
+                dump_history_to_csv(csv_file, history);
                 return 1;
             }
 
@@ -74,19 +90,23 @@ int main(int argc, char *argv[]) {
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
+
+                if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
+                    //forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
+                    //const double* pred = &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES];
+                    //memcpy(omega_next, pred + 6, 4 * sizeof(double));
+                    update_drone_control();
+                }else{
+                    update_drone_control();
+                }
+
                 memmove(history, history + (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
                 double* current = history + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES);
                 memcpy(current, linear_velocity_d_B, CONDITION_FEATURES * sizeof(double));
                 memcpy(current + CONDITION_FEATURES, angular_velocity_B, 3 * sizeof(double));
                 memcpy(current + CONDITION_FEATURES + 3, linear_acceleration_B, 3 * sizeof(double));
-                memcpy(current + CONDITION_FEATURES + 6, omega, 4 * sizeof(double));
+                memcpy(current + CONDITION_FEATURES + 6, omega_next, 4 * sizeof(double));
                 memcpy(transformer_input, history, SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-
-                if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
-                    forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
-                    const double* pred = &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES];
-                    memcpy(omega_next, pred + 6, 4 * sizeof(double));
-                }
 
                 update_rotor_speeds();
                 t_control += DT_CONTROL;

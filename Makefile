@@ -32,5 +32,5 @@ run: $(TRAIN_TARGET) $(FLY_TARGET)
 	./$(FLY_TARGET) `ls -t *_weights.bin | head -1`
 
 clean:
-	rm -f $(TRAIN_TARGET) $(FLY_TARGET) *_loss.csv *_flight.gif *_loss.png *_control_data.csv *_weights.bin
+	rm -f $(TRAIN_TARGET) $(FLY_TARGET) *_loss.csv *_flight.gif *_loss.png *_control_data.csv *_weights.bin *_flight_data.csv
 	cd sim && make clean
