@@ -286,7 +286,7 @@ int main(int argc, char *argv[]) {
 
     for (int meta_step = 0; meta_step < max_steps; meta_step++) {
         for (int i = 0; i < 3; i++) linear_velocity_d_B[i] = 0.0;
-        linear_velocity_d_B[rand() % 3] = (rand() % 2 ? 0.3 : -0.3) * (rand() % 3 == 1 ? 0.4 : 1.0);
+        if (rand() % 4 != 0) { linear_velocity_d_B[rand() % 3] = (rand() % 2 ? 0.3 : -0.3) * (rand() % 3 == 1 ? 0.4 : 1.0);}
         printf("\n=== New Target %d ===\nDesired velocity (body): [%.3f, %.3f, %.3f]\n", meta_step, linear_velocity_d_B[0], linear_velocity_d_B[1], linear_velocity_d_B[2]);
 
         double min_time = t_physics + 0.5;
