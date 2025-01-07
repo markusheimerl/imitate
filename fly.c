@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
     srand(time(NULL));
     double t_physics = 0.0, t_control = 0.0;
 
-    double omega_next_transformer[4] = {OMEGA_STABLE, OMEGA_STABLE, OMEGA_STABLE, OMEGA_STABLE};
+    double omega_next_bench[4] = {OMEGA_STABLE, OMEGA_STABLE, OMEGA_STABLE, OMEGA_STABLE};
 
     for (int meta_step = 0; meta_step < max_steps; meta_step++) {
         for (int i = 0; i < 3; i++) linear_velocity_d_B[i] = 0.0;
@@ -90,13 +90,14 @@ int main(int argc, char *argv[]) {
             
             if (t_control <= t_physics) {
 
+                update_drone_control();
+                memcpy(omega_next_bench, omega_next, 4 * sizeof(double));
+
                 if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
                     forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
                     const double* pred = &output[(SEQ_LENGTH-1) * OUTPUT_FEATURES];
-                    memcpy(omega_next_transformer, pred, OUTPUT_FEATURES * sizeof(double));
+                    memcpy(omega_next, pred, OUTPUT_FEATURES * sizeof(double));
                 }
-
-                update_drone_control();
 
                 memmove(history, history + (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
                 double* current = history + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES);
@@ -118,7 +119,7 @@ int main(int argc, char *argv[]) {
                 }
 
                 if (t_physics >= t_status) {
-                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f]\nR: [%5.2f, %5.2f, %5.2f, %5.2f] R_T: [%5.2f, %5.2f, %5.2f, %5.2f] Diff: [%5.2f, %5.2f, %5.2f, %5.2f]\n\n", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], omega[0], omega[1], omega[2], omega[3], omega_next_transformer[0], omega_next_transformer[1], omega_next_transformer[2], omega_next_transformer[3], omega_next[0] - omega_next_transformer[0], omega_next[1] - omega_next_transformer[1], omega_next[2] - omega_next_transformer[2], omega_next[3] - omega_next_transformer[3]);
+                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f]\nR: [%5.2f, %5.2f, %5.2f, %5.2f] R_B: [%5.2f, %5.2f, %5.2f, %5.2f] Diff: [%5.2f, %5.2f, %5.2f, %5.2f]\n\n", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], omega[0], omega[1], omega[2], omega[3], omega_next_bench[0], omega_next_bench[1], omega_next_bench[2], omega_next_bench[3], omega_next[0] - omega_next_transformer[0], omega_next[1] - omega_next_transformer[1], omega_next[2] - omega_next_transformer[2], omega_next[3] - omega_next_transformer[3]);
                     t_status = t_physics + 0.1;
                 }
             }

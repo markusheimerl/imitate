@@ -2,11 +2,6 @@ name: Train Transformer
 on:
   workflow_dispatch:
     inputs:
-      training_steps:
-        description: 'Number of training steps'
-        required: true
-        default: '10000'
-        type: string
       iteration:
         description: 'Current iteration number'
         required: true
@@ -30,24 +25,18 @@ jobs:
         sudo apt-get update && sudo apt-get install -y libomp-dev
         python -m pip install --upgrade pip matplotlib pandas
 
-    - name: Update Training Steps
-      run: |
-        sed -i "s/#define TRAINING_STEPS [0-9]*/#define TRAINING_STEPS ${{ github.event.inputs.training_steps }}/" train.c
-
     - name: Download Previous Weights
       if: github.event.inputs.iteration != '1'
       continue-on-error: true
       run: |
-        # Get the latest release
         LATEST_RELEASE=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
-        # Find the weights file URL
         WEIGHTS_URL=$(echo "$LATEST_RELEASE" | grep -o '"browser_download_url": ".*weights\.bin"' | cut -d'"' -f4)
         if [ ! -z "$WEIGHTS_URL" ]; then
           curl -L -o previous_weights.bin "$WEIGHTS_URL"
           echo "Downloaded previous weights"
         fi
 
-    - name: Train
+    - name: Train and Generate Visualizations
       run: |
         if [ -f "previous_weights.bin" ]; then
           make clean
@@ -57,6 +46,29 @@ jobs:
         else
           make run
         fi
+        
+        # Generate loss plot
+        python -c '
+        import matplotlib.pyplot as plt
+        import pandas as pd
+        import os
+        f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]
+        ts = f.replace("_loss.csv", "")
+        df = pd.read_csv(f)
+        plt.figure(figsize=(10, 6))
+        plt.plot(df["step"], df["loss"], "b", alpha=0.5, label="Raw")
+        plt.plot(df["step"], df["loss"].rolling(10, min_periods=1, center=True).mean(), "r", lw=2, label="Average")
+        plt.title("Training Loss")
+        plt.xlabel("Step")
+        plt.ylabel("Loss")
+        plt.yscale("log")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig(f"{ts}_loss.png")
+        '
+        
+        # Run fly.out with latest weights
+        ./fly.out $(ls -t *_weights.bin | head -1)
 
     - name: Set Release Tag
       id: tag
