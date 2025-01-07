@@ -30,7 +30,7 @@ int main(int argc, char *argv[]) {
     double t_render = 0.0, t_status = 0.0;
     int max_steps = 2;
 
-    // Initialize transformer weights
+    // Load transformer weights
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
     double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
     double *W_out = malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double));
@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     double *W_ff2 = malloc(N_LAYERS * (D_MODEL * 4) * D_MODEL * sizeof(double));
     if (!load_weights(argv[1], W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) { printf("Failed to load weights\n"); return 1; }
 
-    // Initialize transformer buffers
+    // Allocate transformer buffers
     double *transformer_input = malloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
     double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -52,11 +52,13 @@ int main(int argc, char *argv[]) {
     double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *s_buf = malloc(N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
-    double (*history)[CONDITION_FEATURES + SEQUENCE_FEATURES] = calloc(SEQ_LENGTH, sizeof(*history));
+    
+    // Circular buffer for history
+    double *history = calloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES), sizeof(double));
+    int history_pos = 0;
 
     srand(time(NULL));
     double t_physics = 0.0, t_control = 0.0;
-    int history_len = 0;
 
     for (int meta_step = 0; meta_step < max_steps; meta_step++) {
         for (int i = 0; i < 3; i++) linear_velocity_d_B[i] = 0.0;
@@ -67,7 +69,7 @@ int main(int argc, char *argv[]) {
         bool velocity_achieved = false;
 
         while (!velocity_achieved || t_physics < min_time) {
-            if (VEC3_MAG2(linear_position_W) > 10.0*10.0 || VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || VEC3_MAG2(angular_velocity_B) > 10.0*10.0) {
+            if (VEC3_MAG2(linear_position_W) > 100.0*100.0 || VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || VEC3_MAG2(angular_velocity_B) > 10.0*10.0) {
                 printf("\nSimulation diverged.\n");
                 return 1;
             }
@@ -76,35 +78,47 @@ int main(int argc, char *argv[]) {
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
-                if (history_len == SEQ_LENGTH) memmove(history[0], history[1], (SEQ_LENGTH-1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-                else history_len++;
+                // Update history
+                double current_state[CONDITION_FEATURES + SEQUENCE_FEATURES];
+                memcpy(current_state, linear_velocity_d_B, 3 * sizeof(double));
+                memcpy(current_state + 3, angular_velocity_B, 3 * sizeof(double));
+                memcpy(current_state + 6, linear_acceleration_B, 3 * sizeof(double));
+                memcpy(current_state + 9, omega, 4 * sizeof(double));
                 
-                double *current = history[history_len-1];
-                memcpy(current, linear_velocity_d_B, 3 * sizeof(double));
-                memcpy(current + 3, angular_velocity_B, 3 * sizeof(double));
-                memcpy(current + 6, linear_acceleration_B, 3 * sizeof(double));
-                memcpy(current + 9, omega, 4 * sizeof(double));
+                memcpy(&history[history_pos * (CONDITION_FEATURES + SEQUENCE_FEATURES)], current_state, (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+                history_pos = (history_pos + 1) % SEQ_LENGTH;
 
-                if (history_len == SEQ_LENGTH) {
-                    memcpy(transformer_input, history, SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-                    forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
+                // Run transformer prediction
+                if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
+                    // Reorder history to be sequential for transformer
+                    for (int i = 0; i < SEQ_LENGTH; i++) {
+                        int src_idx = (history_pos - SEQ_LENGTH + i + SEQ_LENGTH) % SEQ_LENGTH;
+                        memcpy(&transformer_input[i * (CONDITION_FEATURES + SEQUENCE_FEATURES)], &history[src_idx * (CONDITION_FEATURES + SEQUENCE_FEATURES)], (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+                    }
+                    forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out,q_buf, k_buf, v_buf, s_buf, mid_buf);
                     memcpy(omega_next, &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
-                    for (int i = 0; i < 4; i++) omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
+                } else {
+                    update_drone_control();  // Use default controller until we have enough history
                 }
-                
+
                 update_rotor_speeds();
                 t_control += DT_CONTROL;
 
                 velocity_achieved = true;
                 for (int i = 0; i < 3; i++) {
-                    if (fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.01 || fabs(angular_velocity_B[i]) > 0.05) {
+                    if (fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.01 || 
+                        fabs(angular_velocity_B[i]) > 0.05) {
                         velocity_achieved = false;
                         break;
                     }
                 }
 
                 if (t_physics >= t_status) {
-                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f] R: [%5.2f, %5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
+                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f] R: [%5.2f, %5.2f, %5.2f, %5.2f]", 
+                           linear_position_W[0], linear_position_W[1], linear_position_W[2],
+                           linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2],
+                           angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
+                           omega[0], omega[1], omega[2], omega[3]);
                     fflush(stdout);
                     t_status = t_physics + 0.1;
                 }
@@ -122,9 +136,11 @@ int main(int argc, char *argv[]) {
         printf("\nTarget achieved!\n");
     }
 
+    // Cleanup
     free(frame_buffer); free_meshes(meshes, 2); ge_close_gif(gif);
     free(transformer_input); free(hidden); free(temp); free(output);
     free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); free(history);
     free(W_seq); free(W_cond); free(W_out); free(W_q); free(W_k); free(W_v); free(W_o); free(W_ff1); free(W_ff2);
+    
     return 0;
 }

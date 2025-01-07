@@ -222,7 +222,7 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
         lr = fmax(1e-6, fmin(1e-3, lr));
         prev_loss = loss;
         
-        printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
+        if (step % 100 == 0) printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
         if (f) fprintf(f, "%d,%f\n", step, loss);
 
         backward_pass(grads, seq_data, out, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, d_hidden, d_temp, q_buf, k_buf, v_buf, s_buf, mid_buf, d_mid);
