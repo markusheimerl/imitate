@@ -15,27 +15,24 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
 #define VEC3_MAG2(v) ((v)[0]*(v)[0] + (v)[1]*(v)[1] + (v)[2]*(v)[2])
+
 void dump_history_to_csv(FILE* csv_file, const double* history) {
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* state = history + s * (CONDITION_FEATURES + SEQUENCE_FEATURES);
-        fprintf(csv_file, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n",
-            state[0], state[1], state[2],                    // vel_d_B
-            state[3], state[4], state[5],                    // ang_vel
-            state[6], state[7], state[8],                    // acc
-            state[9], state[10], state[11], state[12]);      // omega
+        fprintf(csv_file, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7], state[8], state[9], state[10], state[11], state[12]);      // omega
     }
 }
+
 int main(int argc, char *argv[]) {
     if (argc != 2) { printf("Usage: %s <weights_file>\n", argv[0]); return 1; }
-    
 
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
-    char filename[100];
-        char csv_filename[100];
-sprintf(csv_filename, "%d-%d-%d_%d-%d-%d_flight_data.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-FILE *csv_file = fopen(csv_filename, "w");
-fprintf(csv_file, "vel_d_B[0],vel_d_B[1],vel_d_B[2],ang_vel[0],ang_vel[1],ang_vel[2],acc[0],acc[1],acc[2],omega[0],omega[1],omega[2],omega[3]\n");
+    char filename[100]; char csv_filename[100];
+
+    sprintf(csv_filename, "%d-%d-%d_%d-%d-%d_flight_data.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    FILE *csv_file = fopen(csv_filename, "w");
+    fprintf(csv_file, "vel_d_B[0],vel_d_B[1],vel_d_B[2],ang_vel[0],ang_vel[1],ang_vel[2],acc[0],acc[1],acc[2],omega[0],omega[1],omega[2],omega[3]\n");
 
     sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
