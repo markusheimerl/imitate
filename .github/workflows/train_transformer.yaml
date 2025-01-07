@@ -25,18 +25,18 @@ jobs:
         sudo apt-get update && sudo apt-get install -y libomp-dev
         python -m pip install --upgrade pip matplotlib pandas
 
-  - name: Download Previous Weights
-    if: github.event.inputs.iteration != '1'
-    run: |
-      LATEST_RELEASE=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
-      WEIGHTS_URL=$(echo "$LATEST_RELEASE" | grep -o '"browser_download_url": ".*weights\.bin"' | cut -d'"' -f4)
-      if [ ! -z "$WEIGHTS_URL" ]; then
-        curl -L -o previous_weights.bin "$WEIGHTS_URL"
-        echo "Downloaded previous weights"
-        ls -l previous_weights.bin
-        file previous_weights.bin
-        hexdump -C -n 64 previous_weights.bin  # Show first 64 bytes
-      fi
+    - name: Download Previous Weights
+      if: github.event.inputs.iteration != '1'
+      run: |
+        LATEST_RELEASE=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
+        WEIGHTS_URL=$(echo "$LATEST_RELEASE" | grep -o '"browser_download_url": ".*weights\.bin"' | cut -d'"' -f4)
+        if [ ! -z "$WEIGHTS_URL" ]; then
+          curl -L -o previous_weights.bin "$WEIGHTS_URL"
+          echo "Downloaded previous weights"
+          ls -l previous_weights.bin
+          file previous_weights.bin
+          hexdump -C -n 64 previous_weights.bin  # Show first 64 bytes
+        fi
 
     - name: Train and Generate Visualizations
       continue-on-error: true
