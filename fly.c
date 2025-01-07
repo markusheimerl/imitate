@@ -40,7 +40,7 @@ int main(int argc, char *argv[]) {
     ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
     transform_mesh(meshes[1], (double[3]){0.0, -0.5, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
     double t_render = 0.0, t_status = 0.0;
-    int max_steps = 2;
+    int max_steps = 5;
 
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
     double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
