@@ -89,7 +89,6 @@ jobs:
           Training Results
           - Time: ${{ env.TIMESTAMP }}
           - Commit: ${{ github.sha }}
-          - Training Steps: ${{ github.event.inputs.training_steps }}
           - Iteration: ${{ github.event.inputs.iteration }}
 
     - name: Upload Assets
@@ -117,4 +116,4 @@ jobs:
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
           https://api.github.com/repos/${{ github.repository }}/actions/workflows/train_transformer.yaml/dispatches \
-          -d "{\"ref\":\"main\",\"inputs\":{\"training_steps\":\"${{ github.event.inputs.training_steps }}\",\"iteration\":\"$NEXT_ITERATION\"}}"
+          -d "{\"ref\":\"main\",\"inputs\":{\"iteration\":\"$NEXT_ITERATION\"}}"
