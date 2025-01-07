@@ -106,19 +106,14 @@ int main(int argc, char *argv[]) {
 
                 velocity_achieved = true;
                 for (int i = 0; i < 3; i++) {
-                    if (fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.01 || 
-                        fabs(angular_velocity_B[i]) > 0.05) {
+                    if (fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.01 || fabs(angular_velocity_B[i]) > 0.05) {
                         velocity_achieved = false;
                         break;
                     }
                 }
 
                 if (t_physics >= t_status) {
-                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f] R: [%5.2f, %5.2f, %5.2f, %5.2f]", 
-                           linear_position_W[0], linear_position_W[1], linear_position_W[2],
-                           linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2],
-                           angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
-                           omega[0], omega[1], omega[2], omega[3]);
+                    printf("\rP: [%5.2f, %5.2f, %5.2f] L_V_B: [%5.2f, %5.2f, %5.2f] A_V_B: [%5.2f, %5.2f, %5.2f] R: [%5.2f, %5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
                     fflush(stdout);
                     t_status = t_physics + 0.1;
                 }
