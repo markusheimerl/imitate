@@ -1,6 +1,8 @@
 #ifndef TRANSFORMER_H
 #define TRANSFORMER_H
 
+#define OUTPUT_FEATURES 4
+#define ROTOR_OFFSET 6
 #define CONDITION_FEATURES 3
 #define SEQUENCE_FEATURES 10
 #define SEQ_LENGTH 64
@@ -51,7 +53,7 @@ void save_weights(const double* ws, const double* wc, const double* wq, const do
         fwrite(wf1 + ff_offset1, sizeof(double), D_MODEL * (D_MODEL * 4), f);
         fwrite(wf2 + ff_offset2, sizeof(double), (D_MODEL * 4) * D_MODEL, f);
     }
-    fwrite(wout, sizeof(double), D_MODEL * SEQUENCE_FEATURES, f);
+    fwrite(wout, sizeof(double), D_MODEL * OUTPUT_FEATURES, f);
     fclose(f);
     printf("Saved weights to: %s\n", filename);
 }
@@ -75,10 +77,10 @@ int load_weights(const char* filename, double* ws, double* wc, double* wq, doubl
         read += fread(wf2 + ff_offset2, sizeof(double), (D_MODEL * 4) * D_MODEL, f);
     }
     
-    read += fread(wout, sizeof(double), D_MODEL * SEQUENCE_FEATURES, f);
+    read += fread(wout, sizeof(double), D_MODEL * OUTPUT_FEATURES, f);
     fclose(f);
     
-    size_t expected = SEQUENCE_FEATURES * D_MODEL + CONDITION_FEATURES * D_MODEL + D_MODEL * SEQUENCE_FEATURES + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
+    size_t expected = SEQUENCE_FEATURES * D_MODEL + CONDITION_FEATURES * D_MODEL + D_MODEL * OUTPUT_FEATURES + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
     return read == expected;
 }
 
@@ -219,8 +221,8 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
     #pragma omp parallel for
     for (int s = 0; s < SEQ_LENGTH; s++) {
         const double* h = hidden + s * D_MODEL;
-        double* o = out + s * SEQUENCE_FEATURES;
-        for (int f = 0; f < SEQUENCE_FEATURES; f++) {
+        double* o = out + s * OUTPUT_FEATURES;
+        for (int f = 0; f < OUTPUT_FEATURES; f++) {
             double sum = 0.0;
             for (int d = 0; d < D_MODEL; d++) sum += h[d] * wout[f * D_MODEL + d];
             o[f] = sum;

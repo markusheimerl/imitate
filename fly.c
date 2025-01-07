@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
 
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
     double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
-    double *W_out = malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double));
+    double *W_out = malloc(D_MODEL * OUTPUT_FEATURES * sizeof(double));
     double *W_q = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
     double *W_k = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
     double *W_v = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
     double *transformer_input = malloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
     double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *output = malloc(SEQ_LENGTH * SEQUENCE_FEATURES * sizeof(double));
+    double *output = malloc(SEQ_LENGTH * OUTPUT_FEATURES * sizeof(double));
     double *q_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *k_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -92,8 +92,8 @@ int main(int argc, char *argv[]) {
 
                 if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
                     forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
-                    const double* pred = &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES];
-                    memcpy(omega_next_transformer, pred + 6, 4 * sizeof(double));
+                    const double* pred = &output[(SEQ_LENGTH-1) * OUTPUT_FEATURES];
+                    memcpy(omega_next_transformer, pred, OUTPUT_FEATURES * sizeof(double));
                 }
 
                 update_drone_control();
