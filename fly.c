@@ -74,17 +74,20 @@ int main(int argc, char *argv[]) {
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
-                memmove(transformer_input, transformer_input + (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-                memcpy(transformer_input + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES), linear_velocity_d_B, 3 * sizeof(double));
-                memcpy(transformer_input + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 3, angular_velocity_B, 3 * sizeof(double));
-                memcpy(transformer_input + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 6, linear_acceleration_B, 3 * sizeof(double));
-                memcpy(transformer_input + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 9, omega, 4 * sizeof(double));
+                memmove(history, history + (CONDITION_FEATURES + SEQUENCE_FEATURES), (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+                double* current = history + (SEQ_LENGTH - 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES);
+                memcpy(current, linear_velocity_d_B, CONDITION_FEATURES * sizeof(double));
+                memcpy(current + CONDITION_FEATURES, angular_velocity_B, 3 * sizeof(double));
+                memcpy(current + CONDITION_FEATURES + 3, linear_acceleration_B, 3 * sizeof(double));
+                memcpy(current + CONDITION_FEATURES + 6, omega, 4 * sizeof(double));
+                memcpy(transformer_input, history, SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
 
                 if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
                     forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
-                    memcpy(omega_next, &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 9], 4 * sizeof(double));
-                } else {
-                    update_drone_control();
+                    const double* pred = &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES];
+                    memcpy(omega_next, pred + 6, 4 * sizeof(double));
+                    printf("\nPredicted rotor speeds:\n");
+                    printf("Omega: [%5.2f, %5.2f, %5.2f, %5.2f]\n", omega_next[0], omega_next[1], omega_next[2], omega_next[3]);
                 }
 
                 update_rotor_speeds();
