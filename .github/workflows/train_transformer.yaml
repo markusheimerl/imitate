@@ -27,22 +27,19 @@ jobs:
 
     - name: Download Previous Weights
       if: github.event.inputs.iteration != '1'
+      continue-on-error: true
       run: |
         LATEST_RELEASE=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
         WEIGHTS_URL=$(echo "$LATEST_RELEASE" | grep -o '"browser_download_url": ".*weights\.bin"' | cut -d'"' -f4)
         if [ ! -z "$WEIGHTS_URL" ]; then
           curl -L -o previous_weights.bin "$WEIGHTS_URL"
           echo "Downloaded previous weights"
-          ls -l previous_weights.bin
-          file previous_weights.bin
-          hexdump -C -n 64 previous_weights.bin  # Show first 64 bytes
         fi
 
     - name: Train and Generate Visualizations
       continue-on-error: true
       run: |
         if [ -f "previous_weights.bin" ]; then
-          make clean
           make
           cd sim && make log && ./sim.out 1000 && cp *_control_data.csv .. && make clean && cd ..
           ./train.out $(ls -t *_control_data.csv | head -1) previous_weights.bin
