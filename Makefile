@@ -17,7 +17,7 @@ $(FLY_TARGET): fly.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
 run: $(TRAIN_TARGET) $(FLY_TARGET)
-	cd sim && make log && ./sim.out 10000 && cp *_control_data.csv .. && make clean && cd ..
+	cd sim && make log && ./sim.out 1000 && cp *_control_data.csv .. && make clean && cd ..
 	./$(TRAIN_TARGET) `ls -t *_control_data.csv | head -1`
 	@python -c 'import matplotlib.pyplot as plt, pandas as pd, os; \
 	f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]; \
