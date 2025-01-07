@@ -12,9 +12,9 @@
 #define CONDITION_FEATURES 3
 #define SEQUENCE_FEATURES 10
 #define SEQ_LENGTH 64
-#define D_MODEL 64
+#define D_MODEL 32
 #define N_HEAD 4
-#define N_LAYERS 4
+#define N_LAYERS 2
 #define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 10000
 
@@ -243,7 +243,18 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
 
 int main(int argc, char *argv[]) {
     if (argc != 2) { printf("Usage: %s <weights_file>\n", argv[0]); return 1; }
-    srand(time(NULL));
+    
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char filename[100];
+    
+    sprintf(filename, "%d-%d-%d_%d-%d-%d_simulation.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
+    uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
+    ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
+    transform_mesh(meshes[1], (double[3]){0.0, -0.5, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
+    double t_render = 0.0, t_status = 0.0;
+    int max_steps = 2;
 
     // Initialize transformer weights
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
@@ -255,12 +266,9 @@ int main(int argc, char *argv[]) {
     double *W_o = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
     double *W_ff1 = malloc(N_LAYERS * D_MODEL * (D_MODEL * 4) * sizeof(double));
     double *W_ff2 = malloc(N_LAYERS * (D_MODEL * 4) * D_MODEL * sizeof(double));
+    if (!load_weights(argv[1], W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) { printf("Failed to load weights\n"); return 1; }
 
-    if (!load_weights(argv[1], W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) {
-        printf("Failed to load weights from %s\n", argv[1]); return 1;
-    }
-
-    // Allocate transformer buffers
+    // Initialize transformer buffers
     double *transformer_input = malloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
     double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -270,85 +278,79 @@ int main(int argc, char *argv[]) {
     double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *s_buf = malloc(N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+    double (*history)[CONDITION_FEATURES + SEQUENCE_FEATURES] = calloc(SEQ_LENGTH, sizeof(*history));
 
-    // Initialize visualization
-    Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
-    uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
-    
-    time_t t = time(NULL); struct tm tm = *localtime(&t);
-    char filename[100]; sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
-    transform_mesh(meshes[1], (double[3]){0.0, -0.5, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
+    srand(time(NULL));
+    double t_physics = 0.0, t_control = 0.0;
+    int history_len = 0;
 
-    // Initialize simulation
-    double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
-    int history_len = 0, target_count = 0;
-    double history[SEQ_LENGTH][CONDITION_FEATURES + SEQUENCE_FEATURES] = {0};
+    for (int meta_step = 0; meta_step < max_steps; meta_step++) {
+        for (int i = 0; i < 3; i++) linear_velocity_d_B[i] = 0.0;
+        linear_velocity_d_B[rand() % 3] = (rand() % 2 ? 0.3 : -0.3) * (rand() % 3 == 1 ? 0.4 : 1.0);
+        printf("\n=== New Target %d ===\nDesired velocity (body): [%.3f, %.3f, %.3f]\n", meta_step, linear_velocity_d_B[0], linear_velocity_d_B[1], linear_velocity_d_B[2]);
 
-    while (target_count < 2) {
-        if (history_len == SEQ_LENGTH) {
-            bool velocity_achieved = true;
-            for (int i = 0; i < 3; i++) {
-                if (fabs(angular_velocity_B[i]) > 0.01 || fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.1) {
-                    velocity_achieved = false; break;
+        double min_time = t_physics + 0.5;
+        bool velocity_achieved = false;
+
+        while (!velocity_achieved || t_physics < min_time) {
+            if (VEC3_MAG2(linear_position_W) > 1000.0*1000.0 || VEC3_MAG2(linear_velocity_W) > 100.0*100.0 || VEC3_MAG2(angular_velocity_B) > 100.0*100.0) {
+                printf("\nSimulation diverged.\n");
+                return 1;
+            }
+
+            update_drone_physics(DT_PHYSICS);
+            t_physics += DT_PHYSICS;
+            
+            if (t_control <= t_physics) {
+                if (history_len == SEQ_LENGTH) memmove(history[0], history[1], (SEQ_LENGTH-1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+                else history_len++;
+                
+                double *current = history[history_len-1];
+                memcpy(current, linear_velocity_d_B, 3 * sizeof(double));
+                memcpy(current + 3, angular_velocity_B, 3 * sizeof(double));
+                memcpy(current + 6, linear_acceleration_B, 3 * sizeof(double));
+                memcpy(current + 9, omega, 4 * sizeof(double));
+
+                if (history_len == SEQ_LENGTH) {
+                    memcpy(transformer_input, history, SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
+                    forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
+                    memcpy(omega_next, &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
+                    for (int i = 0; i < 4; i++) omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
+                }
+                
+                update_rotor_speeds();
+                t_control += DT_CONTROL;
+
+                velocity_achieved = true;
+                for (int i = 0; i < 3; i++) {
+                    if (fabs(linear_velocity_B[i] - linear_velocity_d_B[i]) > 0.01 || fabs(angular_velocity_B[i]) > 0.05) {
+                        velocity_achieved = false;
+                        break;
+                    }
+                }
+
+                if (t_physics >= t_status) {
+                    printf("\rPos: [%5.2f, %5.2f, %5.2f] Vel (body): [%5.2f, %5.2f, %5.2f] Angular: [%5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2]);
+                    fflush(stdout);
+                    t_status = t_physics + 0.1;
                 }
             }
-            double current_yaw = fmod(atan2(R_W_B[2], R_W_B[8]) + M_PI, 2*M_PI) - M_PI;
-            double desired_yaw = fmod(yaw_d + M_PI, 2*M_PI) - M_PI;
-            if (fabs(current_yaw - desired_yaw) > 0.1) velocity_achieved = false;
 
-            if (velocity_achieved) {
-                for (int i = 0; i < 3; i++) linear_velocity_d_B[i] = (double)rand() / RAND_MAX * 1.0 - 0.5;
-                linear_velocity_d_B[1] *= 0.2;
-                yaw_d = (double)rand() / RAND_MAX * 2 * M_PI;
-                target_count++;
-                printf("\n=== New Target %d ===\nDesired velocity (body): [%.3f, %.3f, %.3f], yaw: %.3f\n", target_count, linear_velocity_d_B[0], linear_velocity_d_B[1], linear_velocity_d_B[2], yaw_d);
+            if (t_render <= t_physics) {
+                transform_mesh(meshes[0], linear_position_W, 0.5, R_W_B);
+                memset(frame_buffer, 0, WIDTH * HEIGHT * 3);
+                vertex_shader(meshes, 2, (double[3]){-2.0, 2.0, -2.0}, (double[3]){0.0, 0.0, 0.0});
+                rasterize(frame_buffer, meshes, 2);
+                ge_add_frame(gif, frame_buffer, 6);
+                t_render += DT_RENDER;
             }
         }
-
-        if (VEC3_MAG2(linear_position_W) > 1000.0*1000.0 || VEC3_MAG2(linear_velocity_W) > 100.0*100.0 || VEC3_MAG2(angular_velocity_B) > 100.0*100.0) {
-            printf("\nSimulation diverged.\n"); return 1;
-        }
-
-        update_drone_physics(DT_PHYSICS);
-        t_physics += DT_PHYSICS;
-        
-        if (t_control <= t_physics) {
-            if (history_len == SEQ_LENGTH) memmove(history[0], history[1], (SEQ_LENGTH-1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-            else history_len++;
-            
-            double *current = history[history_len-1];
-            memcpy(current, linear_velocity_d_B, 3 * sizeof(double));
-            current[3] = yaw_d;
-            memcpy(current + 4, angular_velocity_B, 3 * sizeof(double));
-            memcpy(current + 7, linear_acceleration_B, 3 * sizeof(double));
-            memcpy(current + 10, omega, 4 * sizeof(double));
-
-            if (history_len == SEQ_LENGTH) {
-                memcpy(transformer_input, history, SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
-                forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
-                memcpy(omega_next, &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
-                for (int i = 0; i < 4; i++) omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
-            }
-            
-            update_rotor_speeds();
-            t_control += DT_CONTROL;
-            printf("\rPos: [%5.2f, %5.2f, %5.2f] Vel (body): [%5.2f, %5.2f, %5.2f] Rotors: [%5.2f, %5.2f, %5.2f, %5.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_B[0], linear_velocity_B[1], linear_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
-            fflush(stdout);
-        }
-
-        if (t_render <= t_physics) {
-            transform_mesh(meshes[0], linear_position_W, 0.5, R_W_B);
-            memset(frame_buffer, 0, WIDTH * HEIGHT * 3);
-            vertex_shader(meshes, 2, (double[3]){-2.0, 2.0, -2.0}, (double[3]){0.0, 0.0, 0.0});
-            rasterize(frame_buffer, meshes, 2);
-            ge_add_frame(gif, frame_buffer, 6);
-            t_render += DT_RENDER;
-        }
+        printf("\nTarget achieved!\n");
     }
 
     free(frame_buffer); free_meshes(meshes, 2); ge_close_gif(gif);
-    free(transformer_input); free(hidden); free(temp); free(output); free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf);
+    free(transformer_input); free(hidden); free(temp); free(output);
+    free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); free(history);
     free(W_seq); free(W_cond); free(W_out); free(W_q); free(W_k); free(W_v); free(W_o); free(W_ff1); free(W_ff2);
     return 0;
 }

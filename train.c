@@ -9,9 +9,9 @@
 #define CONDITION_FEATURES 3
 #define SEQUENCE_FEATURES 10
 #define SEQ_LENGTH 64
-#define D_MODEL 64
+#define D_MODEL 32
 #define N_HEAD 4
-#define N_LAYERS 4
+#define N_LAYERS 2
 #define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 10000
 
