@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <omp.h>
 
-#define CONDITION_FEATURES 4
+#define CONDITION_FEATURES 3
 #define SEQUENCE_FEATURES 10
 #define SEQ_LENGTH 64
 #define D_MODEL 64
