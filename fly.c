@@ -293,7 +293,7 @@ int main(int argc, char *argv[]) {
         bool velocity_achieved = false;
 
         while (!velocity_achieved || t_physics < min_time) {
-            if (VEC3_MAG2(linear_position_W) > 1000.0*1000.0 || VEC3_MAG2(linear_velocity_W) > 100.0*100.0 || VEC3_MAG2(angular_velocity_B) > 100.0*100.0) {
+            if (VEC3_MAG2(linear_position_W) > 10.0*10.0 || VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || VEC3_MAG2(angular_velocity_B) > 10.0*10.0) {
                 printf("\nSimulation diverged.\n");
                 return 1;
             }
