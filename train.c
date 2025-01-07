@@ -222,7 +222,30 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, doub
         lr = fmax(1e-6, fmin(1e-3, lr));
         prev_loss = loss;
         
-        if (step % 100 == 0) printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
+        if (step % 1000 == 0) {
+            printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
+            // Print last sequence step's prediction vs target for all features
+            const int last_seq = SEQ_LENGTH - 1;
+            const double* pred = out + last_seq * SEQUENCE_FEATURES;
+            const double* target = seq_data + (last_seq + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + CONDITION_FEATURES;
+            
+            printf("Desired velocity: [%.3f, %.3f, %.3f]\n", 
+                seq_data[last_seq * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 0],
+                seq_data[last_seq * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 1],
+                seq_data[last_seq * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 2]);
+            
+            printf("Angular velocity - Pred: [%.3f, %.3f, %.3f] Target: [%.3f, %.3f, %.3f]\n",
+                pred[0], pred[1], pred[2],
+                target[0], target[1], target[2]);
+            
+            printf("Linear accel    - Pred: [%.3f, %.3f, %.3f] Target: [%.3f, %.3f, %.3f]\n",
+                pred[3], pred[4], pred[5],
+                target[3], target[4], target[5]);
+            
+            printf("Rotor speeds    - Pred: [%.3f, %.3f, %.3f, %.3f] Target: [%.3f, %.3f, %.3f, %.3f]\n\n",
+                pred[6], pred[7], pred[8], pred[9],
+                target[6], target[7], target[8], target[9]);
+        }
         if (f) fprintf(f, "%d,%f\n", step, loss);
 
         backward_pass(grads, seq_data, out, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, d_hidden, d_temp, q_buf, k_buf, v_buf, s_buf, mid_buf, d_mid);

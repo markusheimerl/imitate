@@ -30,7 +30,6 @@ int main(int argc, char *argv[]) {
     double t_render = 0.0, t_status = 0.0;
     int max_steps = 2;
 
-    // Load transformer weights
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
     double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
     double *W_out = malloc(D_MODEL * SEQUENCE_FEATURES * sizeof(double));
@@ -42,7 +41,6 @@ int main(int argc, char *argv[]) {
     double *W_ff2 = malloc(N_LAYERS * (D_MODEL * 4) * D_MODEL * sizeof(double));
     if (!load_weights(argv[1], W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) { printf("Failed to load weights\n"); return 1; }
 
-    // Allocate transformer buffers
     double *transformer_input = malloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
     double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -52,8 +50,6 @@ int main(int argc, char *argv[]) {
     double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *s_buf = malloc(N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
-    
-    // Circular buffer for history
     double *history = calloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES), sizeof(double));
     int history_pos = 0;
 
@@ -78,27 +74,24 @@ int main(int argc, char *argv[]) {
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
-                // Update history
                 double current_state[CONDITION_FEATURES + SEQUENCE_FEATURES];
                 memcpy(current_state, linear_velocity_d_B, 3 * sizeof(double));
                 memcpy(current_state + 3, angular_velocity_B, 3 * sizeof(double));
                 memcpy(current_state + 6, linear_acceleration_B, 3 * sizeof(double));
                 memcpy(current_state + 9, omega, 4 * sizeof(double));
-                
                 memcpy(&history[history_pos * (CONDITION_FEATURES + SEQUENCE_FEATURES)], current_state, (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
                 history_pos = (history_pos + 1) % SEQ_LENGTH;
 
-                // Run transformer prediction
                 if (t_physics >= SEQ_LENGTH * DT_CONTROL) {
-                    // Reorder history to be sequential for transformer
                     for (int i = 0; i < SEQ_LENGTH; i++) {
-                        int src_idx = (history_pos - SEQ_LENGTH + i + SEQ_LENGTH) % SEQ_LENGTH;
+                        int src_idx = (history_pos - 1 - i + SEQ_LENGTH) % SEQ_LENGTH;
                         memcpy(&transformer_input[i * (CONDITION_FEATURES + SEQUENCE_FEATURES)], &history[src_idx * (CONDITION_FEATURES + SEQUENCE_FEATURES)], (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
                     }
-                    forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out,q_buf, k_buf, v_buf, s_buf, mid_buf);
+                    
+                    forward_pass(transformer_input, output, hidden, temp, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out, q_buf, k_buf, v_buf, s_buf, mid_buf);
                     memcpy(omega_next, &output[(SEQ_LENGTH-1) * SEQUENCE_FEATURES + 6], 4 * sizeof(double));
                 } else {
-                    update_drone_control();  // Use default controller until we have enough history
+                    update_drone_control();
                 }
 
                 update_rotor_speeds();
@@ -131,7 +124,6 @@ int main(int argc, char *argv[]) {
         printf("\nTarget achieved!\n");
     }
 
-    // Cleanup
     free(frame_buffer); free_meshes(meshes, 2); ge_close_gif(gif);
     free(transformer_input); free(hidden); free(temp); free(output);
     free(q_buf); free(k_buf); free(v_buf); free(s_buf); free(mid_buf); free(history);
