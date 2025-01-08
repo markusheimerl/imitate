@@ -7,7 +7,6 @@
 #define SEQUENCE_FEATURES 10
 #define SEQ_LENGTH 32
 #define D_MODEL 32
-#define N_HEAD 4
 #define N_LAYERS 4
 #define LEARNING_RATE 0.00001
 #define TRAINING_STEPS 1000000
@@ -124,78 +123,78 @@ void feedforward(double *out, const double *w1, const double *w2, const double *
     }
 }
 
-// Given input X of shape [seq_len, d_model]
-// 1. QKV projection for each head h:
-//    Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
-// 2. Scaled dot-product attention with ALiBi bias per head:
-//    score = (Q_h * K_h^T)/sqrt(d_head) - ALiBi_slope_h * distance_matrix
-//    A_h = softmax(score) * V_h  where softmax is causal (upper triangle masked)
-// 3. Concatenate heads and project:
-//    MultiHead(X) = concat(A_1,...,A_h) * Wo
-void multihead_attention(double *out, const double *in, const double *wq, const double *wk, const double *wv, const double *wo, double *q, double *k, double *v, double *s) {
-    const int hd = D_MODEL / N_HEAD;
-    const double scale = 1.0 / sqrt(hd);
+// Given input sequence X of shape [seq_len, d_model]:
+// 1. Project to queries, keys, values: Q,K,V = X * Wq,Wk,Wv
+// 2. Compute attention scores: score[i,j] = (Q[i] * K[j]^T)/sqrt(d) - slope*(i-j)
+// 3. Apply causal softmax: A[i] = softmax(score[i,:i])
+// 4. Mix values and project: out[i] = (sum_j(A[i,j] * V[j])) * Wo
+void attention(double *out, const double *in, const double *wq, const double *wk, const double *wv, const double *wo,
+              double *queries, double *keys, double *values, double *scores) {
+    const double scale = 1.0 / sqrt(D_MODEL), alibi_slope = 0.125;
 
+    // Project input to Q,K,V
     #pragma omp parallel for
-    for (int s = 0; s < SEQ_LENGTH; s++) {
-        const double* x = in + s * D_MODEL;
-        for (int h = 0; h < N_HEAD; h++)
-            for (int d = 0; d < hd; d++) {
-                double sq = 0.0, sk = 0.0, sv = 0.0;
-                const int w_idx = (h * hd + d) * D_MODEL;
-                for (int i = 0; i < D_MODEL; i++) sq += x[i] * wq[w_idx + i], sk += x[i] * wk[w_idx + i], sv += x[i] * wv[w_idx + i];
-                const int qkv_idx = s * D_MODEL + h * hd + d;
-                q[qkv_idx] = sq, k[qkv_idx] = sk, v[qkv_idx] = sv;
+    for (int pos = 0; pos < SEQ_LENGTH; pos++) {
+        for (int d = 0; d < D_MODEL; d++) {
+            double q = 0.0, k = 0.0, v = 0.0;
+            for (int i = 0; i < D_MODEL; i++) {
+                const double x = in[pos * D_MODEL + i];
+                q += x * wq[d * D_MODEL + i], k += x * wk[d * D_MODEL + i], v += x * wv[d * D_MODEL + i];
             }
-    }
-
-    #pragma omp parallel for
-    for (int h = 0; h < N_HEAD; h++) {
-        const double slope = pow(2.0, -(8.0 * (h + 1) / N_HEAD));
-        for (int i = 0; i < SEQ_LENGTH; i++) {
-            double max = -1e9, sum = 0.0;
-            for (int j = 0; j <= i; j++) {
-                double dot = 0.0;
-                for (int d = 0; d < hd; d++) dot += q[i * D_MODEL + h * hd + d] * k[j * D_MODEL + h * hd + d];
-                s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = dot * scale - slope * (i - j);
-                max = fmax(max, s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j]);
-            }
-            for (int j = 0; j <= i; j++) {
-                s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] = exp(s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] - max);
-                sum += s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j];
-            }
-            for (int j = 0; j <= i; j++) s[(h * SEQ_LENGTH + i) * SEQ_LENGTH + j] /= (sum + 1e-10);
+            queries[pos * D_MODEL + d] = q, keys[pos * D_MODEL + d] = k, values[pos * D_MODEL + d] = v;
         }
     }
 
+    // Compute attention scores and apply softmax
     #pragma omp parallel for
-    for (int t = 0; t < SEQ_LENGTH; t++) {
-        double tmp[D_MODEL] = {0};
-        for (int h = 0; h < N_HEAD; h++)
-            for (int d = 0; d < hd; d++) {
-                double sum = 0.0;
-                for (int j = 0; j <= t; j++) sum += s[(h * SEQ_LENGTH + t) * SEQ_LENGTH + j] * v[j * D_MODEL + h * hd + d];
-                tmp[h * hd + d] = sum;
-            }
+    for (int i = 0; i < SEQ_LENGTH; i++) {
+        for (int j = 0; j <= i; j++) {
+            double dot = 0.0;
+            for (int d = 0; d < D_MODEL; d++) dot += queries[i * D_MODEL + d] * keys[j * D_MODEL + d];
+            scores[i * SEQ_LENGTH + j] = dot * scale - alibi_slope * (i - j);
+        }
+
+        double max_score = -1e9, sum = 0.0;
+        for (int j = 0; j <= i; j++) max_score = fmax(max_score, scores[i * SEQ_LENGTH + j]);
+        for (int j = 0; j <= i; j++) {
+            scores[i * SEQ_LENGTH + j] = exp(scores[i * SEQ_LENGTH + j] - max_score);
+            sum += scores[i * SEQ_LENGTH + j];
+        }
+        for (int j = 0; j <= i; j++) scores[i * SEQ_LENGTH + j] /= (sum + 1e-10);
+    }
+
+    // Mix values according to attention scores and project output
+    #pragma omp parallel for
+    for (int i = 0; i < SEQ_LENGTH; i++) {
+        double weighted[D_MODEL] = {0};
+        for (int j = 0; j <= i; j++) {
+            const double score = scores[i * SEQ_LENGTH + j];
+            for (int d = 0; d < D_MODEL; d++) weighted[d] += score * values[j * D_MODEL + d];
+        }
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++) sum += tmp[i] * wo[d * D_MODEL + i];
-            out[t * D_MODEL + d] = sum;
+            for (int m = 0; m < D_MODEL; m++) sum += weighted[m] * wo[d * D_MODEL + m];
+            out[i * D_MODEL + d] = sum;
         }
     }
 }
 
-// Forward pass through the transformer:
-// 1. Input embedding: sequence_features * Ws + condition_features * Wc
-// 2. N transformer layers of:
-//    x = x + attention(rmsnorm(x))
-//    x = x + ffn(rmsnorm(x))
-// 3. Output projection to sequence_features
-void forward_pass(const double* seq_data, double* out, double* hidden, double* temp, const double* ws, const double* wc, const double* wq, const double* wk, const double* wv, const double* wo, const double* wf1, const double* wf2, const double* wout, double* q_buf, double* k_buf, double* v_buf, double* s_buf, double* mid_buf) {
+// Forward pass through transformer:
+// 1. Input embedding: X = seq_features * Ws + cond_features * Wc
+// 2. N transformer layers: 
+//    X = X + attention(rmsnorm(X))
+//    X = X + ffn(rmsnorm(X))
+// 3. Project to output: Y = X * Wout
+void forward_pass(const double* seq_data, double* out, double* hidden, double* temp,
+                 const double* ws, const double* wc, const double* wq, const double* wk, 
+                 const double* wv, const double* wo, const double* wf1, const double* wf2, 
+                 const double* wout, double* q_buf, double* k_buf, double* v_buf, double* s_buf, 
+                 double* mid_buf) {
+    // Input embedding
     #pragma omp parallel for
-    for (int s = 0; s < SEQ_LENGTH; s++) {
-        const double* x = seq_data + s * (CONDITION_FEATURES + SEQUENCE_FEATURES);
-        double* y = hidden + s * D_MODEL;
+    for (int pos = 0; pos < SEQ_LENGTH; pos++) {
+        const double* x = seq_data + pos * (CONDITION_FEATURES + SEQUENCE_FEATURES);
+        double* y = hidden + pos * D_MODEL;
         for (int d = 0; d < D_MODEL; d++) {
             double sum = 0.0;
             for (int f = 0; f < SEQUENCE_FEATURES; f++) sum += x[f + CONDITION_FEATURES] * ws[f * D_MODEL + d];
@@ -204,13 +203,14 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
         }
     }
 
+    // Transformer layers
     for (int l = 0; l < N_LAYERS; l++) {
         const int layer_offset = l * D_MODEL * D_MODEL;
         const int ff_offset1 = l * D_MODEL * (D_MODEL * 4);
         const int ff_offset2 = l * (D_MODEL * 4) * D_MODEL;
         
         rmsnorm(temp, hidden);
-        multihead_attention(temp, temp, wq + layer_offset, wk + layer_offset, wv + layer_offset, wo + layer_offset, q_buf, k_buf, v_buf, s_buf);
+        attention(temp, temp, wq + layer_offset, wk + layer_offset, wv + layer_offset, wo + layer_offset, q_buf, k_buf, v_buf, s_buf);
         for (int i = 0; i < SEQ_LENGTH * D_MODEL; i++) hidden[i] += temp[i];
         
         rmsnorm(temp, hidden);
@@ -218,10 +218,11 @@ void forward_pass(const double* seq_data, double* out, double* hidden, double* t
         for (int i = 0; i < SEQ_LENGTH * D_MODEL; i++) hidden[i] += temp[i];
     }
 
+    // Output projection
     #pragma omp parallel for
-    for (int s = 0; s < SEQ_LENGTH; s++) {
-        const double* h = hidden + s * D_MODEL;
-        double* o = out + s * OUTPUT_FEATURES;
+    for (int pos = 0; pos < SEQ_LENGTH; pos++) {
+        const double* h = hidden + pos * D_MODEL;
+        double* o = out + pos * OUTPUT_FEATURES;
         for (int f = 0; f < OUTPUT_FEATURES; f++) {
             double sum = 0.0;
             for (int d = 0; d < D_MODEL; d++) sum += h[d] * wout[f * D_MODEL + d];

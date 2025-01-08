@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
     double *q_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *k_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *v_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *s_buf = malloc(N_HEAD * SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
+    double *s_buf = malloc(SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
     double *history = calloc(SEQ_LENGTH * (CONDITION_FEATURES + SEQUENCE_FEATURES), sizeof(double));
     int history_pos = 0;
