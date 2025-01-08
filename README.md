@@ -1,2 +1,2 @@
-# transformer
-A minimal decoder transformer implementation
+# control
+A quadcopter controller
