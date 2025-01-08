@@ -274,10 +274,7 @@ void train_backprop(Dataset* ds, double* ws, double* wc, double* wq, double* wk,
         double loss = compute_loss(output, seq_data);
         
         // Adaptive learning rate
-        if (step > 0) {
-            lr *= (loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0;
-            lr = fmax(1e-9, fmin(1e-3, lr));
-        }
+        if (step > 0) lr = fmax(1e-9, fmin(1e-3, lr * ((loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0)));
         prev_loss = loss;
         
         // Logging
