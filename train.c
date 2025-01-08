@@ -152,17 +152,14 @@ void backward_pass(double* grads, const double* seq_data, const double* out, con
                   double* d_hidden, double* d_temp, double* q_buf, double* k_buf, double* v_buf, 
                   double* s_buf, double* mid_buf, double* d_mid) {
     // Clear gradient buffers
-    const size_t grad_size = (SEQUENCE_FEATURES + CONDITION_FEATURES) * D_MODEL + 
-                            D_MODEL * OUTPUT_FEATURES + 
-                            N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
+    const size_t grad_size = (SEQUENCE_FEATURES + CONDITION_FEATURES) * D_MODEL + D_MODEL * OUTPUT_FEATURES + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
     memset(grads, 0, grad_size * sizeof(double));
     memset(d_hidden, 0, SEQ_LENGTH * D_MODEL * sizeof(double));
     
     // Step 1: Output projection gradients
     for (int pos = 0; pos < SEQ_LENGTH; pos++) {
         const double* pred = out + pos * OUTPUT_FEATURES;
-        const double* target = seq_data + (pos + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 
-                              CONDITION_FEATURES + ROTOR_OFFSET;
+        const double* target = seq_data + (pos + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + CONDITION_FEATURES + ROTOR_OFFSET;
         for (int f = 0; f < OUTPUT_FEATURES; f++) {
             const double d_out = 2.0 * (pred[f] - target[f]) / (SEQ_LENGTH * OUTPUT_FEATURES);
             const size_t wout_offset = SEQUENCE_FEATURES * D_MODEL + CONDITION_FEATURES * D_MODEL + f * D_MODEL;
@@ -180,31 +177,14 @@ void backward_pass(double* grads, const double* seq_data, const double* out, con
         
         // Feedforward backward
         memcpy(d_temp, d_hidden, SEQ_LENGTH * D_MODEL * sizeof(double));
-        feedforward_backward(d_hidden, 
-                           grads + offset + layer_offset + 4 * D_MODEL * D_MODEL, 
-                           grads + offset + layer_offset + 4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4), 
-                           d_temp, hidden, 
-                           wf1 + l * D_MODEL * (D_MODEL * 4), 
-                           wf2 + l * (D_MODEL * 4) * D_MODEL, 
-                           mid_buf, d_mid);
+        feedforward_backward(d_hidden, grads + offset + layer_offset + 4 * D_MODEL * D_MODEL, grads + offset + layer_offset + 4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4), d_temp, hidden, wf1 + l * D_MODEL * (D_MODEL * 4), wf2 + l * (D_MODEL * 4) * D_MODEL, mid_buf, d_mid);
         
         // RMSNorm backward
         rmsnorm_backward(d_temp, d_hidden, hidden, hidden, D_MODEL);
         memcpy(d_hidden, d_temp, SEQ_LENGTH * D_MODEL * sizeof(double));
         
         // Attention backward
-        attention_backward(q_buf, k_buf, v_buf,
-                         grads + offset + layer_offset,
-                         grads + offset + layer_offset + D_MODEL * D_MODEL,
-                         grads + offset + layer_offset + 2 * D_MODEL * D_MODEL,
-                         grads + offset + layer_offset + 3 * D_MODEL * D_MODEL,
-                         d_temp, d_hidden,
-                         q_buf, k_buf, v_buf, s_buf, hidden,
-                         wq + l * D_MODEL * D_MODEL,
-                         wk + l * D_MODEL * D_MODEL,
-                         wv + l * D_MODEL * D_MODEL,
-                         wo + l * D_MODEL * D_MODEL);
-        
+        attention_backward(q_buf, k_buf, v_buf,grads + offset + layer_offset, grads + offset + layer_offset + D_MODEL * D_MODEL, grads + offset + layer_offset + 2 * D_MODEL * D_MODEL, grads + offset + layer_offset + 3 * D_MODEL * D_MODEL, d_temp, d_hidden, q_buf, k_buf, v_buf, s_buf, hidden, wq + l * D_MODEL * D_MODEL, wk + l * D_MODEL * D_MODEL, wv + l * D_MODEL * D_MODEL, wo + l * D_MODEL * D_MODEL);
         rmsnorm_backward(d_hidden, d_temp, hidden, hidden, D_MODEL);
     }
     
@@ -230,14 +210,7 @@ void backward_pass(double* grads, const double* seq_data, const double* out, con
 //    m = beta1 * m + (1-beta1) * g
 //    v = beta2 * v + (1-beta2) * g^2
 //    w = w - lr * m_hat / (sqrt(v_hat) + eps)
-void train_backprop(Dataset* ds, double* out, double* hidden, double* temp, 
-                   double* ws, double* wc, double* wq, double* wk, double* wv, double* wo, 
-                   double* wf1, double* wf2, double* wout, 
-                   double* ws_m, double* ws_v, double* wc_m, double* wc_v, 
-                   double* wq_m, double* wq_v, double* wk_m, double* wk_v, 
-                   double* wv_m, double* wv_v, double* wo_m, double* wo_v, 
-                   double* wf1_m, double* wf1_v, double* wf2_m, double* wf2_v, 
-                   double* wout_m, double* wout_v) {
+void train_backprop(Dataset* ds, double* ws, double* wc, double* wq, double* wk, double* wv, double* wo, double* wf1, double* wf2, double* wout) {
     double lr = LEARNING_RATE, prev_loss = 1e9;
     
     // Setup logging
@@ -251,8 +224,12 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp,
     // Allocate buffers
     const size_t grad_size = (SEQUENCE_FEATURES + CONDITION_FEATURES) * D_MODEL + D_MODEL * OUTPUT_FEATURES + N_LAYERS * (4 * D_MODEL * D_MODEL + D_MODEL * (D_MODEL * 4) + (D_MODEL * 4) * D_MODEL);
     
+    // Training buffers
     double *seq_data = malloc((SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
     double *grads = malloc(grad_size * sizeof(double));
+    double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
+    double *output = malloc(SEQ_LENGTH * OUTPUT_FEATURES * sizeof(double));
     double *d_hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *d_temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
     double *q_buf = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
@@ -261,6 +238,28 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp,
     double *s_buf = malloc(SEQ_LENGTH * SEQ_LENGTH * sizeof(double));
     double *mid_buf = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
     double *d_mid = malloc(SEQ_LENGTH * (D_MODEL * 4) * sizeof(double));
+
+    // Adam momentum buffers
+    double *ws_m = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
+    double *wc_m = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
+    double *wout_m = calloc(D_MODEL * OUTPUT_FEATURES, sizeof(double));
+    double *wq_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wk_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wv_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wo_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wf1_m = calloc(N_LAYERS * D_MODEL * (D_MODEL * 4), sizeof(double));
+    double *wf2_m = calloc(N_LAYERS * (D_MODEL * 4) * D_MODEL, sizeof(double));
+    
+    // Adam variance buffers
+    double *ws_v = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
+    double *wc_v = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
+    double *wout_v = calloc(D_MODEL * OUTPUT_FEATURES, sizeof(double));
+    double *wq_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wk_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wv_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wo_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
+    double *wf1_v = calloc(N_LAYERS * D_MODEL * (D_MODEL * 4), sizeof(double));
+    double *wf2_v = calloc(N_LAYERS * (D_MODEL * 4) * D_MODEL, sizeof(double));
 
     const double beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.01;
 
@@ -271,13 +270,13 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp,
         memcpy(seq_data, ds->data + seq_offset, (SEQ_LENGTH + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) * sizeof(double));
 
         // Forward pass and loss computation
-        forward_pass(seq_data, out, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
-        double loss = compute_loss(out, seq_data);
+        forward_pass(seq_data, output, hidden, temp, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, q_buf, k_buf, v_buf, s_buf, mid_buf);
+        double loss = compute_loss(output, seq_data);
         
         // Adaptive learning rate
         if (step > 0) {
             lr *= (loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0;
-            lr = fmax(1e-6, fmin(1e-3, lr));
+            lr = fmax(1e-9, fmin(1e-3, lr));
         }
         prev_loss = loss;
         
@@ -285,7 +284,7 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp,
         if (step % 1000 == 0) {
             printf("Step %d, Loss: %f, LR: %e\n", step, loss, lr);
             const int last_seq = SEQ_LENGTH - 1;
-            const double* pred = out + last_seq * OUTPUT_FEATURES;
+            const double* pred = output + last_seq * OUTPUT_FEATURES;
             const double* target = seq_data + (last_seq + 1) * (CONDITION_FEATURES + SEQUENCE_FEATURES) + CONDITION_FEATURES + ROTOR_OFFSET;
             printf("Desired velocity: [%.3f, %.3f, %.3f]\n", seq_data[last_seq * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 0], seq_data[last_seq * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 1], seq_data[last_seq * (CONDITION_FEATURES + SEQUENCE_FEATURES) + 2]);
             printf("Rotor speeds - Pred: [%.3f, %.3f, %.3f, %.3f] Ground Truth: [%.3f, %.3f, %.3f, %.3f]\n\n", pred[0], pred[1], pred[2], pred[3], target[0], target[1], target[2], target[3]);
@@ -293,7 +292,7 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp,
         if (f) fprintf(f, "%d,%f\n", step, loss);
 
         // Backward pass
-        backward_pass(grads, seq_data, out, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, d_hidden, d_temp, q_buf, k_buf, v_buf, s_buf, mid_buf, d_mid);
+        backward_pass(grads, seq_data, output, hidden, ws, wc, wq, wk, wv, wo, wf1, wf2, wout, d_hidden, d_temp, q_buf, k_buf, v_buf, s_buf, mid_buf, d_mid);
         
         // Update embedding and output weights
         size_t offset = 0;
@@ -332,31 +331,29 @@ void train_backprop(Dataset* ds, double* out, double* hidden, double* temp,
             }
         }
     }
-    
+
     // Cleanup
-    free(seq_data); free(grads); free(d_hidden); free(d_temp);
-    free(q_buf); free(k_buf); free(v_buf); free(s_buf); 
-    free(mid_buf); free(d_mid);
+    free(seq_data); free(grads); free(hidden); free(temp); free(output);
+    free(d_hidden); free(d_temp); free(q_buf); free(k_buf); free(v_buf);
+    free(s_buf); free(mid_buf); free(d_mid);
+    free(ws_m); free(ws_v); free(wc_m); free(wc_v);
+    free(wout_m); free(wout_v); free(wq_m); free(wq_v);
+    free(wk_m); free(wk_v); free(wv_m); free(wv_v);
+    free(wo_m); free(wo_v); free(wf1_m); free(wf1_v);
+    free(wf2_m); free(wf2_v);
     if (f) fclose(f);
 }
 
 int main(int argc, char *argv[]) {
     // Parse command line arguments
-    if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) {
-        printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]);
-        return 1;
-    }
+    if (argc < 2 || argc > 3 || !strstr(argv[1], ".csv")) {printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]); return 1;}
     char *weights_file = argc > 2 ? (strstr(argv[2], ".bin") ? argv[2] : NULL) : NULL;
-    if (argc > 2 && !weights_file) {
-        printf("Error: Invalid file '%s'\n", argv[2]);
-        return 1;
-    }
+    if (argc > 2 && !weights_file) {printf("Error: Invalid file '%s'\n", argv[2]); return 1;}
 
     // Initialize random seed and load data
     srand(time(NULL));
     Dataset ds = load_csv(argv[1]);
-    const double ws = sqrt(2.0 / D_MODEL);
-    
+
     // Allocate model weights
     double *W_seq = malloc(SEQUENCE_FEATURES * D_MODEL * sizeof(double));
     double *W_cond = malloc(CONDITION_FEATURES * D_MODEL * sizeof(double));
@@ -367,79 +364,42 @@ int main(int argc, char *argv[]) {
     double *W_o = malloc(N_LAYERS * D_MODEL * D_MODEL * sizeof(double));
     double *W_ff1 = malloc(N_LAYERS * D_MODEL * (D_MODEL * 4) * sizeof(double));
     double *W_ff2 = malloc(N_LAYERS * (D_MODEL * 4) * D_MODEL * sizeof(double));
-    
-    // Allocate Adam momentum buffers
-    double *W_seq_m = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
-    double *W_cond_m = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
-    double *W_out_m = calloc(D_MODEL * OUTPUT_FEATURES, sizeof(double));
-    double *W_q_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_k_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_v_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_o_m = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_ff1_m = calloc(N_LAYERS * D_MODEL * (D_MODEL * 4), sizeof(double));
-    double *W_ff2_m = calloc(N_LAYERS * (D_MODEL * 4) * D_MODEL, sizeof(double));
-    
-    // Allocate Adam variance buffers
-    double *W_seq_v = calloc(SEQUENCE_FEATURES * D_MODEL, sizeof(double));
-    double *W_cond_v = calloc(CONDITION_FEATURES * D_MODEL, sizeof(double));
-    double *W_out_v = calloc(D_MODEL * OUTPUT_FEATURES, sizeof(double));
-    double *W_q_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_k_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_v_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_o_v = calloc(N_LAYERS * D_MODEL * D_MODEL, sizeof(double));
-    double *W_ff1_v = calloc(N_LAYERS * D_MODEL * (D_MODEL * 4), sizeof(double));
-    double *W_ff2_v = calloc(N_LAYERS * (D_MODEL * 4) * D_MODEL, sizeof(double));
-
-    // Allocate forward pass buffers
-    double *hidden = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *temp = malloc(SEQ_LENGTH * D_MODEL * sizeof(double));
-    double *output = malloc(SEQ_LENGTH * OUTPUT_FEATURES * sizeof(double));
 
     // Initialize or load weights
     if (!weights_file || !load_weights(weights_file, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out)) {
         if (weights_file) printf("Failed to load weights, initializing randomly\n");
         
         // Initialize embedding and output weights
-        for (int i = 0; i < SEQUENCE_FEATURES * D_MODEL; i++) W_seq[i] = randn() * ws;
-        for (int i = 0; i < CONDITION_FEATURES * D_MODEL; i++) W_cond[i] = randn() * ws;
-        for (int i = 0; i < D_MODEL * OUTPUT_FEATURES; i++) W_out[i] = randn() * ws;
+        for (int i = 0; i < SEQUENCE_FEATURES * D_MODEL; i++) W_seq[i] = randn() * sqrt(2.0 / D_MODEL);
+        for (int i = 0; i < CONDITION_FEATURES * D_MODEL; i++) W_cond[i] = randn() * sqrt(2.0 / D_MODEL);
+        for (int i = 0; i < D_MODEL * OUTPUT_FEATURES; i++) W_out[i] = randn() * sqrt(2.0 / D_MODEL);
         
         // Initialize attention weights
         for (int i = 0; i < N_LAYERS * D_MODEL * D_MODEL; i++) {
-            W_q[i] = randn() * ws;
-            W_k[i] = randn() * ws;
-            W_v[i] = randn() * ws;
-            W_o[i] = randn() * ws;
+            W_q[i] = randn() * sqrt(2.0 / D_MODEL);
+            W_k[i] = randn() * sqrt(2.0 / D_MODEL);
+            W_v[i] = randn() * sqrt(2.0 / D_MODEL);
+            W_o[i] = randn() * sqrt(2.0 / D_MODEL);
         }
         
         // Initialize feedforward weights
-        for (int i = 0; i < N_LAYERS * D_MODEL * (D_MODEL * 4); i++) W_ff1[i] = randn() * ws;
-        for (int i = 0; i < N_LAYERS * (D_MODEL * 4) * D_MODEL; i++) W_ff2[i] = randn() * ws;
+        for (int i = 0; i < N_LAYERS * D_MODEL * (D_MODEL * 4); i++) W_ff1[i] = randn() * sqrt(2.0 / D_MODEL);
+        for (int i = 0; i < N_LAYERS * (D_MODEL * 4) * D_MODEL; i++) W_ff2[i] = randn() * sqrt(2.0 / D_MODEL);
     } else {
         printf("Successfully loaded weights\n");
     }
 
     // Train model
-    train_backprop(&ds, output, hidden, temp, 
-                  W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out,
-                  W_seq_m, W_seq_v, W_cond_m, W_cond_v,
-                  W_q_m, W_q_v, W_k_m, W_k_v, W_v_m, W_v_v, W_o_m, W_o_v,
-                  W_ff1_m, W_ff1_v, W_ff2_m, W_ff2_v, W_out_m, W_out_v);
+    train_backprop(&ds, W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
     
     // Save trained weights
     save_weights(W_seq, W_cond, W_q, W_k, W_v, W_o, W_ff1, W_ff2, W_out);
 
     // Cleanup
-    free(ds.data); free(hidden); free(temp); free(output);
-    free(W_seq); free(W_seq_m); free(W_seq_v);
-    free(W_cond); free(W_cond_m); free(W_cond_v);
-    free(W_out); free(W_out_m); free(W_out_v);
-    free(W_q); free(W_q_m); free(W_q_v);
-    free(W_k); free(W_k_m); free(W_k_v);
-    free(W_v); free(W_v_m); free(W_v_v);
-    free(W_o); free(W_o_m); free(W_o_v);
-    free(W_ff1); free(W_ff1_m); free(W_ff1_v);
-    free(W_ff2); free(W_ff2_m); free(W_ff2_v);
+    free(ds.data);
+    free(W_seq); free(W_cond); free(W_out);
+    free(W_q); free(W_k); free(W_v); free(W_o);
+    free(W_ff1); free(W_ff2);
     
     return 0;
 }
