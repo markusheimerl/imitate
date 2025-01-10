@@ -17,6 +17,7 @@ double g_lr = 0.0001;
 
 void forward(double *W_up, double *b_up, double *W_down, double *b_down, double *hidden, double (*seq)[M], double *out) {
     memset(hidden, 0, D * sizeof(double));
+    #pragma omp parallel for
     for(int s = 0; s < S; s++) for(int i = 0; i < D; i++) {
         double sum = b_up[i];
         for(int j = 0; j < M; j++) sum += W_up[i * M + j] * seq[s][j];
