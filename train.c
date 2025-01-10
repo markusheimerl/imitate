@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
     for(int i = 0; i < max_start; i++) positions[i] = i;
     double running_loss = 0, out[M];
 
-    for(int epoch = 0; epoch < 1000; epoch++) {
+    for(int epoch = 0; epoch < N_EPOCHS; epoch++) {
         for(int i = max_start - 1; i > 0; i--) {
             int j = rand() % (i + 1);
             int temp = positions[i];
