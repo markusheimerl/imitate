@@ -13,8 +13,7 @@
 #define DC 0.01f
 #define C 1.0f
 
-double g_prev_loss = INFINITY;
-double g_lr = 0.0001;
+double g_prev_loss = INFINITY, g_lr = 0.0001;
 
 void forward(double *W_up, double *b_up, double *W_down, double *b_down, double *hidden, double (*seq)[M], double *out) {
     memset(hidden, 0, D * sizeof(double));
@@ -22,7 +21,7 @@ void forward(double *W_up, double *b_up, double *W_down, double *b_down, double 
     for(int s = 0; s < S; s++) for(int i = 0; i < D; i++) {
         double sum = b_up[i];
         for(int j = 0; j < M; j++) sum += W_up[i * M + j] * seq[s][j];
-        hidden[i] += fmax(0.0f, sum);
+        hidden[i] += fmax(0.0, sum);
     }
     for(int i = 0; i < M; i++) {
         double sum = b_down[i];
@@ -32,7 +31,7 @@ void forward(double *W_up, double *b_up, double *W_down, double *b_down, double 
 }
 
 void adam(double *p, double *g, double *m, double *v, int size, int t) {
-    double lr_t = g_lr * sqrt(1.0f - pow(B2, t)) / (1.0f - pow(B1, t)), norm = 0;
+    double lr_t = g_lr * sqrt(1.0 - pow(B2, t)) / (1.0 - pow(B1, t)), norm = 0;
     for(int i = 0; i < size; i++) norm += g[i] * g[i];
     if(sqrt(norm) > C) for(int i = 0; i < size; i++) g[i] *= C / sqrt(norm);
     for(int i = 0; i < size; i++) {
@@ -79,12 +78,12 @@ double train(double *W_up, double *b_up, double *W_down, double *b_down, double 
 
 int main() {
     srand(time(NULL));
-    double scale = sqrt(2.0f/M), *ptrs[17];
-    int sizes[] = {D * M, D, M * D, M};
+    double scale = sqrt(2.0/M), *ptrs[17], seq[S][M], running_loss = 0;
+    int sizes[] = {D * M, D, M * D, M}, step = 1;
     
     for(int i = 0; i < 17; i++) {
         ptrs[i] = i < 5 ? malloc(sizes[i % 4] * sizeof(double)) : calloc(sizes[i % 4], sizeof(double));
-        if(i < 2) for(int j = 0; j < sizes[i]; j++) ptrs[i][j] = ((double)rand()/RAND_MAX - 0.5f) * scale;
+        if(i < 2) for(int j = 0; j < sizes[i]; j++) ptrs[i][j] = ((double)rand()/RAND_MAX - 0.5) * scale;
     }
     
     FILE *f = fopen("2025-1-10_10-43-1_control_data.csv", "r");
@@ -107,19 +106,18 @@ int main() {
     }
     fclose(f);
     
-    double seq[S][M], prev_loss = INFINITY;
-    for(int epoch = 0, step = 1; epoch < 1000; epoch++) {
-        double loss = 0;
+    for(int epoch = 0; epoch < 1000; epoch++)
         for(int i = S; i < rows; i++) {
             for(int j = 0; j < S; j++) memcpy(seq[j], data[i - S + j], M * sizeof(double));
-            loss += train(ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8], ptrs[9], ptrs[10], ptrs[11], ptrs[12], ptrs[13], ptrs[14], ptrs[15], ptrs[16], seq, data[i], step++);
+            running_loss += train(ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8], ptrs[9], ptrs[10], ptrs[11], ptrs[12], ptrs[13], ptrs[14], ptrs[15], ptrs[16], seq, data[i], step);
+            if(step++ % 10000 == 0) {
+                printf("Step %d (Epoch %d), Average Loss: %f, LR: %e\n", step-1, epoch, running_loss/1000, g_lr);
+                running_loss = 0;
+            }
         }
-        loss /= (rows - S);
-        printf("Epoch %d, Loss: %f, LR: %e\n", epoch, loss, g_lr);
-    }
     
     for(int i = 0; i < rows; i++) free(data[i]);
-    free(data);
     for(int i = 0; i < 17; i++) free(ptrs[i]);
+    free(data);
     return 0;
 }
