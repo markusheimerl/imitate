@@ -14,30 +14,30 @@
 
 #define S 32    // Sequence length
 #define D 256   // Hidden dimension
-#define M 4     // Input/Output dimension
+#define MO 4    // Input/Output dimension
 
 bool load_weights(const char* filename, double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
     size_t items_read = 0;
-    items_read += fread(W_in, sizeof(double), D * M, f);
+    items_read += fread(W_in, sizeof(double), D * MO, f);
     items_read += fread(b_in, sizeof(double), D, f);
     items_read += fread(W_q, sizeof(double), D * D, f);
     items_read += fread(W_k, sizeof(double), D * D, f);
     items_read += fread(W_v, sizeof(double), D * D, f);
-    items_read += fread(W_out, sizeof(double), M * D, f);
-    items_read += fread(b_out, sizeof(double), M, f);
+    items_read += fread(W_out, sizeof(double), MO * D, f);
+    items_read += fread(b_out, sizeof(double), MO, f);
     fclose(f);
-    return items_read == (D*M + D + D*D*3 + M*D + M);
+    return items_read == (D*MO + D + D*D*3 + MO*D + MO);
 }
 
 void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out, 
             double *hidden, double *q, double *k, double *v, double *attn_scores, double *attn_probs, 
-            double *context, double (*seq)[M], double *out) {
+            double *context, double (*seq)[MO], double *out) {
     for(int s = 0; s < S; s++) {
         for(int d = 0; d < D; d++) {
             double sum = b_in[d];
-            for(int m = 0; m < M; m++) sum += W_in[d * M + m] * seq[s][m];
+            for(int m = 0; m < MO; m++) sum += W_in[d * MO + m] * seq[s][m];
             hidden[s * D + d] = fmax(0.0, sum);
         }
     }
@@ -77,7 +77,7 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
         for(int d = 0; d < D; d++) context[i * D + d] /= rms;
     }
 
-    for(int i = 0; i < M; i++) {
+    for(int i = 0; i < MO; i++) {
         double sum = b_out[i];
         for(int d = 0; d < D; d++) sum += W_out[i * D + d] * context[(S-1) * D + d];
         out[i] = sum;
@@ -92,39 +92,27 @@ int main(int argc, char *argv[]) {
     char filename[100];
     sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
-    // Initialize visualization
-    Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
+    Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), 
+                      create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
     uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
     ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
     transform_mesh(meshes[1], (double[3]){0.0, -0.2, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
 
-    // Initialize neural network
-    double *W_in = malloc(D * M * sizeof(double));
-    double *b_in = malloc(D * sizeof(double));
-    double *W_q = malloc(D * D * sizeof(double));
-    double *W_k = malloc(D * D * sizeof(double));
-    double *W_v = malloc(D * D * sizeof(double));
-    double *W_out = malloc(M * D * sizeof(double));
-    double *b_out = malloc(M * sizeof(double));
-    double *hidden = malloc(S * D * sizeof(double));
-    double *q = malloc(S * D * sizeof(double));
-    double *k = malloc(S * D * sizeof(double));
-    double *v = malloc(S * D * sizeof(double));
-    double *attn_scores = malloc(S * S * sizeof(double));
-    double *attn_probs = malloc(S * S * sizeof(double));
-    double *context = malloc(S * D * sizeof(double));
+    double *W_in = malloc(D * MO * sizeof(double)), *b_in = malloc(D * sizeof(double));
+    double *W_q = malloc(D * D * sizeof(double)), *W_k = malloc(D * D * sizeof(double));
+    double *W_v = malloc(D * D * sizeof(double)), *W_out = malloc(MO * D * sizeof(double));
+    double *b_out = malloc(MO * sizeof(double)), *hidden = malloc(S * D * sizeof(double));
+    double *q = malloc(S * D * sizeof(double)), *k = malloc(S * D * sizeof(double));
+    double *v = malloc(S * D * sizeof(double)), *attn_scores = malloc(S * S * sizeof(double));
+    double *attn_probs = malloc(S * S * sizeof(double)), *context = malloc(S * D * sizeof(double));
 
     if (!load_weights(argv[1], W_in, b_in, W_q, W_k, W_v, W_out, b_out)) {
-        printf("Failed to load weights\n");
-        return 1;
+        printf("Failed to load weights\n"); return 1;
     }
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0, t_status = 0.0, wait_start = 0.0;
     bool is_waiting = true, at_ground = true;
-    
-    // Initialize rotor speed history
-    double rotor_history[S][M] = {0};
-    double output[M];
+    double rotor_history[S][MO] = {0}, output[MO];
 
     srand(time(NULL));
     for(int i = 0; i < 3; i++) {
@@ -147,23 +135,18 @@ int main(int argc, char *argv[]) {
         double min_time = t_physics + 0.5;
 
         while (!position_achieved || !stability_achieved || t_physics < min_time) {
-            if (VEC3_MAG2(linear_position_W) > 100.0*100.0 || VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || VEC3_MAG2(angular_velocity_B) > 10.0*10.0) {
-                printf("\nSimulation diverged.\n");
-                return 1;
-            }
+            if (VEC3_MAG2(linear_position_W) > 100.0*100.0 || VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || 
+                VEC3_MAG2(angular_velocity_B) > 10.0*10.0) { printf("\nSimulation diverged.\n"); return 1; }
 
             update_drone_physics(DT_PHYSICS);
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
-                // Shift history and add current rotor speeds
-                memmove(rotor_history[0], rotor_history[1], (S-1) * M * sizeof(double));
-                memcpy(rotor_history[S-1], omega, M * sizeof(double));
+                memmove(rotor_history[0], rotor_history[1], (S-1) * MO * sizeof(double));
+                memcpy(rotor_history[S-1], omega, MO * sizeof(double));
 
-                forward(W_in, b_in, W_q, W_k, W_v, W_out, b_out, hidden, q, k, v, 
-                       attn_scores, attn_probs, context, rotor_history, output);
-
-                memcpy(omega_next, output, M * sizeof(double));
+                forward(W_in, b_in, W_q, W_k, W_v, W_out, b_out, hidden, q, k, v, attn_scores, attn_probs, context, rotor_history, output);
+                memcpy(omega_next, output, MO * sizeof(double));
                 update_rotor_speeds();
                 t_control += DT_CONTROL;
 
@@ -195,20 +178,12 @@ int main(int argc, char *argv[]) {
             }
         }
         
-        if (is_waiting) {
-            is_waiting = false;
-        } else {
-            at_ground = !at_ground;
-            is_waiting = at_ground;
-        }
+        if (is_waiting) is_waiting = false;
+        else { at_ground = !at_ground; is_waiting = at_ground; }
     }
 
-    free(frame_buffer);
-    free_meshes(meshes, 2);
-    ge_close_gif(gif);
-    
+    free(frame_buffer); free_meshes(meshes, 2); ge_close_gif(gif);
     free(W_in); free(b_in); free(W_q); free(W_k); free(W_v); free(W_out); free(b_out);
     free(hidden); free(q); free(k); free(v); free(attn_scores); free(attn_probs); free(context);
-    
     return 0;
 }
