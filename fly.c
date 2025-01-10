@@ -54,7 +54,7 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
     }
 
     for(int i = 0; i < S; i++) {
-        double max_val = -INFINITY;
+        double max_val = -1e30;
         for(int j = 0; j < S; j++) {
             double score = 0;
             for(int d = 0; d < D; d++) score += q[i * D + d] * k[j * D + d];

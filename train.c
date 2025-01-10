@@ -15,7 +15,7 @@
 #define C 1.0
 #define TEMPORAL_DECAY 0.125
 
-double g_prev_loss = INFINITY, g_lr = 0.0001;
+double g_prev_loss = 1e30, g_lr = 0.0001;
 
 void save_weights(const char* filename, double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out) {
     FILE* f = fopen(filename, "wb");
@@ -53,7 +53,7 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
     }
 
     for(int i = 0; i < S; i++) {
-        double max_val = -INFINITY;
+        double max_val = -1e30;
         for(int j = 0; j < S; j++) {
             double score = 0;
             for(int d = 0; d < D; d++) score += q[i * D + d] * k[j * D + d];
