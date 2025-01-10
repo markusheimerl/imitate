@@ -7,11 +7,12 @@
 #define S 32    // Sequence length
 #define D 256   // Hidden dimension
 #define M 4     // Input/Output dimension
-#define B1 0.9f
-#define B2 0.999f
-#define E 1e-8f
-#define DC 0.01f
-#define C 1.0f
+#define B1 0.9
+#define B2 0.999
+#define E 1e-8
+#define DC 0.01
+#define C 1.0
+#define TEMPORAL_DECAY 0.125
 
 double g_prev_loss = INFINITY, g_lr = 0.0001;
 
@@ -42,7 +43,7 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
         for(int j = 0; j < S; j++) {
             double score = 0;
             for(int d = 0; d < D; d++) score += q[i * D + d] * k[j * D + d];
-            max_val = fmax(max_val, (attn_scores[i * S + j] = score / sqrt(D)));
+            max_val = fmax(max_val, (attn_scores[i * S + j] = score/sqrt(D) - TEMPORAL_DECAY * (i-j)));
         }
         double sum = 0;
         for(int j = 0; j < S; j++) sum += (attn_probs[i * S + j] = exp(attn_scores[i * S + j] - max_val));
