@@ -81,22 +81,23 @@ int main(int argc, char **argv) {
     double scale = sqrt(2.0/M), *ptrs[17], seq[S][M], running_loss = 0;
     int sizes[] = {D * M, D, M * D, M}, step = 1;
     
+    // Initialize arrays
     for(int i = 0; i < 17; i++) {
         ptrs[i] = i < 5 ? malloc(sizes[i % 4] * sizeof(double)) : calloc(sizes[i % 4], sizeof(double));
         if(i < 2) for(int j = 0; j < sizes[i]; j++) ptrs[i][j] = ((double)rand()/RAND_MAX - 0.5) * scale;
     }
     
+    // Read data
     FILE *f = fopen(argv[1], "r");
     if(!f) { printf("Error: Could not open file %s\n", argv[1]); return 1; }
     
-    int rows = -1;
     char line[1024];
+    int rows = -1;
     while(fgets(line, sizeof(line), f)) rows++;
-    
-    double **data = malloc(rows * sizeof(double*));
     rewind(f);
     fgets(line, sizeof(line), f);
     
+    double **data = malloc(rows * sizeof(double*));
     for(int i = 0; i < rows; i++) {
         data[i] = malloc(M * sizeof(double));
         if(!fgets(line, sizeof(line), f)) break;
@@ -106,18 +107,33 @@ int main(int argc, char **argv) {
     }
     fclose(f);
     
-    for(int epoch = 0; epoch < 1000; epoch++)
-        for(int i = S; i < rows; i++) {
-            for(int j = 0; j < S; j++) memcpy(seq[j], data[i - S + j], M * sizeof(double));
-            running_loss += train(ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8], ptrs[9], ptrs[10], ptrs[11], ptrs[12], ptrs[13], ptrs[14], ptrs[15], ptrs[16], seq, data[i], step);
+    // Training loop
+    int max_start = rows - S;
+    int *positions = malloc(max_start * sizeof(int));
+    for(int i = 0; i < max_start; i++) positions[i] = i;
+    
+    for(int epoch = 0; epoch < 1000; epoch++) {
+        for(int i = max_start - 1; i > 0; i--) {
+            int j = rand() % (i + 1);
+            int temp = positions[i];
+            positions[i] = positions[j];
+            positions[j] = temp;
+        }
+        
+        for(int i = 0; i < max_start; i++) {
+            for(int j = 0; j < S; j++) memcpy(seq[j], data[positions[i] + j], M * sizeof(double));
+            running_loss += train(ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8], ptrs[9], ptrs[10], ptrs[11], ptrs[12], ptrs[13], ptrs[14], ptrs[15], ptrs[16], seq, data[positions[i] + S], step);
             if(step++ % 10000 == 0) {
                 printf("Step %d (Epoch %d), Average Loss: %f, LR: %e\n", step-1, epoch, running_loss/1000, g_lr);
                 running_loss = 0;
             }
         }
+    }
     
+    // Cleanup
     for(int i = 0; i < rows; i++) free(data[i]);
     for(int i = 0; i < 17; i++) free(ptrs[i]);
+    free(positions);
     free(data);
     return 0;
 }
