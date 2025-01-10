@@ -14,21 +14,21 @@
 
 #define S 32    // Sequence length
 #define D 256   // Hidden dimension
-#define M 4     // Input/Output dimension
+#define MOTORS 4     // Input/Output dimension
 
 bool load_weights(const char* filename, double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
     size_t items_read = 0;
-    items_read += fread(W_in, sizeof(double), D * M, f);
+    items_read += fread(W_in, sizeof(double), D * MOTORS, f);
     items_read += fread(b_in, sizeof(double), D, f);
     items_read += fread(W_q, sizeof(double), D * D, f);
     items_read += fread(W_k, sizeof(double), D * D, f);
     items_read += fread(W_v, sizeof(double), D * D, f);
-    items_read += fread(W_out, sizeof(double), M * D, f);
-    items_read += fread(b_out, sizeof(double), M, f);
+    items_read += fread(W_out, sizeof(double), MOTORS * D, f);
+    items_read += fread(b_out, sizeof(double), MOTORS, f);
     fclose(f);
-    return items_read == (D*M + D + D*D*3 + M*D + M);
+    return items_read == (D*MOTORS + D + D*D*3 + MOTORS*D + MOTORS);
 }
 
 void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out, double *input, double *output) {
@@ -37,7 +37,7 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
     for(int s = 0; s < S; s++) {
         for(int d = 0; d < D; d++) {
             double sum = b_in[d];
-            for(int m = 0; m < M; m++) sum += W_in[d * M + m] * input[m];
+            for(int m = 0; m < MOTORS; m++) sum += W_in[d * MOTORS + m] * input[m];
             hidden[s * D + d] = fmax(0.0, sum);
         }
     }
@@ -53,7 +53,7 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
         }
     }
 
-    for(int i = 0; i < M; i++) {
+    for(int i = 0; i < MOTORS; i++) {
         double sum = b_out[i];
         for(int d = 0; d < D; d++) sum += W_out[i * D + d] * context[(S-1) * D + d];
         output[i] = sum;
@@ -75,13 +75,13 @@ int main(int argc, char *argv[]) {
     transform_mesh(meshes[1], (double[3]){0.0, -0.2, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
 
     // Initialize neural network
-    double *W_in = malloc(D * M * sizeof(double));
+    double *W_in = malloc(D * MOTORS * sizeof(double));
     double *b_in = malloc(D * sizeof(double));
     double *W_q = malloc(D * D * sizeof(double));
     double *W_k = malloc(D * D * sizeof(double));
     double *W_v = malloc(D * D * sizeof(double));
-    double *W_out = malloc(M * D * sizeof(double));
-    double *b_out = malloc(M * sizeof(double));
+    double *W_out = malloc(MOTORS * D * sizeof(double));
+    double *b_out = malloc(MOTORS * sizeof(double));
 
     if (!load_weights(argv[1], W_in, b_in, W_q, W_k, W_v, W_out, b_out)) {
         printf("Failed to load weights\n");

@@ -4,7 +4,7 @@
 #include <math.h>
 #include <time.h>
 
-#define N_EPOCHS 100
+#define N_EPOCHS 1
 #define S 32    // Sequence length
 #define D 256   // Hidden dimension
 #define M 4     // Input/Output dimension
@@ -213,12 +213,19 @@ int main(int argc, char **argv) {
     }
     fclose(f);
 
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char loss_filename[100];
+    sprintf(loss_filename, "%d-%d-%d_%d-%d-%d_loss.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    FILE *loss_file = fopen(loss_filename, "w");
+    fprintf(loss_file, "step,loss\n");
+
     int max_start = rows - S, step = 1;
     int *positions = malloc(max_start * sizeof(int));
     for(int i = 0; i < max_start; i++) positions[i] = i;
     double running_loss = 0, out[M];
 
-    for(int epoch = 0; epoch < N_EPOCHS; epoch++) {
+    for(int epoch = 0; epoch < 1000; epoch++) {
         for(int i = max_start - 1; i > 0; i--) {
             int j = rand() % (i + 1);
             int temp = positions[i];
@@ -250,11 +257,14 @@ int main(int argc, char **argv) {
 
             if(step % 100 == 0) {
                 printf("Step %d (Epoch %d), Average Loss: %f, LR: %e\n", step, epoch, running_loss/100, g_lr);
+                fprintf(loss_file, "%d,%f\n", step, running_loss/100);
                 running_loss = 0;
             }
             step++;
         }
     }
+
+    fclose(loss_file);
 
     char weights_filename[100];
     sprintf(weights_filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
