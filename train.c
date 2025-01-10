@@ -51,11 +51,15 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
     }
 
     for(int i = 0; i < S; i++) {
+        double rms = 0;
         for(int d = 0; d < D; d++) {
             double sum = 0;
             for(int j = 0; j < S; j++) sum += attn_probs[i * S + j] * v[j * D + d];
-            context[i * D + d] = sum;
+            context[i * D + d] = sum + hidden[i * D + d];
+            rms += context[i * D + d] * context[i * D + d];
         }
+        rms = sqrt(rms / D + E);
+        for(int d = 0; d < D; d++) context[i * D + d] /= rms;
     }
 
     for(int i = 0; i < M; i++) {
@@ -90,11 +94,15 @@ double backward(double *W_in, double *W_q, double *W_k, double *W_v, double *W_o
     }
 
     for(int i = 0; i < S; i++) {
-        for(int j = 0; j < S; j++) {
-            for(int d = 0; d < D; d++) {
-                d_v[j * D + d] += attn_probs[i * S + j] * d_context[i * D + d];
-                d_attn_probs[i * S + j] += d_context[i * D + d] * v[j * D + d] / sqrt(D);
-            }
+        double rms = 0;
+        for(int d = 0; d < D; d++) rms += context[i * D + d] * context[i * D + d];
+        rms = sqrt(rms / D + E);
+        double sum_grad = 0;
+        for(int d = 0; d < D; d++) sum_grad += d_context[i * D + d] * context[i * D + d];
+        for(int d = 0; d < D; d++) {
+            double grad = d_context[i * D + d] / rms - context[i * D + d] * sum_grad / (D * rms * rms * rms);
+            d_hidden[i * D + d] += grad;
+            for(int j = 0; j < S; j++) d_v[j * D + d] += grad * attn_probs[i * S + j];
         }
     }
 
@@ -144,7 +152,6 @@ int main(int argc, char **argv) {
     if(argc != 2) { printf("Usage: %s <data_file>\n", argv[0]); return 1; }
     srand(time(NULL));
     
-    // Allocate all memory
     double *W_in = malloc(D * M * sizeof(double)), *b_in = malloc(D * sizeof(double));
     double *W_q = malloc(D * D * sizeof(double)), *W_k = malloc(D * D * sizeof(double));
     double *W_v = malloc(D * D * sizeof(double)), *W_out = malloc(M * D * sizeof(double));
@@ -167,7 +174,6 @@ int main(int argc, char **argv) {
     double *v_W_k = calloc(D * D, sizeof(double)), *v_W_v = calloc(D * D, sizeof(double));
     double *v_W_out = calloc(M * D, sizeof(double)), *v_b_out = calloc(M, sizeof(double));
 
-    // Initialize weights
     double scale = sqrt(2.0/M);
     for(int i = 0; i < D * M; i++) W_in[i] = ((double)rand()/RAND_MAX - 0.5) * scale;
     memset(b_in, 0, D * sizeof(double));
@@ -175,7 +181,6 @@ int main(int argc, char **argv) {
     for(int i = 0; i < M * D; i++) W_out[i] = ((double)rand()/RAND_MAX - 0.5) * scale;
     memset(b_out, 0, M * sizeof(double));
 
-    // Read training data
     FILE *f = fopen(argv[1], "r");
     if(!f) { printf("Error: Could not open file %s\n", argv[1]); return 1; }
     char line[1024];
@@ -194,7 +199,6 @@ int main(int argc, char **argv) {
     }
     fclose(f);
 
-    // Training loop
     int max_start = rows - S, step = 1;
     int *positions = malloc(max_start * sizeof(int));
     for(int i = 0; i < max_start; i++) positions[i] = i;
@@ -227,19 +231,17 @@ int main(int argc, char **argv) {
             adam(b_out, d_b_out, m_b_out, v_b_out, M, step);
 
             g_lr *= ((running_loss/i) > g_prev_loss) ? 0.95 : 1.05;
-            g_lr = fmax(1e-9, fmin(1e-3, g_lr));
+            g_lr = fmax(1e-10, fmin(1e-3, g_lr));
             g_prev_loss = (running_loss/i);
 
             if(step % 100 == 0) {
-                double avg_loss = running_loss/100;
-                printf("Step %d (Epoch %d), Average Loss: %f, LR: %e\n", step, epoch, avg_loss, g_lr);
+                printf("Step %d (Epoch %d), Average Loss: %f, LR: %e\n", step, epoch, running_loss/100, g_lr);
                 running_loss = 0;
             }
             step++;
         }
     }
 
-    // Cleanup
     free(W_in); free(b_in); free(W_q); free(W_k); free(W_v); free(W_out); free(b_out);
     free(hidden); free(q); free(k); free(v); free(attn_scores); free(attn_probs); free(context);
     free(d_W_in); free(d_b_in); free(d_W_q); free(d_W_k); free(d_W_v); free(d_W_out); free(d_b_out);
