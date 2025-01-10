@@ -5,7 +5,7 @@
 #include <time.h>
 
 #define S 32
-#define D 64
+#define D 256
 #define M 4
 #define B1 0.9f
 #define B2 0.999f
