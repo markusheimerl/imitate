@@ -76,7 +76,7 @@ double train(double *W_up, double *b_up, double *W_down, double *b_down, double 
     return loss;
 }
 
-int main() {
+int main(int argc, char **argv) {
     srand(time(NULL));
     double scale = sqrt(2.0/M), *ptrs[17], seq[S][M], running_loss = 0;
     int sizes[] = {D * M, D, M * D, M}, step = 1;
@@ -86,8 +86,8 @@ int main() {
         if(i < 2) for(int j = 0; j < sizes[i]; j++) ptrs[i][j] = ((double)rand()/RAND_MAX - 0.5) * scale;
     }
     
-    FILE *f = fopen("2025-1-10_10-43-1_control_data.csv", "r");
-    if(!f) return 1;
+    FILE *f = fopen(argv[1], "r");
+    if(!f) { printf("Error: Could not open file %s\n", argv[1]); return 1; }
     
     int rows = -1;
     char line[1024];

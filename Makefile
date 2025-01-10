@@ -29,7 +29,7 @@ run: $(TRAIN_TARGET) $(FLY_TARGET)
 	plt.title("Training Loss"); plt.xlabel("Step"); plt.ylabel("Loss"); \
 	plt.yscale("log"); plt.grid(True); plt.legend(); \
 	plt.savefig(f"{ts}_loss.png");'
-	./$(FLY_TARGET) `ls -t *_weights.bin | head -1`
+	# ./$(FLY_TARGET) `ls -t *_weights.bin | head -1`
 
 clean:
 	rm -f $(TRAIN_TARGET) $(FLY_TARGET) *_loss.csv *_flight.gif *_loss.png *_control_data.csv *_weights.bin *_flight_data.csv
