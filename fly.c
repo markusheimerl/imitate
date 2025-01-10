@@ -14,30 +14,30 @@
 
 #define S 32    // Sequence length
 #define D 256   // Hidden dimension
-#define MOTORS 4     // Input/Output dimension
+#define M 4     // Input/Output dimension
 
 bool load_weights(const char* filename, double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
     size_t items_read = 0;
-    items_read += fread(W_in, sizeof(double), D * MOTORS, f);
+    items_read += fread(W_in, sizeof(double), D * M, f);
     items_read += fread(b_in, sizeof(double), D, f);
     items_read += fread(W_q, sizeof(double), D * D, f);
     items_read += fread(W_k, sizeof(double), D * D, f);
     items_read += fread(W_v, sizeof(double), D * D, f);
-    items_read += fread(W_out, sizeof(double), MOTORS * D, f);
-    items_read += fread(b_out, sizeof(double), MOTORS, f);
+    items_read += fread(W_out, sizeof(double), M * D, f);
+    items_read += fread(b_out, sizeof(double), M, f);
     fclose(f);
-    return items_read == (D*MOTORS + D + D*D*3 + MOTORS*D + MOTORS);
+    return items_read == (D*M + D + D*D*3 + M*D + M);
 }
 
-void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out, double *input, double *output) {
-    double hidden[S * D], q[S * D], k[S * D], v[S * D], attn_scores[S * S], attn_probs[S * S], context[S * D];
-
+void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out, 
+            double *hidden, double *q, double *k, double *v, double *attn_scores, double *attn_probs, 
+            double *context, double (*seq)[M], double *out) {
     for(int s = 0; s < S; s++) {
         for(int d = 0; d < D; d++) {
             double sum = b_in[d];
-            for(int m = 0; m < MOTORS; m++) sum += W_in[d * MOTORS + m] * input[m];
+            for(int m = 0; m < M; m++) sum += W_in[d * M + m] * seq[s][m];
             hidden[s * D + d] = fmax(0.0, sum);
         }
     }
@@ -53,10 +53,34 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
         }
     }
 
-    for(int i = 0; i < MOTORS; i++) {
+    for(int i = 0; i < S; i++) {
+        double max_val = -INFINITY;
+        for(int j = 0; j < S; j++) {
+            double score = 0;
+            for(int d = 0; d < D; d++) score += q[i * D + d] * k[j * D + d];
+            max_val = fmax(max_val, (attn_scores[i * S + j] = score/sqrt(D) - 0.125 * (i-j)));
+        }
+        double sum = 0;
+        for(int j = 0; j < S; j++) sum += (attn_probs[i * S + j] = exp(attn_scores[i * S + j] - max_val));
+        for(int j = 0; j < S; j++) attn_probs[i * S + j] /= sum;
+    }
+
+    for(int i = 0; i < S; i++) {
+        double rms = 0;
+        for(int d = 0; d < D; d++) {
+            double sum = 0;
+            for(int j = 0; j < S; j++) sum += attn_probs[i * S + j] * v[j * D + d];
+            context[i * D + d] = sum + hidden[i * D + d];
+            rms += context[i * D + d] * context[i * D + d];
+        }
+        rms = sqrt(rms / D + 1e-8);
+        for(int d = 0; d < D; d++) context[i * D + d] /= rms;
+    }
+
+    for(int i = 0; i < M; i++) {
         double sum = b_out[i];
         for(int d = 0; d < D; d++) sum += W_out[i * D + d] * context[(S-1) * D + d];
-        output[i] = sum;
+        out[i] = sum;
     }
 }
 
@@ -75,13 +99,20 @@ int main(int argc, char *argv[]) {
     transform_mesh(meshes[1], (double[3]){0.0, -0.2, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
 
     // Initialize neural network
-    double *W_in = malloc(D * MOTORS * sizeof(double));
+    double *W_in = malloc(D * M * sizeof(double));
     double *b_in = malloc(D * sizeof(double));
     double *W_q = malloc(D * D * sizeof(double));
     double *W_k = malloc(D * D * sizeof(double));
     double *W_v = malloc(D * D * sizeof(double));
-    double *W_out = malloc(MOTORS * D * sizeof(double));
-    double *b_out = malloc(MOTORS * sizeof(double));
+    double *W_out = malloc(M * D * sizeof(double));
+    double *b_out = malloc(M * sizeof(double));
+    double *hidden = malloc(S * D * sizeof(double));
+    double *q = malloc(S * D * sizeof(double));
+    double *k = malloc(S * D * sizeof(double));
+    double *v = malloc(S * D * sizeof(double));
+    double *attn_scores = malloc(S * S * sizeof(double));
+    double *attn_probs = malloc(S * S * sizeof(double));
+    double *context = malloc(S * D * sizeof(double));
 
     if (!load_weights(argv[1], W_in, b_in, W_q, W_k, W_v, W_out, b_out)) {
         printf("Failed to load weights\n");
@@ -90,7 +121,10 @@ int main(int argc, char *argv[]) {
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0, t_status = 0.0, wait_start = 0.0;
     bool is_waiting = true, at_ground = true;
-    double input[10], output[4];
+    
+    // Initialize rotor speed history
+    double rotor_history[S][M] = {0};
+    double output[M];
 
     srand(time(NULL));
     for(int i = 0; i < 3; i++) {
@@ -122,13 +156,14 @@ int main(int argc, char *argv[]) {
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
-                memcpy(input, linear_position_d_W, 3 * sizeof(double));
-                input[3] = yaw_d;
-                memcpy(input + 4, angular_velocity_B_s, 3 * sizeof(double));
-                memcpy(input + 7, linear_acceleration_B_s, 3 * sizeof(double));
+                // Shift history and add current rotor speeds
+                memmove(rotor_history[0], rotor_history[1], (S-1) * M * sizeof(double));
+                memcpy(rotor_history[S-1], omega, M * sizeof(double));
 
-                forward(W_in, b_in, W_q, W_k, W_v, W_out, b_out, input, output);
-                memcpy(omega_next, output, 4 * sizeof(double));
+                forward(W_in, b_in, W_q, W_k, W_v, W_out, b_out, hidden, q, k, v, 
+                       attn_scores, attn_probs, context, rotor_history, output);
+
+                memcpy(omega_next, output, M * sizeof(double));
                 update_rotor_speeds();
                 t_control += DT_CONTROL;
 
@@ -140,7 +175,11 @@ int main(int argc, char *argv[]) {
                 if (is_waiting && (t_physics - wait_start >= WAIT_TIME)) position_achieved = stability_achieved = true;
 
                 if (t_physics >= t_status) {
-                    printf("\rP: [% 6.3f, % 6.3f, % 6.3f] yaw: % 6.3f A_V_B: [% 6.3f, % 6.3f, % 6.3f] R: [% 6.3f, % 6.3f, % 6.3f, % 6.3f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], atan2(R_W_B[2], R_W_B[8]) < 0 ? atan2(R_W_B[2], R_W_B[8]) + 2*M_PI : atan2(R_W_B[2], R_W_B[8]), angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], omega[0], omega[1], omega[2], omega[3]);
+                    printf("\rP: [% 6.3f, % 6.3f, % 6.3f] yaw: % 6.3f A_V_B: [% 6.3f, % 6.3f, % 6.3f] R: [% 6.3f, % 6.3f, % 6.3f, % 6.3f]", 
+                           linear_position_W[0], linear_position_W[1], linear_position_W[2], 
+                           atan2(R_W_B[2], R_W_B[8]) < 0 ? atan2(R_W_B[2], R_W_B[8]) + 2*M_PI : atan2(R_W_B[2], R_W_B[8]), 
+                           angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], 
+                           omega[0], omega[1], omega[2], omega[3]);
                     fflush(stdout);
                     t_status = t_physics + 0.1;
                 }
@@ -167,7 +206,9 @@ int main(int argc, char *argv[]) {
     free(frame_buffer);
     free_meshes(meshes, 2);
     ge_close_gif(gif);
+    
     free(W_in); free(b_in); free(W_q); free(W_k); free(W_v); free(W_out); free(b_out);
+    free(hidden); free(q); free(k); free(v); free(attn_scores); free(attn_probs); free(context);
     
     return 0;
 }
