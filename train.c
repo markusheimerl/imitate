@@ -2,266 +2,218 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <time.h>
-#include <stdbool.h>
-#include <omp.h>
 
-#define INPUT_FEATURES 10
-#define HIDDEN_SIZE 128
-#define N_HIDDEN 4
-#define OUTPUT_FEATURES 4
-#define LEARNING_RATE 0.0001
-#define TRAINING_STEPS 100000
-#define CLIP_VALUE 1.0
+#define SEQ_LEN 32
+#define MODEL_DIM 64
+#define NUM_MOTORS 4
+#define LEARNING_RATE 0.001f
+#define NUM_EPOCHS 1000
 
-typedef struct { double *data; int rows, cols; } Dataset;
+// Global model parameters
+float* W_up;    // [MODEL_DIM x NUM_MOTORS]
+float* b_up;    // [MODEL_DIM]
+float* W_down;  // [NUM_MOTORS x MODEL_DIM]
+float* b_down;  // [NUM_MOTORS]
 
-double randn() { return sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * (double)rand() / RAND_MAX); }
+// Global gradients
+float* dW_up;
+float* db_up;
+float* dW_down;
+float* db_down;
 
-Dataset load_csv(const char* filename) {
-    Dataset ds = {malloc(1000 * (INPUT_FEATURES + OUTPUT_FEATURES) * sizeof(double)), 0, (INPUT_FEATURES + OUTPUT_FEATURES)};
-    char line[1024]; FILE* f = fopen(filename, "r");
-    if (!f || !fgets(line, 1024, f)) { printf("File error\n"); exit(1); }
+// Global buffers
+float* hidden;
+float* temp;
+float** sequences;
+
+void init_model() {
+    // Allocate weights and biases
+    W_up = calloc(MODEL_DIM * NUM_MOTORS, sizeof(float));
+    b_up = calloc(MODEL_DIM, sizeof(float));
+    W_down = calloc(NUM_MOTORS * MODEL_DIM, sizeof(float));
+    b_down = calloc(NUM_MOTORS, sizeof(float));
     
-    while (fgets(line, 1024, f)) {
-        if (ds.rows >= 1000) ds.data = realloc(ds.data, (ds.rows * 2) * (INPUT_FEATURES + OUTPUT_FEATURES) * sizeof(double));
-        char* tok = strtok(line, ",");
-        for (int i = 0; i < (INPUT_FEATURES + OUTPUT_FEATURES) && tok; i++, tok = strtok(NULL, ",")) 
-            ds.data[ds.rows * (INPUT_FEATURES + OUTPUT_FEATURES) + i] = atof(tok);
-        ds.rows++;
+    // Allocate gradients
+    dW_up = calloc(MODEL_DIM * NUM_MOTORS, sizeof(float));
+    db_up = calloc(MODEL_DIM, sizeof(float));
+    dW_down = calloc(NUM_MOTORS * MODEL_DIM, sizeof(float));
+    db_down = calloc(NUM_MOTORS, sizeof(float));
+    
+    // Allocate buffers
+    hidden = calloc(MODEL_DIM, sizeof(float));
+    temp = calloc(MODEL_DIM, sizeof(float));
+    sequences = malloc(SEQ_LEN * sizeof(float*));
+    for(int i = 0; i < SEQ_LEN; i++) {
+        sequences[i] = malloc(NUM_MOTORS * sizeof(float));
     }
-    fclose(f);
-    return ds;
+    
+    // Initialize weights with small random values
+    for(int i = 0; i < MODEL_DIM * NUM_MOTORS; i++) {
+        W_up[i] = ((float)rand() / RAND_MAX - 0.5f) * 0.02f;
+        W_down[i] = ((float)rand() / RAND_MAX - 0.5f) * 0.02f;
+    }
 }
 
-void save_weights(double** weights, double** biases) {
-    time_t t = time(NULL); struct tm tm = *localtime(&t);
-    char filename[100];
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    FILE* f = fopen(filename, "wb");
-    if (!f) return;
+void forward(float** input_sequence, float* output) {
+    memset(hidden, 0, MODEL_DIM * sizeof(float));
     
-    fwrite(weights[0], sizeof(double), INPUT_FEATURES * HIDDEN_SIZE, f);
-    fwrite(biases[0], sizeof(double), HIDDEN_SIZE, f);
-    for (int i = 1; i < N_HIDDEN; i++) {
-        fwrite(weights[i], sizeof(double), HIDDEN_SIZE * HIDDEN_SIZE, f);
-        fwrite(biases[i], sizeof(double), HIDDEN_SIZE, f);
-    }
-    fwrite(weights[N_HIDDEN], sizeof(double), HIDDEN_SIZE * OUTPUT_FEATURES, f);
-    fwrite(biases[N_HIDDEN], sizeof(double), OUTPUT_FEATURES, f);
-    fclose(f);
-    printf("Saved weights to: %s\n", filename);
-}
-
-int load_weights(const char* filename, double** weights, double** biases) {
-    FILE* f = fopen(filename, "rb");
-    if (!f) return 0;
-    
-    size_t read = fread(weights[0], sizeof(double), INPUT_FEATURES * HIDDEN_SIZE, f);
-    read += fread(biases[0], sizeof(double), HIDDEN_SIZE, f);
-    for (int i = 1; i < N_HIDDEN; i++) {
-        read += fread(weights[i], sizeof(double), HIDDEN_SIZE * HIDDEN_SIZE, f);
-        read += fread(biases[i], sizeof(double), HIDDEN_SIZE, f);
-    }
-    read += fread(weights[N_HIDDEN], sizeof(double), HIDDEN_SIZE * OUTPUT_FEATURES, f);
-    read += fread(biases[N_HIDDEN], sizeof(double), OUTPUT_FEATURES, f);
-    fclose(f);
-    return read == (INPUT_FEATURES * HIDDEN_SIZE + HIDDEN_SIZE + (N_HIDDEN - 1) * (HIDDEN_SIZE * HIDDEN_SIZE + HIDDEN_SIZE) + HIDDEN_SIZE * OUTPUT_FEATURES + OUTPUT_FEATURES);
-}
-
-double relu(double x) { return x > 0 ? x : 0; }
-double relu_derivative(double x) { return x > 0 ? 1 : 0; }
-
-void forward_pass(const double* input, double** activations, double** weights, double** biases) {
-    #pragma omp parallel for
-    for (int i = 0; i < HIDDEN_SIZE; i++) {
-        double sum = biases[0][i];
-        for (int j = 0; j < INPUT_FEATURES; j++) sum += input[j] * weights[0][i * INPUT_FEATURES + j];
-        activations[0][i] = relu(sum);
-    }
-    
-    for (int layer = 1; layer < N_HIDDEN; layer++) {
-        #pragma omp parallel for
-        for (int i = 0; i < HIDDEN_SIZE; i++) {
-            double sum = biases[layer][i];
-            for (int j = 0; j < HIDDEN_SIZE; j++) sum += activations[layer-1][j] * weights[layer][i * HIDDEN_SIZE + j];
-            activations[layer][i] = relu(sum);
+    for(int seq = 0; seq < SEQ_LEN; seq++) {
+        // Up projection
+        for(int i = 0; i < MODEL_DIM; i++) {
+            temp[i] = b_up[i];
+            for(int j = 0; j < NUM_MOTORS; j++) {
+                temp[i] += W_up[i * NUM_MOTORS + j] * input_sequence[seq][j];
+            }
+            if(temp[i] < 0) temp[i] = 0; // ReLU
+            hidden[i] += temp[i];
         }
     }
     
-    #pragma omp parallel for
-    for (int i = 0; i < OUTPUT_FEATURES; i++) {
-        double sum = biases[N_HIDDEN][i];
-        for (int j = 0; j < HIDDEN_SIZE; j++) sum += activations[N_HIDDEN-1][j] * weights[N_HIDDEN][i * HIDDEN_SIZE + j];
-        activations[N_HIDDEN][i] = sum;
-    }
-}
-
-double compute_loss(const double* pred, const double* target) {
-    double loss = 0.0;
-    #pragma omp parallel for reduction(+:loss)
-    for (int i = 0; i < OUTPUT_FEATURES; i++) {
-        double error = pred[i] - target[i];
-        loss += error * error;
-    }
-    return loss / OUTPUT_FEATURES;
-}
-
-void clip_gradients(double* grad, int size) {
-    double norm = 0.0;
-    #pragma omp parallel for reduction(+:norm)
-    for (int i = 0; i < size; i++) norm += grad[i] * grad[i];
-    norm = sqrt(norm);
-    if (norm > CLIP_VALUE) {
-        double scale = CLIP_VALUE / norm;
-        #pragma omp parallel for
-        for (int i = 0; i < size; i++) grad[i] *= scale;
-    }
-}
-
-void backward_pass(const double* input, const double* target, double** activations, double** weights, double** biases, double learning_rate) {
-    double* output_deltas = malloc(OUTPUT_FEATURES * sizeof(double));
-    double** hidden_deltas = malloc(N_HIDDEN * sizeof(double*));
-    for (int i = 0; i < N_HIDDEN; i++) hidden_deltas[i] = calloc(HIDDEN_SIZE, sizeof(double));
-    
-    #pragma omp parallel for
-    for (int i = 0; i < OUTPUT_FEATURES; i++) output_deltas[i] = 2 * (activations[N_HIDDEN][i] - target[i]) / OUTPUT_FEATURES;
-    clip_gradients(output_deltas, OUTPUT_FEATURES);
-    
-    #pragma omp parallel for
-    for (int i = 0; i < HIDDEN_SIZE; i++) {
-        for (int j = 0; j < OUTPUT_FEATURES; j++) hidden_deltas[N_HIDDEN-1][i] += output_deltas[j] * weights[N_HIDDEN][j * HIDDEN_SIZE + i];
-        hidden_deltas[N_HIDDEN-1][i] *= relu_derivative(activations[N_HIDDEN-1][i]);
-    }
-    clip_gradients(hidden_deltas[N_HIDDEN-1], HIDDEN_SIZE);
-    
-    for (int layer = N_HIDDEN-2; layer >= 0; layer--) {
-        #pragma omp parallel for
-        for (int i = 0; i < HIDDEN_SIZE; i++) {
-            for (int j = 0; j < HIDDEN_SIZE; j++) hidden_deltas[layer][i] += hidden_deltas[layer+1][j] * weights[layer+1][j * HIDDEN_SIZE + i];
-            hidden_deltas[layer][i] *= relu_derivative(activations[layer][i]);
+    // Down projection
+    for(int i = 0; i < NUM_MOTORS; i++) {
+        output[i] = b_down[i];
+        for(int j = 0; j < MODEL_DIM; j++) {
+            output[i] += W_down[i * MODEL_DIM + j] * hidden[j];
         }
-        clip_gradients(hidden_deltas[layer], HIDDEN_SIZE);
     }
-    
-    #pragma omp parallel for collapse(2)
-    for (int i = 0; i < HIDDEN_SIZE; i++)
-        for (int j = 0; j < INPUT_FEATURES; j++)
-            weights[0][i * INPUT_FEATURES + j] -= learning_rate * hidden_deltas[0][i] * input[j];
-    
-    #pragma omp parallel for
-    for (int i = 0; i < HIDDEN_SIZE; i++) biases[0][i] -= learning_rate * hidden_deltas[0][i];
-    
-    for (int layer = 1; layer < N_HIDDEN; layer++) {
-        #pragma omp parallel for collapse(2)
-        for (int i = 0; i < HIDDEN_SIZE; i++)
-            for (int j = 0; j < HIDDEN_SIZE; j++)
-                weights[layer][i * HIDDEN_SIZE + j] -= learning_rate * hidden_deltas[layer][i] * activations[layer-1][j];
-        
-        #pragma omp parallel for
-        for (int i = 0; i < HIDDEN_SIZE; i++) biases[layer][i] -= learning_rate * hidden_deltas[layer][i];
-    }
-    
-    #pragma omp parallel for collapse(2)
-    for (int i = 0; i < OUTPUT_FEATURES; i++)
-        for (int j = 0; j < HIDDEN_SIZE; j++)
-            weights[N_HIDDEN][i * HIDDEN_SIZE + j] -= learning_rate * output_deltas[i] * activations[N_HIDDEN-1][j];
-    
-    #pragma omp parallel for
-    for (int i = 0; i < OUTPUT_FEATURES; i++) biases[N_HIDDEN][i] -= learning_rate * output_deltas[i];
-    
-    free(output_deltas);
-    for (int i = 0; i < N_HIDDEN; i++) free(hidden_deltas[i]);
-    free(hidden_deltas);
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 2 || argc > 3) { printf("Usage: %s <training_data.csv> [weights.bin]\n", argv[0]); return 1; }
+void backward(float** input_sequence, float* output, float* target) {
+    memset(dW_up, 0, MODEL_DIM * NUM_MOTORS * sizeof(float));
+    memset(db_up, 0, MODEL_DIM * sizeof(float));
+    memset(dW_down, 0, NUM_MOTORS * MODEL_DIM * sizeof(float));
+    memset(db_down, 0, NUM_MOTORS * sizeof(float));
     
-    srand(time(NULL));
-    Dataset ds = load_csv(argv[1]);
-    
-    double** weights = malloc((N_HIDDEN + 1) * sizeof(double*));
-    double** biases = malloc((N_HIDDEN + 1) * sizeof(double*));
-    double** activations = malloc((N_HIDDEN + 1) * sizeof(double*));
-    
-    weights[0] = malloc(INPUT_FEATURES * HIDDEN_SIZE * sizeof(double));
-    biases[0] = malloc(HIDDEN_SIZE * sizeof(double));
-    activations[0] = malloc(HIDDEN_SIZE * sizeof(double));
-    
-    for (int i = 1; i < N_HIDDEN; i++) {
-        weights[i] = malloc(HIDDEN_SIZE * HIDDEN_SIZE * sizeof(double));
-        biases[i] = malloc(HIDDEN_SIZE * sizeof(double));
-        activations[i] = malloc(HIDDEN_SIZE * sizeof(double));
-    }
-    
-    weights[N_HIDDEN] = malloc(HIDDEN_SIZE * OUTPUT_FEATURES * sizeof(double));
-    biases[N_HIDDEN] = malloc(OUTPUT_FEATURES * sizeof(double));
-    activations[N_HIDDEN] = malloc(OUTPUT_FEATURES * sizeof(double));
-    
-    if (argc < 3 || !load_weights(argv[2], weights, biases)) {
-        double scale = sqrt(2.0 / INPUT_FEATURES);
-        for (int i = 0; i < INPUT_FEATURES * HIDDEN_SIZE; i++) weights[0][i] = randn() * scale;
+    // Compute gradients for down projection
+    for(int i = 0; i < NUM_MOTORS; i++) {
+        float d_output = 2 * (output[i] - target[i]);
+        db_down[i] += d_output;
         
-        scale = sqrt(2.0 / HIDDEN_SIZE);
-        for (int layer = 1; layer < N_HIDDEN; layer++)
-            for (int i = 0; i < HIDDEN_SIZE * HIDDEN_SIZE; i++) weights[layer][i] = randn() * scale;
-        
-        for (int i = 0; i < HIDDEN_SIZE * OUTPUT_FEATURES; i++) weights[N_HIDDEN][i] = randn() * scale;
-        
-        for (int layer = 0; layer <= N_HIDDEN; layer++)
-            for (int i = 0; i < (layer == N_HIDDEN ? OUTPUT_FEATURES : HIDDEN_SIZE); i++) biases[layer][i] = 0.0;
-    }
-    
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char loss_filename[100];
-    sprintf(loss_filename, "%d-%d-%d_%d-%d-%d_loss.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    
-    FILE* loss_file = fopen(loss_filename, "w");
-    if (loss_file) fprintf(loss_file, "step,loss\n");
-    
-    double prev_loss = 1e9;
-    double learning_rate = LEARNING_RATE;
-    
-    for (int step = 0; step < TRAINING_STEPS; step++) {
-        int idx = rand() % ds.rows;
-        double* input = ds.data + idx * (INPUT_FEATURES + OUTPUT_FEATURES);
-        double* target = input + INPUT_FEATURES;
-        
-        forward_pass(input, activations, weights, biases);
-        double loss = compute_loss(activations[N_HIDDEN], target);
-        
-        if (step > 0) {
-            learning_rate *= (loss > prev_loss * 1.1) ? 0.95 : (loss < prev_loss * 0.95) ? 1.05 : 1.0;
-            learning_rate = fmax(1e-6, fmin(1e-3, learning_rate));
+        for(int j = 0; j < MODEL_DIM; j++) {
+            dW_down[i * MODEL_DIM + j] += d_output * hidden[j];
         }
-        prev_loss = loss;
-        
-        if (step % 1000 == 0) {
-            printf("Step %d, Loss: %f, LR: %e\n", step, loss, learning_rate);
-            printf("Target: [%.3f, %.3f, %.3f, %.3f]\n", target[0], target[1], target[2], target[3]);
-            printf("Prediction: [%.3f, %.3f, %.3f, %.3f]\n\n", 
-                   activations[N_HIDDEN][0], activations[N_HIDDEN][1], 
-                   activations[N_HIDDEN][2], activations[N_HIDDEN][3]);
+    }
+    
+    // Compute gradients for up projection
+    for(int seq = 0; seq < SEQ_LEN; seq++) {
+        for(int i = 0; i < MODEL_DIM; i++) {
+            float temp_val = b_up[i];
+            for(int j = 0; j < NUM_MOTORS; j++) {
+                temp_val += W_up[i * NUM_MOTORS + j] * input_sequence[seq][j];
+            }
+            
+            if(temp_val > 0) {  // ReLU derivative
+                for(int j = 0; j < NUM_MOTORS; j++) {
+                    dW_up[i * NUM_MOTORS + j] += temp_val * input_sequence[seq][j];
+                }
+                db_up[i] += temp_val;
+            }
         }
-        if (loss_file) fprintf(loss_file, "%d,%f\n", step, loss);
+    }
+    
+    // Update weights and biases
+    for(int i = 0; i < MODEL_DIM * NUM_MOTORS; i++) {
+        W_up[i] -= LEARNING_RATE * dW_up[i];
+        W_down[i] -= LEARNING_RATE * dW_down[i];
+    }
+    for(int i = 0; i < MODEL_DIM; i++) {
+        b_up[i] -= LEARNING_RATE * db_up[i];
+    }
+    for(int i = 0; i < NUM_MOTORS; i++) {
+        b_down[i] -= LEARNING_RATE * db_down[i];
+    }
+}
+
+float** load_csv(const char* filename, int* num_rows) {
+    FILE* file = fopen(filename, "r");
+    if(!file) return NULL;
+    
+    char line[1024];
+    *num_rows = 0;
+    
+    fgets(line, sizeof(line), file); // Skip header
+    while(fgets(line, sizeof(line), file)) (*num_rows)++;
+    
+    float** data = malloc(*num_rows * sizeof(float*));
+    rewind(file);
+    fgets(line, sizeof(line), file); // Skip header again
+    
+    for(int row = 0; row < *num_rows; row++) {
+        data[row] = malloc(NUM_MOTORS * sizeof(float));
+        fgets(line, sizeof(line), file);
+        char* token = strtok(line, ",");
+        for(int i = 0; i < 10; i++) token = strtok(NULL, ","); // Skip non-motor columns
+        for(int i = 0; i < NUM_MOTORS; i++) {
+            data[row][i] = atof(token);
+            token = strtok(NULL, ",");
+        }
+    }
+    
+    fclose(file);
+    return data;
+}
+
+void save_weights(const char* filename) {
+    FILE* file = fopen(filename, "wb");
+    fwrite(W_up, sizeof(float), MODEL_DIM * NUM_MOTORS, file);
+    fwrite(b_up, sizeof(float), MODEL_DIM, file);
+    fwrite(W_down, sizeof(float), NUM_MOTORS * MODEL_DIM, file);
+    fwrite(b_down, sizeof(float), NUM_MOTORS, file);
+    fclose(file);
+}
+
+void load_weights(const char* filename) {
+    FILE* file = fopen(filename, "rb");
+    if(!file) return;
+    fread(W_up, sizeof(float), MODEL_DIM * NUM_MOTORS, file);
+    fread(b_up, sizeof(float), MODEL_DIM, file);
+    fread(W_down, sizeof(float), NUM_MOTORS * MODEL_DIM, file);
+    fread(b_down, sizeof(float), NUM_MOTORS, file);
+    fclose(file);
+}
+
+int main() {
+    int num_rows;
+    float** data = load_csv("sim/2025-1-10_10-19-44_control_data.csv", &num_rows);
+    if(!data) return 1;
+    
+    init_model();
+    float output[NUM_MOTORS];
+    
+    for(int epoch = 0; epoch < NUM_EPOCHS; epoch++) {
+        float total_loss = 0;
         
-        backward_pass(input, target, activations, weights, biases, learning_rate);
+        for(int i = SEQ_LEN; i < num_rows - 1; i++) {
+            for(int j = 0; j < SEQ_LEN; j++) {
+                memcpy(sequences[j], data[i - SEQ_LEN + j], NUM_MOTORS * sizeof(float));
+            }
+            
+            forward(sequences, output);
+            
+            float loss = 0;
+            for(int j = 0; j < NUM_MOTORS; j++) {
+                float diff = output[j] - data[i][j];
+                loss += diff * diff;
+            }
+            total_loss += loss;
+            
+            backward(sequences, output, data[i]);
+        }
+        
+        printf("Epoch %d, Loss: %f\n", epoch, total_loss / (num_rows - SEQ_LEN));
+        
     }
     
-    if (loss_file) fclose(loss_file);
-    save_weights(weights, biases);
+    save_weights("model_weights.bin");
     
-    free(ds.data);
-    for (int i = 0; i <= N_HIDDEN; i++) {
-        free(weights[i]);
-        free(biases[i]);
-        free(activations[i]);
-    }
-    free(weights);
-    free(biases);
-    free(activations);
+    // Cleanup
+    for(int i = 0; i < num_rows; i++) free(data[i]);
+    free(data);
+    for(int i = 0; i < SEQ_LEN; i++) free(sequences[i]);
+    free(sequences);
+    free(W_up); free(b_up); free(W_down); free(b_down);
+    free(dW_up); free(db_up); free(dW_down); free(db_down);
+    free(hidden); free(temp);
     
     return 0;
 }
