@@ -4,6 +4,7 @@
 #include <math.h>
 #include <time.h>
 
+#define N_EPOCHS 100
 #define S 32    // Sequence length
 #define D 256   // Hidden dimension
 #define M 4     // Input/Output dimension
@@ -15,6 +16,19 @@
 #define TEMPORAL_DECAY 0.125
 
 double g_prev_loss = INFINITY, g_lr = 0.0001;
+
+void save_weights(const char* filename, double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out) {
+    FILE* f = fopen(filename, "wb");
+    if (!f) { printf("Error: Could not open file %s for writing\n", filename); return; }
+    fwrite(W_in, sizeof(double), D * M, f);
+    fwrite(b_in, sizeof(double), D, f);
+    fwrite(W_q, sizeof(double), D * D, f);
+    fwrite(W_k, sizeof(double), D * D, f);
+    fwrite(W_v, sizeof(double), D * D, f);
+    fwrite(W_out, sizeof(double), M * D, f);
+    fwrite(b_out, sizeof(double), M, f);
+    fclose(f);
+}
 
 void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out, 
             double *hidden, double *q, double *k, double *v, double *attn_scores, double *attn_probs, 
@@ -204,7 +218,7 @@ int main(int argc, char **argv) {
     for(int i = 0; i < max_start; i++) positions[i] = i;
     double running_loss = 0, out[M];
 
-    for(int epoch = 0; epoch < 1000; epoch++) {
+    for(int epoch = 0; epoch < N_EPOCHS; epoch++) {
         for(int i = max_start - 1; i > 0; i--) {
             int j = rand() % (i + 1);
             int temp = positions[i];
@@ -241,6 +255,10 @@ int main(int argc, char **argv) {
             step++;
         }
     }
+
+    char weights_filename[100];
+    sprintf(weights_filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    save_weights(weights_filename, W_in, b_in, W_q, W_k, W_v, W_out, b_out);
 
     free(W_in); free(b_in); free(W_q); free(W_k); free(W_v); free(W_out); free(b_out);
     free(hidden); free(q); free(k); free(v); free(attn_scores); free(attn_probs); free(context);
