@@ -18,18 +18,22 @@ double g_prev_loss = INFINITY, g_lr = 0.0001;
 void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, double *W_out, double *b_out, 
             double *hidden, double *q, double *k, double *v, double *attn_scores, double *attn_probs, 
             double *context, double (*seq)[M], double *out) {
-    for(int s = 0; s < S; s++) for(int d = 0; d < D; d++) {
-        double sum = b_in[d];
-        for(int m = 0; m < M; m++) sum += W_in[d * M + m] * seq[s][m];
-        hidden[s * D + d] = fmax(0.0, sum);
+    for(int s = 0; s < S; s++) {
+        for(int d = 0; d < D; d++) {
+            double sum = b_in[d];
+            for(int m = 0; m < M; m++) sum += W_in[d * M + m] * seq[s][m];
+            hidden[s * D + d] = fmax(0.0, sum);
+        }
     }
 
-    for(int s = 0; s < S; s++) for(int d = 0; d < D; d++) {
-        q[s * D + d] = k[s * D + d] = v[s * D + d] = 0;
-        for(int j = 0; j < D; j++) {
-            q[s * D + d] += W_q[d * D + j] * hidden[s * D + j];
-            k[s * D + d] += W_k[d * D + j] * hidden[s * D + j];
-            v[s * D + d] += W_v[d * D + j] * hidden[s * D + j];
+    for(int s = 0; s < S; s++) {
+        for(int d = 0; d < D; d++) {
+            q[s * D + d] = k[s * D + d] = v[s * D + d] = 0;
+            for(int j = 0; j < D; j++) {
+                q[s * D + d] += W_q[d * D + j] * hidden[s * D + j];
+                k[s * D + d] += W_k[d * D + j] * hidden[s * D + j];
+                v[s * D + d] += W_v[d * D + j] * hidden[s * D + j];
+            }
         }
     }
 
@@ -45,10 +49,12 @@ void forward(double *W_in, double *b_in, double *W_q, double *W_k, double *W_v, 
         for(int j = 0; j < S; j++) attn_probs[i * S + j] /= sum;
     }
 
-    for(int i = 0; i < S; i++) for(int d = 0; d < D; d++) {
-        double sum = 0;
-        for(int j = 0; j < S; j++) sum += attn_probs[i * S + j] * v[j * D + d];
-        context[i * D + d] = sum;
+    for(int i = 0; i < S; i++) {
+        for(int d = 0; d < D; d++) {
+            double sum = 0;
+            for(int j = 0; j < S; j++) sum += attn_probs[i * S + j] * v[j * D + d];
+            context[i * D + d] = sum;
+        }
     }
 
     for(int i = 0; i < M; i++) {
@@ -82,10 +88,12 @@ double backward(double *W_in, double *W_q, double *W_k, double *W_v, double *W_o
         }
     }
 
-    for(int i = 0; i < S; i++) for(int j = 0; j < S; j++) {
-        for(int d = 0; d < D; d++) {
-            d_v[j * D + d] += attn_probs[i * S + j] * d_context[i * D + d];
-            d_attn_probs[i * S + j] += d_context[i * D + d] * v[j * D + d] / sqrt(D);
+    for(int i = 0; i < S; i++) {
+        for(int j = 0; j < S; j++) {
+            for(int d = 0; d < D; d++) {
+                d_v[j * D + d] += attn_probs[i * S + j] * d_context[i * D + d];
+                d_attn_probs[i * S + j] += d_context[i * D + d] * v[j * D + d] / sqrt(D);
+            }
         }
     }
 
@@ -97,19 +105,23 @@ double backward(double *W_in, double *W_q, double *W_k, double *W_v, double *W_o
         }
     }
 
-    for(int i = 0; i < S; i++) for(int d = 0; d < D; d++) {
-        for(int j = 0; j < D; j++) {
-            d_W_q[d * D + j] += d_q[i * D + d] * hidden[i * D + j];
-            d_W_k[d * D + j] += d_k[i * D + d] * hidden[i * D + j];
-            d_W_v[d * D + j] += d_v[i * D + d] * hidden[i * D + j];
-            d_hidden[i * D + j] += d_q[i * D + d] * W_q[d * D + j] + d_k[i * D + d] * W_k[d * D + j] + d_v[i * D + d] * W_v[d * D + j];
+    for(int i = 0; i < S; i++) {
+        for(int d = 0; d < D; d++) {
+            for(int j = 0; j < D; j++) {
+                d_W_q[d * D + j] += d_q[i * D + d] * hidden[i * D + j];
+                d_W_k[d * D + j] += d_k[i * D + d] * hidden[i * D + j];
+                d_W_v[d * D + j] += d_v[i * D + d] * hidden[i * D + j];
+                d_hidden[i * D + j] += d_q[i * D + d] * W_q[d * D + j] + d_k[i * D + d] * W_k[d * D + j] + d_v[i * D + d] * W_v[d * D + j];
+            }
         }
     }
 
-    for(int s = 0; s < S; s++) for(int d = 0; d < D; d++) {
-        if(hidden[s * D + d] > 0) {
-            d_b_in[d] += d_hidden[s * D + d];
-            for(int m = 0; m < M; m++) d_W_in[d * M + m] += d_hidden[s * D + d] * seq[s][m];
+    for(int s = 0; s < S; s++) {
+        for(int d = 0; d < D; d++) {
+            if(hidden[s * D + d] > 0) {
+                d_b_in[d] += d_hidden[s * D + d];
+                for(int m = 0; m < M; m++) d_W_in[d * M + m] += d_hidden[s * D + d] * seq[s][m];
+            }
         }
     }
 
