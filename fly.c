@@ -113,6 +113,7 @@ int main(int argc, char *argv[]) {
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0, t_status = 0.0, wait_start = 0.0;
     bool is_waiting = true, at_ground = true;
     double rotor_history[S][MO] = {0}, output[MO];
+    int history_filled = 0;
 
     srand(time(NULL));
     for(int i = 0; i < 3; i++) {
@@ -142,11 +143,16 @@ int main(int argc, char *argv[]) {
             t_physics += DT_PHYSICS;
             
             if (t_control <= t_physics) {
-                memmove(rotor_history[0], rotor_history[1], (S-1) * MO * sizeof(double));
-                memcpy(rotor_history[S-1], omega, MO * sizeof(double));
-
-                forward(W_in, b_in, W_q, W_k, W_v, W_out, b_out, hidden, q, k, v, attn_scores, attn_probs, context, rotor_history, output);
-                memcpy(omega_next, output, MO * sizeof(double));
+                if (history_filled < S) {
+                    update_drone_control();
+                    history_filled++;
+                } else {
+                    memmove(rotor_history[0], rotor_history[1], (S-1) * MO * sizeof(double));
+                    memcpy(rotor_history[S-1], omega, MO * sizeof(double));
+                    forward(W_in, b_in, W_q, W_k, W_v, W_out, b_out, hidden, q, k, v, attn_scores, attn_probs, context, rotor_history, output);
+                    memcpy(omega_next, output, MO * sizeof(double));
+                }
+                
                 update_rotor_speeds();
                 t_control += DT_CONTROL;
 

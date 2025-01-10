@@ -254,10 +254,10 @@ int main(int argc, char **argv) {
             g_lr *= ((running_loss/i) > g_prev_loss) ? 0.95 : 1.05;
             g_lr = fmax(1e-10, fmin(1e-3, g_lr));
             g_prev_loss = (running_loss/i);
+            fprintf(loss_file, "%d,%f\n", step, running_loss/100);
 
             if(step % 100 == 0) {
                 printf("Step %d (Epoch %d), Average Loss: %f, LR: %e\n", step, epoch, running_loss/100, g_lr);
-                fprintf(loss_file, "%d,%f\n", step, running_loss/100);
                 running_loss = 0;
             }
             step++;
