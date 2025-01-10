@@ -13,6 +13,7 @@
 #define DC 0.01f
 #define C 1.0f
 
+double g_prev_loss = INFINITY;
 double g_lr = 0.0001;
 
 void forward(double *W_up, double *b_up, double *W_down, double *b_down, double *hidden, double (*seq)[M], double *out) {
@@ -70,6 +71,9 @@ double train(double *W_up, double *b_up, double *W_down, double *b_down, double 
     adam(b_up, d_b_up, m_b_up, v_b_up, D, step);
     adam(W_down, d_W_down, m_W_down, v_W_down, M * D, step);
     adam(b_down, d_b_down, m_b_down, v_b_down, M, step);
+    g_lr *= (loss > g_prev_loss) ? 0.95 : 1.05;
+    g_lr = fmax(1e-9, fmin(1e-3, g_lr));
+    g_prev_loss = loss;
     return loss;
 }
 
@@ -111,9 +115,7 @@ int main() {
             loss += train(ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8], ptrs[9], ptrs[10], ptrs[11], ptrs[12], ptrs[13], ptrs[14], ptrs[15], ptrs[16], seq, data[i], step++);
         }
         loss /= (rows - S);
-        g_lr *= (loss > prev_loss) ? 1.05 : 0.95;
         printf("Epoch %d, Loss: %f, LR: %e\n", epoch, loss, g_lr);
-        prev_loss = loss;
     }
     
     for(int i = 0; i < rows; i++) free(data[i]);
