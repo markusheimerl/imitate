@@ -55,7 +55,7 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
     for(int i = 0; i < M_OUT; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = sum;
+        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));
     }
 }
 
@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
         }
 
         double t_physics = 0.0, t_control = 0.0;
-        while (t_physics < 100.0 && VEC3_MAG2(linear_position_W) <= 100.0*100.0 && VEC3_MAG2(linear_velocity_W) <= 10.0*10.0 && VEC3_MAG2(angular_velocity_B) <= 10.0*10.0) {
+        while (t_physics < 20.0 && VEC3_MAG2(linear_position_W) <= 100.0*100.0 && VEC3_MAG2(linear_velocity_W) <= 10.0*10.0 && VEC3_MAG2(angular_velocity_B) <= 10.0*10.0) {
             
             update_drone_physics(DT_PHYSICS);
             t_physics += DT_PHYSICS;
