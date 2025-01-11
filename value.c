@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
     double out, running_loss = 0;
     int step = 1;
 
-    for(int epoch = 0; epoch < 5000; epoch++) {
+    for(int epoch = 0; epoch < 500; epoch++) {
         for(int i = rows-1; i > 0; i--) {
             int j = rand() % (i + 1);
             int temp = indices[i]; indices[i] = indices[j]; indices[j] = temp;

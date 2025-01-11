@@ -106,111 +106,122 @@ int main(int argc, char *argv[]) {
     sprintf(filename, "%d-%d-%d_%d-%d-%d_trajectory.csv", tm.tm_year + 1900, tm.tm_mon + 1,
             tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     FILE *csv_file = fopen(filename, "w");
-    fprintf(csv_file, "pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],"
+    fprintf(csv_file, "rollout,pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],"
             "R[0],R[1],R[2],R[3],R[4],R[5],R[6],R[7],R[8],acc_s[0],acc_s[1],acc_s[2],"
             "gyro_s[0],gyro_s[1],gyro_s[2],omega[0],omega[1],omega[2],omega[3],reward,discounted_return\n");
     #endif
 
-    for(int i = 0; i < 3; i++) {
-        accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
-        gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
-    }
-
-    double t_physics = 0.0, t_control = 0.0;
-    
-    while (t_physics < 10.0) {
-        if (VEC3_MAG2(linear_position_W) > 100.0*100.0 || 
-            VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || 
-            VEC3_MAG2(angular_velocity_B) > 10.0*10.0) break;
-
-        update_drone_physics(DT_PHYSICS);
-        t_physics += DT_PHYSICS;
+    const int NUM_ROLLOUTS = 10;
+    for(int rollout = 0; rollout < NUM_ROLLOUTS; rollout++) {
+        printf("Starting rollout %d\n", rollout);
         
-        if (t_control <= t_physics) {
-            for(int i = 0; i < 3; i++) {
-                input[i] = linear_acceleration_B_s[i];
-                input[i+3] = angular_velocity_B_s[i];
-            }
-            forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
-            memcpy(omega, output, M_OUT * sizeof(double));
+        // Reset drone state for each rollout
+        memset(linear_position_W, 0, sizeof(double) * 3);
+        memset(linear_velocity_W, 0, sizeof(double) * 3);
+        memset(angular_velocity_B, 0, sizeof(double) * 3);
+        memcpy(R_W_B, (double[9]){1,0,0, 0,1,0, 0,0,1}, sizeof(double) * 9);
 
-            #ifdef LOG
-            double pos_error = sqrt(pow(linear_position_W[0], 2) + 
-                                  pow(linear_position_W[1] - 1.0, 2) + 
-                                  pow(linear_position_W[2], 2));
-            double reward = exp(-(pos_error * 2.0 + sqrt(VEC3_MAG2(angular_velocity_B)) * 0.5));
-            fprintf(csv_file, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,"
-                    "%f,%f,%f,%f,%f,%f,%f,%f,%f\n",
-                    linear_position_W[0], linear_position_W[1], linear_position_W[2],
-                    linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2],
-                    angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
-                    R_W_B[0], R_W_B[1], R_W_B[2], R_W_B[3], R_W_B[4], R_W_B[5], 
-                    R_W_B[6], R_W_B[7], R_W_B[8],
-                    linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2],
-                    angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2],
-                    omega[0], omega[1], omega[2], omega[3],
-                    reward, 0.0);
-            #endif
+        for(int i = 0; i < 3; i++) {
+            accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
+            gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
+        }
+
+        double t_physics = 0.0, t_control = 0.0;
+        
+        // Store rewards for this rollout
+        double *rewards = NULL;
+        int reward_count = 0;
+        
+        // Store trajectory data for this rollout
+        char **trajectory_lines = NULL;
+        
+        while (t_physics < 10.0) {
+            if (VEC3_MAG2(linear_position_W) > 100.0*100.0 || 
+                VEC3_MAG2(linear_velocity_W) > 10.0*10.0 || 
+                VEC3_MAG2(angular_velocity_B) > 10.0*10.0) break;
+
+            update_drone_physics(DT_PHYSICS);
+            t_physics += DT_PHYSICS;
             
-            t_control += DT_CONTROL;
-        }
+            if (t_control <= t_physics) {
+                for(int i = 0; i < 3; i++) {
+                    input[i] = linear_acceleration_B_s[i];
+                    input[i+3] = angular_velocity_B_s[i];
+                }
+                forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
+                memcpy(omega, output, M_OUT * sizeof(double));
 
-        #ifdef RENDER
-        if (t_render <= t_physics) {
-            transform_mesh(meshes[0], linear_position_W, 0.5, R_W_B);
-            memset(frame_buffer, 0, WIDTH * HEIGHT * 3);
-            vertex_shader(meshes, 2, (double[3]){-2.0, 2.0, -2.0}, (double[3]){0.0, 0.0, 0.0});
-            rasterize(frame_buffer, meshes, 2);
-            ge_add_frame(gif, frame_buffer, 6);
-            t_render += DT_RENDER;
+                #ifdef LOG
+                double pos_error = sqrt(pow(linear_position_W[0], 2) + 
+                                      pow(linear_position_W[1] - 1.0, 2) + 
+                                      pow(linear_position_W[2], 2));
+                double reward = exp(-(pos_error * 2.0 + sqrt(VEC3_MAG2(angular_velocity_B)) * 0.5));
+                rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
+                rewards[reward_count] = reward;
+                
+                // Store line in memory
+                trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
+                trajectory_lines[reward_count] = malloc(1024);
+                snprintf(trajectory_lines[reward_count], 1024,
+                        "%d,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,"
+                        "%f,%f,%f,%f,%f,%f,%f,%f,0.0\n",
+                        rollout,
+                        linear_position_W[0], linear_position_W[1], linear_position_W[2],
+                        linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2],
+                        angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
+                        R_W_B[0], R_W_B[1], R_W_B[2], R_W_B[3], R_W_B[4], R_W_B[5], 
+                        R_W_B[6], R_W_B[7], R_W_B[8],
+                        linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2],
+                        angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2],
+                        omega[0], omega[1], omega[2], omega[3],
+                        reward);
+                
+                reward_count++;
+                #endif
+                
+                t_control += DT_CONTROL;
+            }
+
+            #ifdef RENDER
+            if (t_render <= t_physics) {
+                transform_mesh(meshes[0], linear_position_W, 0.5, R_W_B);
+                memset(frame_buffer, 0, WIDTH * HEIGHT * 3);
+                vertex_shader(meshes, 2, (double[3]){-2.0, 2.0, -2.0}, (double[3]){0.0, 0.0, 0.0});
+                rasterize(frame_buffer, meshes, 2);
+                ge_add_frame(gif, frame_buffer, 6);
+                t_render += DT_RENDER;
+            }
+            #endif
         }
+        
+        #ifdef LOG
+        // Calculate and write trajectory with proper discounted returns
+        for(int i = 0; i < reward_count; i++) {
+            double discounted_return = 0.0;
+            double gamma = 0.99;
+            double discount = 1.0;
+            for(int j = i; j < reward_count; j++) {
+                discounted_return += discount * rewards[j];
+                discount *= gamma;
+            }
+            
+            // Replace the last number (0.0) with the calculated discounted return
+            char *line = trajectory_lines[i];
+            char *last_comma = strrchr(line, ',');
+            sprintf(last_comma + 1, "%f\n", discounted_return);
+            fprintf(csv_file, "%s", line);
+            free(line);
+        }
+        
+        free(trajectory_lines);
+        free(rewards);
         #endif
+        
+        printf("Completed rollout %d\n", rollout);
     }
 
     #ifdef LOG
     fclose(csv_file);
-    FILE *csv_input = fopen(filename, "r");
-    char temp_filename[100];
-    sprintf(temp_filename, "%s.tmp", filename);
-    FILE *csv_output = fopen(temp_filename, "w");
-    
-    char line[1024], header[1024];
-    fgets(header, sizeof(header), csv_input);
-    fprintf(csv_output, "%s", header);
-
-    int line_count = 0;
-    double *rewards = NULL;
-    while (fgets(line, sizeof(line), csv_input)) {
-        rewards = realloc(rewards, (line_count + 1) * sizeof(double));
-        char *token = strtok(line, ",");
-        for(int i = 0; i < 28; i++) token = strtok(NULL, ",");
-        rewards[line_count++] = atof(token);
-    }
-
-    rewind(csv_input);
-    fgets(line, sizeof(line), csv_input);
-
-    double gamma = 0.99;
-    for(int i = 0; i < line_count; i++) {
-        double discounted_return = 0.0;
-        double discount = 1.0;
-        for(int j = i; j < line_count; j++) {
-            discounted_return += discount * rewards[j];
-            discount *= gamma;
-        }
-        
-        fgets(line, sizeof(line), csv_input);
-        line[strlen(line)-1] = '\0';
-        char *last_comma = strrchr(line, ',');
-        *last_comma = '\0';
-        fprintf(csv_output, "%s,%f\n", line, discounted_return);
-    }
-
-    free(rewards);
-    fclose(csv_input);
-    fclose(csv_output);
-    remove(filename);
-    rename(temp_filename, filename);
     #endif
 
     #ifdef RENDER
