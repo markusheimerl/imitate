@@ -26,10 +26,12 @@ log: CFLAGS += -DLOG
 log: trajectory.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $(TRAJECTORY_TARGET)
 
-run: $(VALUE_TARGET) log
+run: $(VALUE_TARGET) log $(ADVANTAGE_TARGET)
 	./$(TRAJECTORY_TARGET)
-	./$(VALUE_TARGET) *_trajectory.csv
-	./$(ADVANTAGE_TARGET) *_trajectory.csv *_weights.bin
+	TRAJECTORY_FILE=$$(ls -t *_trajectory.csv | head -n1); \
+	./$(VALUE_TARGET) $$TRAJECTORY_FILE; \
+	VALUE_WEIGHTS=$$(ls -t *_value_weights.bin | head -n1); \
+	./$(ADVANTAGE_TARGET) $$TRAJECTORY_FILE $$VALUE_WEIGHTS
 
 clean:
-	rm -f $(VALUE_TARGET) $(TRAJECTORY_TARGET) *_flight.gif *_trajectory.csv *_weights.bin
+	rm -f $(VALUE_TARGET) $(TRAJECTORY_TARGET) $(ADVANTAGE_TARGET) *_flight.gif *_trajectory.csv *_policy_weights.bin *_value_weights.bin

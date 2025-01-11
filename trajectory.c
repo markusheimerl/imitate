@@ -220,7 +220,7 @@ int main(int argc, char *argv[]) {
     #endif
 
     if (argc <= 1) {
-        sprintf(filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1,
+        sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1,
                 tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
         save_weights(filename, W1, b1, W2, b2, W3, b3, W4, b4);
     }
