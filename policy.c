@@ -5,9 +5,9 @@
 #include <time.h>
 #include <stdbool.h>
 
-#define D1 2048
-#define D2 1024
-#define D3 512
+#define D1 64
+#define D2 32
+#define D3 16
 #define M_IN 6
 #define M_OUT 4
 #define B1 0.9

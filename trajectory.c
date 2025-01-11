@@ -14,9 +14,9 @@
 #define DT_RENDER   (1.0 / 30.0)
 #define VEC3_MAG2(v) ((v)[0]*(v)[0] + (v)[1]*(v)[1] + (v)[2]*(v)[2])
 
-#define D1 2048
-#define D2 1024
-#define D3 512
+#define D1 64
+#define D2 32
+#define D3 16
 #define M_IN 6
 #define M_OUT 4
 
