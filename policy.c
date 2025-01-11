@@ -63,15 +63,12 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
     }
 }
 
-void adam(double *p, double *g, double *m, double *v, int size, int t, bool ascend) {
+void adam(double *p, double *g, double *m, double *v, int size, int t) {
     double lr_t = g_lr * sqrt(1.0 - pow(B2, t)) / (1.0 - pow(B1, t));
     for(int i = 0; i < size; i++) {
         m[i] = B1 * m[i] + (1-B1) * g[i];
         v[i] = B2 * v[i] + (1-B2) * g[i] * g[i];
-        if (ascend)
-            p[i] += lr_t * (m[i] / (sqrt(v[i]) + E) - DC * p[i]);
-        else
-            p[i] -= lr_t * (m[i] / (sqrt(v[i]) + E) + DC * p[i]);
+        p[i] += lr_t * (m[i] / (sqrt(v[i]) + E) - DC * p[i]);
     }
 }
 
@@ -119,15 +116,14 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
         d_b1[i] = d_h1;
     }
 
-    bool ascend = advantage > 0;
-    adam(W1, d_W1, m_W1, v_W1, D1*M_IN, step, ascend);
-    adam(b1, d_b1, m_b1, v_b1, D1, step, ascend);
-    adam(W2, d_W2, m_W2, v_W2, D2*D1, step, ascend);
-    adam(b2, d_b2, m_b2, v_b2, D2, step, ascend);
-    adam(W3, d_W3, m_W3, v_W3, D3*D2, step, ascend);
-    adam(b3, d_b3, m_b3, v_b3, D3, step, ascend);
-    adam(W4, d_W4, m_W4, v_W4, M_OUT*D3, step, ascend);
-    adam(b4, d_b4, m_b4, v_b4, M_OUT, step, ascend);
+    adam(W1, d_W1, m_W1, v_W1, D1*M_IN, step);
+    adam(b1, d_b1, m_b1, v_b1, D1, step);
+    adam(W2, d_W2, m_W2, v_W2, D2*D1, step);
+    adam(b2, d_b2, m_b2, v_b2, D2, step);
+    adam(W3, d_W3, m_W3, v_W3, D3*D2, step);
+    adam(b3, d_b3, m_b3, v_b3, D3, step);
+    adam(W4, d_W4, m_W4, v_W4, M_OUT*D3, step);
+    adam(b4, d_b4, m_b4, v_b4, M_OUT, step);
 
     free(d_W1); free(d_b1); free(d_W2); free(d_b2);
     free(d_W3); free(d_b3); free(d_W4); free(d_b4);
