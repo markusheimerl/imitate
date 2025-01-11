@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
         targets[i] = atof(token);
     }
     fclose(f);
-    
+
     printf("First target value: %f\n", targets[0]);
 
     double out, running_loss = 0;
@@ -199,11 +199,15 @@ int main(int argc, char **argv) {
         }
     }
 
-    char filename[100];
-    time_t t = time(NULL); struct tm tm = *localtime(&t);
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_value_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    save_weights(filename, W1, b1, W2, b2, W3, b3, W4, b4);
-
+    if (argc > 2) {  // Remember value.c takes two arguments: trajectory file and (optionally) weights file
+        save_weights(argv[2], W1, b1, W2, b2, W3, b3, W4, b4);
+    } else {
+        char filename[100];
+        time_t t = time(NULL); struct tm tm = *localtime(&t);
+        sprintf(filename, "%d-%d-%d_%d-%d-%d_value_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        save_weights(filename, W1, b1, W2, b2, W3, b3, W4, b4);
+    }
+    
     for(int i = 0; i < rows; i++) free(data[i]);
     free(data), free(targets), free(indices);
     free(W1), free(b1), free(W2), free(b2), free(W3), free(b3), free(W4), free(b4);

@@ -230,7 +230,9 @@ int main(int argc, char *argv[]) {
     ge_close_gif(gif);
     #endif
 
-    if (argc <= 1) {
+    if (argc > 1) {
+        save_weights(argv[1], W1, b1, W2, b2, W3, b3, W4, b4);
+    } else {
         sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1,
                 tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
         save_weights(filename, W1, b1, W2, b2, W3, b3, W4, b4);
