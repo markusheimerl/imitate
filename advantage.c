@@ -49,40 +49,23 @@ int main(int argc, char **argv) {
     double *h2 = malloc(D2*sizeof(double));
     double *h3 = malloc(D3*sizeof(double));
 
-    if (!W1 || !b1 || !W2 || !b2 || !W3 || !b3 || !W4 || !b4 || !h1 || !h2 || !h3) {
-        printf("Memory allocation failed\n");
-        return 1;
-    }
-
     // Load weights
     FILE *f = fopen(argv[2], "rb");
-    if (!f) { 
-        printf("Failed to load weights\n"); 
-        return 1; 
-    }
-    
-    size_t read = fread(W1, sizeof(double), D1*M, f) +
-                  fread(b1, sizeof(double), D1, f) +
-                  fread(W2, sizeof(double), D2*D1, f) +
-                  fread(b2, sizeof(double), D2, f) +
-                  fread(W3, sizeof(double), D3*D2, f) +
-                  fread(b3, sizeof(double), D3, f) +
-                  fread(W4, sizeof(double), D3, f) +
-                  fread(b4, sizeof(double), 1, f);
+    if (!f) { printf("Failed to load weights\n"); return 1; }
+    fread(W1, sizeof(double), D1*M, f);
+    fread(b1, sizeof(double), D1, f);
+    fread(W2, sizeof(double), D2*D1, f);
+    fread(b2, sizeof(double), D2, f);
+    fread(W3, sizeof(double), D3*D2, f);
+    fread(b3, sizeof(double), D3, f);
+    fread(W4, sizeof(double), D3, f);
+    fread(b4, sizeof(double), 1, f);
     fclose(f);
-
-    if (read != (D1*M + D1 + D2*D1 + D2 + D3*D2 + D3 + D3 + 1)) {
-        printf("Failed to read weights correctly\n");
-        return 1;
-    }
 
     // Process CSV
     FILE *f_in = fopen(argv[1], "r");
     FILE *f_out = fopen("temp.csv", "w");
-    if (!f_in || !f_out) { 
-        printf("Failed to open CSV files\n"); 
-        return 1; 
-    }
+    if (!f_in || !f_out) { printf("Failed to open CSV files\n"); return 1; }
 
     char line[4096];
     // Copy header and add advantage column
@@ -101,23 +84,33 @@ int main(int argc, char **argv) {
         double state[M], value_pred;
         char *token = strtok(line, ",");
         
-        // Read state
-        for(int i = 0; i < M && token; i++) {
+        // Read state (first M values)
+        for(int i = 0; i < M; i++) {
+            if (!token) { printf("Error: not enough columns\n"); return 1; }
             state[i] = atof(token);
             token = strtok(NULL, ",");
         }
         
-        // Skip to discounted return
-        for(int i = 0; i < 10 && token; i++) {
+        // Skip to discounted_return (29th column)
+        for(int i = 0; i < 11; i++) {
+            if (!token) { printf("Error: not enough columns\n"); return 1; }
             token = strtok(NULL, ",");
         }
         
-        if (token) {
-            double discounted_return = atof(token);
-            forward(W1, b1, W2, b2, W3, b3, W4, b4, state, h1, h2, h3, &value_pred);
-            fprintf(f_out, "%s,%f\n", original, discounted_return - value_pred);
+        if (!token) { printf("Error: not enough columns\n"); return 1; }
+        double actual_return = atof(token);
+        
+        forward(W1, b1, W2, b2, W3, b3, W4, b4, state, h1, h2, h3, &value_pred);
+        double advantage = actual_return - value_pred;
+        
+        if (count == 0) {
+            printf("First state values:\n");
+            printf("Actual return: %f\n", actual_return);
+            printf("Predicted value: %f\n", value_pred);
+            printf("Advantage: %f\n", advantage);
         }
         
+        fprintf(f_out, "%s,%f\n", original, advantage);
         free(original);
         count++;
     }
