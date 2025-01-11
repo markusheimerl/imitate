@@ -40,6 +40,24 @@ bool load_weights(const char* filename, Network* net) {
     return items_read == (D1*M_IN + D1 + D2*D1 + D2 + D3*D2 + D3 + M_OUT*D3 + M_OUT);
 }
 
+bool save_weights(const char* filename, Network* net) {
+    FILE* f = fopen(filename, "wb");
+    if (!f) return false;
+    
+    size_t items_written = 0;
+    items_written += fwrite(net->W1, sizeof(double), D1 * M_IN, f);
+    items_written += fwrite(net->b1, sizeof(double), D1, f);
+    items_written += fwrite(net->W2, sizeof(double), D2 * D1, f);
+    items_written += fwrite(net->b2, sizeof(double), D2, f);
+    items_written += fwrite(net->W3, sizeof(double), D3 * D2, f);
+    items_written += fwrite(net->b3, sizeof(double), D3, f);
+    items_written += fwrite(net->W4, sizeof(double), M_OUT * D3, f);
+    items_written += fwrite(net->b4, sizeof(double), M_OUT, f);
+    
+    fclose(f);
+    return items_written == (D1*M_IN + D1 + D2*D1 + D2 + D3*D2 + D3 + M_OUT*D3 + M_OUT);
+}
+
 void forward(Network* net, double* input, double* h1, double* h2, double* h3, double* output) {
     // First layer
     for(int i = 0; i < D1; i++) {
@@ -227,6 +245,15 @@ int main(int argc, char *argv[]) {
     free_meshes(meshes, 2);
     ge_close_gif(gif);
     #endif
+
+    if (argc <= 1) {
+        char weights_filename[100];
+        sprintf(weights_filename, "%d-%d-%d_%d-%d-%d_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        if (!save_weights(weights_filename, &net)) {
+            printf("Failed to save weights to %s\n", weights_filename);
+            return 1;
+        }
+    }
 
     free(net.W1); free(net.b1); free(net.W2); free(net.b2);
     free(net.W3); free(net.b3); free(net.W4); free(net.b4);
