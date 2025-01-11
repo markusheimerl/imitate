@@ -8,26 +8,40 @@
 #define D3 16
 #define M 18
 
-void forward(const double *W1, const double *b1, const double *W2, const double *b2, 
-            const double *W3, const double *b3, const double *W4, const double *b4, 
-            const double *input, double *h1, double *h2, double *h3, double *out) {
+void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3,
+            double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
+    // First layer
     for(int i = 0; i < D1; i++) {
         double sum = b1[i];
-        for(int j = 0; j < M; j++) sum += W1[i*M + j] * input[j];
-        h1[i] = sum > 0 ? sum : sum * 0.1;
+        for(int j = 0; j < M_IN; j++) {
+            sum += W1[i*M_IN + j] * input[j];
+        }
+        h1[i] = sum > 0 ? sum : sum * 0.1;  // LeakyReLU
     }
+
+    // Second layer
     for(int i = 0; i < D2; i++) {
         double sum = b2[i];
-        for(int j = 0; j < D1; j++) sum += W2[i*D1 + j] * h1[j];
+        for(int j = 0; j < D1; j++) {
+            sum += W2[i*D1 + j] * h1[j];
+        }
         h2[i] = sum > 0 ? sum : sum * 0.1;
     }
+
+    // Third layer
     for(int i = 0; i < D3; i++) {
         double sum = b3[i];
-        for(int j = 0; j < D2; j++) sum += W3[i*D2 + j] * h2[j];
+        for(int j = 0; j < D2; j++) {
+            sum += W3[i*D2 + j] * h2[j];
+        }
         h3[i] = sum > 0 ? sum : sum * 0.1;
     }
-    *out = b4[0];
-    for(int i = 0; i < D3; i++) *out += W4[i] * h3[i];
+
+    // Output layer (linear)
+    *output = b4[0];
+    for(int i = 0; i < D3; i++) {
+        *output += W4[i] * h3[i];
+    }
 }
 
 int main(int argc, char **argv) {
