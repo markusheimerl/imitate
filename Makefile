@@ -3,22 +3,22 @@ CFLAGS = -O3 -march=native -ffast-math
 LDFLAGS = -flto -lm
 INCLUDES = -I./sim -I./sim/rasterizer
 
-TRAIN_TARGET = train.out
-FLY_TARGET = fly.out
+VALUE_TARGET = value.out
+TRAJECTORY_TARGET = trajectory.out
 
 .PHONY: clean run plot
 
-all: $(TRAIN_TARGET) $(FLY_TARGET)
+all: $(VALUE_TARGET) $(TRAJECTORY_TARGET)
 
-$(TRAIN_TARGET): train.c
+$(VALUE_TARGET): value.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-$(FLY_TARGET): fly.c
+$(TRAJECTORY_TARGET): trajectory.c
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-run: $(TRAIN_TARGET) $(FLY_TARGET)
-	cd sim && make log && ./sim.out 100 && cp *_control_data.csv .. && make clean && cd ..
-	./$(TRAIN_TARGET) `ls -t *_control_data.csv | head -1`
+run: $(VALUE_TARGET) $(TRAJECTORY_TARGET)
+	cd sim && make log && ./sim.out 100 && cp *_state_data.csv .. && make clean && cd ..
+	./$(VALUE_TARGET) `ls -t *_state_data.csv | head -1`
 	@python -c 'import matplotlib.pyplot as plt, pandas as pd, os; \
 	f = sorted([f for f in os.listdir(".") if f.endswith("_loss.csv")])[-1]; \
 	ts = f.replace("_loss.csv", ""); \
@@ -29,8 +29,8 @@ run: $(TRAIN_TARGET) $(FLY_TARGET)
 	plt.title("Training Loss"); plt.xlabel("Step"); plt.ylabel("Loss"); \
 	plt.yscale("log"); plt.grid(True); plt.legend(); \
 	plt.savefig(f"{ts}_loss.png");'
-	./$(FLY_TARGET) `ls -t *_weights.bin | head -1`
+	./$(TRAJECTORY_TARGET) `ls -t *_weights.bin | head -1`
 
 clean:
-	rm -f $(TRAIN_TARGET) $(FLY_TARGET) *_loss.csv *_flight.gif *_loss.png *_control_data.csv *_weights.bin *_flight_data.csv
+	rm -f $(VALUE_TARGET) $(TRAJECTORY_TARGET) *_loss.csv *_flight.gif *_loss.png *_state_data.csv *_weights.bin *_flight_data.csv
 	cd sim && make clean
