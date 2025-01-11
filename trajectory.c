@@ -162,7 +162,7 @@ int main(int argc, char *argv[]) {
             }
             #endif
         }
-#ifdef LOG
+        #ifdef LOG
         // Calculate and write trajectory with discounted returns
         for(int i = 0; i < reward_count; i++) {
             double discounted_return = 0.0;
@@ -180,10 +180,10 @@ int main(int argc, char *argv[]) {
         }
         free(trajectory_lines);
         free(rewards);
-        rewards = NULL;              // Add these lines
-        trajectory_lines = NULL;      // Add these lines
+        rewards = NULL;
+        trajectory_lines = NULL;
         reward_count = 0;
-#endif
+        #endif
     }
 
     printf("\nSimulation complete\n");
