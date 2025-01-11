@@ -84,14 +84,17 @@ int main(int argc, char **argv) {
         double state[M], value_pred;
         char *token = strtok(line, ",");
         
-        // Read state (first M values)
+        // Skip rollout number
+        token = strtok(NULL, ",");
+        
+        // Read state (next M values)
         for(int i = 0; i < M; i++) {
             if (!token) { printf("Error: not enough columns\n"); return 1; }
             state[i] = atof(token);
             token = strtok(NULL, ",");
         }
         
-        // Skip to discounted_return (29th column)
+        // Skip to discounted_return (30th column now, due to rollout column)
         for(int i = 0; i < 11; i++) {
             if (!token) { printf("Error: not enough columns\n"); return 1; }
             token = strtok(NULL, ",");

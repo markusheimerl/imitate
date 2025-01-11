@@ -175,7 +175,10 @@ int main(int argc, char **argv) {
         double input[M_IN], output[M_OUT];
         char *token = strtok(line, ",");
         
-        // Skip to acc_s (18th column, 0-based index)
+        // Skip rollout number
+        token = strtok(NULL, ",");
+        
+        // Skip to acc_s (19th column now, due to rollout column)
         for(int i = 0; i < 18; i++) {
             token = strtok(NULL, ",");
             if (!token) { printf("Error: skipping to acc_s, column %d\n", i); return 1; }

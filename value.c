@@ -150,19 +150,29 @@ int main(int argc, char **argv) {
         data[i] = malloc(M * sizeof(double));
         fgets(line, sizeof(line), f);
         char *token = strtok(line, ",");
-        // Read first 18 values (pos, vel, ang_vel, R)
+        
+        // Skip rollout column
+        token = strtok(NULL, ",");
+        
+        // Read next 18 values (pos, vel, ang_vel, R)
         for(int j = 0; j < M; j++) {
+            if (!token) { printf("Error: reading state, column %d\n", j); return 1; }
             data[i][j] = atof(token);
             token = strtok(NULL, ",");
         }
         // Skip 10 columns (acc_s[3], gyro_s[3], omega[4])
-        for(int j = 0; j < 10; j++) token = strtok(NULL, ",");
-        // Read discounted_return (last column)
-        token = strtok(NULL, ",");
-        if (token) targets[i] = atof(token);
+        for(int j = 0; j < 10; j++) {
+            if (!token) { printf("Error: skipping sensors and actions\n"); return 1; }
+            token = strtok(NULL, ",");
+        }
+        // Skip reward and read discounted_return (last column)
+        if (!token) { printf("Error: skipping reward\n"); return 1; }
+        token = strtok(NULL, ",");  // skip reward
+        if (!token) { printf("Error: reading discounted return\n"); return 1; }
+        targets[i] = atof(token);
     }
     fclose(f);
-
+    
     printf("First target value: %f\n", targets[0]);
 
     double out, running_loss = 0;
