@@ -55,7 +55,7 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
     for(int i = 0; i < M_OUT; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = OMEGA_MIN + (OMEGA_MAX - OMEGA_MIN) / (1.0 + exp(-sum));
+        output[i] = sum;
     }
 }
 
@@ -129,7 +129,7 @@ int main(int argc, char *argv[]) {
                     input[i+3] = angular_velocity_B_s[i];
                 }
                 forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
-                memcpy(omega, output, M_OUT * sizeof(double));
+                memcpy(omega_next, output, M_OUT * sizeof(double));
 
                 #ifdef LOG
                 double pos_error = sqrt(pow(linear_position_W[0] - linear_position_d_W[0], 2) + pow(linear_position_W[1] - linear_position_d_W[1], 2) + pow(linear_position_W[2] - linear_position_d_W[2], 2));
@@ -139,9 +139,11 @@ int main(int argc, char *argv[]) {
                 rewards[reward_count] = reward;
                 trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
                 trajectory_lines[reward_count] = malloc(1024);
-                snprintf(trajectory_lines[reward_count], 1024, "%d,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n", rollout, linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], R_W_B[0], R_W_B[1], R_W_B[2], R_W_B[3], R_W_B[4], R_W_B[5], R_W_B[6], R_W_B[7], R_W_B[8], linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2], angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2], omega[0], omega[1], omega[2], omega[3], reward);
+                snprintf(trajectory_lines[reward_count], 1024, "%d,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n", rollout, linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], R_W_B[0], R_W_B[1], R_W_B[2], R_W_B[3], R_W_B[4], R_W_B[5], R_W_B[6], R_W_B[7], R_W_B[8], linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2], angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2], omega_next[0], omega_next[1], omega_next[2], omega_next[3], reward);
                 reward_count++;
                 #endif
+
+                for(int i = 0; i < 4; i++) omega[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
 
                 #ifdef RENDER
                 printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
