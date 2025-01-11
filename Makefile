@@ -14,7 +14,7 @@ $(VALUE_TARGET): value.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 $(TRAJECTORY_TARGET): trajectory.c
-	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@ -DLOG
 
 run: $(VALUE_TARGET) $(TRAJECTORY_TARGET)
 	cd sim && make log && ./sim.out 100 && cp *_state_data.csv .. && make clean && cd ..
