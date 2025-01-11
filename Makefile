@@ -4,7 +4,8 @@ LDFLAGS = -flto -lm
 INCLUDES = -I./sim -I./sim/rasterizer
 
 VALUE_TARGET = value.out
-TRAJECTORY_TARGET = trajectory.out
+TRAJECTORY_RENDER_TARGET = trajectory_render.out
+TRAJECTORY_LOG_TARGET = trajectory_log.out
 ADVANTAGE_TARGET = advantage.out
 POLICY_TARGET = policy.out
 
@@ -21,18 +22,13 @@ $(VALUE_TARGET): value.c
 $(ADVANTAGE_TARGET): advantage.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-$(TRAJECTORY_TARGET): trajectory.c
-	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
-
-render: CFLAGS += -DRENDER
 render: trajectory.c
-	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $(TRAJECTORY_TARGET)
+	$(CC) $(CFLAGS) -DRENDER $(INCLUDES) $^ $(LDFLAGS) -o $(TRAJECTORY_RENDER_TARGET)
 
-log: CFLAGS += -DLOG
 log: trajectory.c
-	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $(TRAJECTORY_TARGET)
+	$(CC) $(CFLAGS) -DLOG $(INCLUDES) $^ $(LDFLAGS) -o $(TRAJECTORY_LOG_TARGET)
 
-run: $(VALUE_TARGET) log $(ADVANTAGE_TARGET) $(POLICY_TARGET)
+run: render log $(VALUE_TARGET) $(ADVANTAGE_TARGET) $(POLICY_TARGET)
 	@for i in $$(seq 1 $(ITERATIONS)); do \
 		echo "\nIteration $$i:"; \
 		if [ $$i -eq 1 ]; then \
