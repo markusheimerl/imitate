@@ -20,6 +20,8 @@
 #define PPO_EPSILON 0.2
 #define PI 3.14159265358979323846
 #define ENTROPY_COEF 0.01
+#define MAX_KL 0.015
+#define LOG_INTERVAL 10000
 
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
     FILE *f = fopen(filename, "rb");
@@ -110,34 +112,51 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
     double d_W4[M_OUT*D3] = {0}, d_b4[M_OUT] = {0};
     double d_h1[D1], d_h2[D2], d_h3[D3];
 
-    // Calculate log probabilities in a numerically stable way
+    // Calculate log probabilities and KL divergence
     double log_prob_new = 0, log_prob_old = 0;
+    double kl_div = 0;
+    
     for(int i = 0; i < 4; i++) {
-        // Compute individual action log probs for debugging
         double lp_new = gaussian_log_prob(actions[i], output[i], output[i+4]);
         double lp_old = gaussian_log_prob(actions[i], old_means[i], old_vars[i]);
         
-        if (step % 10000 == 0) {
-            printf("Action %d: action=%.3f, new_mean=%.3f, new_std=%.3f, old_mean=%.3f, old_std=%.3f, lp_new=%.3f, lp_old=%.3f\n",
-                   i, actions[i], output[i], sqrt(output[i+4]), old_means[i], sqrt(old_vars[i]), lp_new, lp_old);
-        }
+        // Calculate KL divergence
+        double var_ratio = output[i+4] / old_vars[i];
+        double mean_diff = output[i] - old_means[i];
+        kl_div += 0.5 * (var_ratio + mean_diff * mean_diff / old_vars[i] - 1 - log(var_ratio));
         
         log_prob_new += lp_new;
         log_prob_old += lp_old;
     }
 
-    // Compute probability ratio in a numerically stable way
+    // Early stopping based on KL divergence
+    if (kl_div > MAX_KL) {
+        if (step % LOG_INTERVAL == 0) {
+            printf("Early stopping: KL=%.3f\n", kl_div);
+        }
+        return;
+    }
+
+    // Compute probability ratio and clipping
     double ratio = exp(log_prob_new - log_prob_old);
     double clipped_ratio = fmax(fmin(ratio, 1.0 + PPO_EPSILON), 1.0 - PPO_EPSILON);
     
     // Compute surrogate loss
     double surrogate_1 = ratio * advantage;
     double surrogate_2 = clipped_ratio * advantage;
-    double surrogate_loss = -fmin(surrogate_1, surrogate_2);  // Negative because we're minimizing
+    
+    // Calculate entropy bonus
+    double entropy = 0;
+    for(int i = 0; i < 4; i++) {
+        entropy += 0.5 * (log(2 * PI * output[i+4]) + 1);
+    }
+    
+    // Combined loss with entropy regularization
+    double surrogate_loss = -fmin(surrogate_1, surrogate_2) - ENTROPY_COEF * entropy;
 
-    if (step % 10000 == 0) {
-        printf("ratio=%.3f, clipped_ratio=%.3f, advantage=%.3f, loss=%.3f\n",
-               ratio, clipped_ratio, advantage, surrogate_loss);
+    if (step % LOG_INTERVAL == 0) {
+        printf("KL=%.3f, ratio=%.2f, adv=%.2f, entropy=%.3f\n",
+               kl_div, ratio, advantage, entropy);
     }
 
     // Compute gradients for each action dimension
@@ -146,7 +165,6 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
         double var = output[i+4];
         double action = actions[i];
         
-        // Determine if we should use the clipped or unclipped objective
         bool use_clipped = (advantage >= 0 && ratio > 1.0 + PPO_EPSILON) || 
                           (advantage < 0 && ratio < 1.0 - PPO_EPSILON);
         double grad_scale = use_clipped ? 0.0 : ratio;
@@ -155,12 +173,15 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
         double d_mean = grad_scale * advantage * (action - mean) / var;
         d_b4[i] = d_mean;
         
-        // Gradient for variance with minimum variance constraint
+        // Gradient for variance
         double d_var = grad_scale * advantage * (
             (action - mean) * (action - mean) / (2.0 * var * var) - 1.0 / (2.0 * var)
         );
         
-        // Apply chain rule through exp (since variance is parameterized as log variance)
+        // Add entropy gradients
+        d_var += ENTROPY_COEF * 0.5 / var;
+        
+        // Apply chain rule through exp
         d_b4[i+4] = d_var * var;
         
         // Weight gradients
@@ -260,14 +281,14 @@ int main(int argc, char **argv) {
     double *all_old_vars = malloc(num_rows * 4 * sizeof(double));
     double *all_advantages = malloc(num_rows * sizeof(double));
     int *indices = malloc(num_rows * sizeof(int));
-
+    
     printf("Loading %d training samples...\n", num_rows);
-
+    
     for(int i = 0; i < num_rows; i++) {
         fgets(line, sizeof(line), f);
         char *token = strtok(line, ",");
         
-        // Read position (3), velocity (3), and angular velocity (3)
+        // Skip position, velocity, and angular velocity (9 values)
         for(int j = 0; j < 9; j++) token = strtok(NULL, ",");
         
         // Read accelerometer and gyroscope readings (policy inputs)
@@ -295,12 +316,13 @@ int main(int argc, char **argv) {
         }
 
         // Skip reward and read advantage
-        token = strtok(NULL, ",");  // skip reward
-        all_advantages[i] = atof(token);  // read advantage
+        token = strtok(NULL, ",");
+        all_advantages[i] = atof(token);
         indices[i] = i;
     }
     fclose(f);
 
+    // Normalize advantages
     double adv_mean = 0, adv_std = 0;
     for(int i = 0; i < num_rows; i++) adv_mean += all_advantages[i];
     adv_mean /= num_rows;
@@ -320,8 +342,11 @@ int main(int argc, char **argv) {
     int epochs = 10;
     
     printf("\nStarting PPO training for %d epochs...\n", epochs);
+    double avg_kl = 0;
+    int update_count = 0;
     
     for(int epoch = 0; epoch < epochs; epoch++) {
+        // Shuffle indices
         for(int i = num_rows-1; i > 0; i--) {
             int j = rand() % (i + 1);
             int temp = indices[i];
@@ -344,8 +369,10 @@ int main(int argc, char **argv) {
                     input, h1, h2, h3, output, actions, old_means, old_vars,
                     advantage, step + 1);
 
-            if((step + 1) % 1000 == 0) {
-                printf("\rEpoch %d/%d, Step %d/%d", epoch + 1, epochs, step + 1, num_rows);
+            if((step + 1) % LOG_INTERVAL == 0) {
+                printf("\rEpoch %d/%d: %.1f%% complete", 
+                       epoch + 1, epochs, 
+                       100.0 * (step + 1) / num_rows);
                 fflush(stdout);
             }
         }
