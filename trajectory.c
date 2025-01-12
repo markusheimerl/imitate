@@ -70,13 +70,13 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
     for(int i = 0; i < M_OUT/2; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));
+        output[i] = sum;  // Raw mean output
     }
-    
+
     for(int i = M_OUT/2; i < M_OUT; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 10.0 / (1.0 + exp(-sum));
+        output[i] = exp(sum);  // Log-variance to variance (standard in PPO)
     }
 }
 
@@ -158,13 +158,14 @@ int main(int argc, char *argv[]) {
 
                 // Sample actions from Gaussian distributions
                 for(int i = 0; i < 4; i++) {
-                    double mean = output[i];
-                    double std = sqrt(output[i+4]);
+                    double mean = output[i];                // Raw mean from network
+                    double std = sqrt(output[i + 4]);       // Standard deviation from variance
+                    
+                    // Sample from Gaussian (Box-Muller transform)
                     double u1 = (double)rand() / RAND_MAX;
                     double u2 = (double)rand() / RAND_MAX;
                     double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                     omega_next[i] = mean + std * z;
-                    omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
                 }
 
                 #ifdef LOG
@@ -189,7 +190,7 @@ int main(int argc, char *argv[]) {
                 reward_count++;
                 #endif
 
-                for(int i = 0; i < 4; i++) omega[i] = omega_next[i];
+                update_rotor_speeds();
 
                 #ifdef RENDER
                 printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
@@ -213,25 +214,28 @@ int main(int argc, char *argv[]) {
 
         #ifdef LOG
         // Calculate and write trajectory with discounted returns
-        for(int i = 0; i < reward_count; i++) {
-            double discounted_return = 0.0;
-            double gamma = 0.99;
-            double discount = 1.0;
-            for(int j = i; j < reward_count; j++) {
-                discounted_return += discount * rewards[j];
-                discount *= gamma;
+        if (reward_count > 0) {
+            for(int i = 0; i < reward_count; i++) {
+                double discounted_return = 0.0;
+                double gamma = 0.99;
+                double discount = 1.0;
+                for(int j = i; j < reward_count; j++) {
+                    discounted_return += discount * rewards[j];
+                    discount *= gamma;
+                }
+                char *line = trajectory_lines[i];
+                char *last_comma = strrchr(line, ',');
+                sprintf(last_comma + 1, "%f\n", discounted_return);
+                fprintf(csv_file, "%s", line);
+                free(line);
             }
-            char *line = trajectory_lines[i];
-            char *last_comma = strrchr(line, ',');
-            sprintf(last_comma + 1, "%f\n", discounted_return);
-            fprintf(csv_file, "%s", line);
-            free(line);
+            
+            free(trajectory_lines);
+            free(rewards);
+            rewards = NULL;
+            trajectory_lines = NULL;
+            reward_count = 0;
         }
-        free(trajectory_lines);
-        free(rewards);
-        rewards = NULL;
-        trajectory_lines = NULL;
-        reward_count = 0;
         #endif
     }
 

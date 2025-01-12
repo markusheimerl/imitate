@@ -72,13 +72,13 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
     for(int i = 0; i < M_OUT/2; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));
+        output[i] = sum;  // Raw mean output
     }
     
     for(int i = M_OUT/2; i < M_OUT; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 10.0 / (1.0 + exp(-sum));
+        output[i] = exp(sum);  // Log-variance to variance
     }
 }
 
