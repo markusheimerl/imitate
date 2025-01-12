@@ -10,8 +10,7 @@
 #define D3 16
 #define M_IN 18  // pos[3], vel[3], ang_vel[3], R[9]
 
-bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, 
-                 double *W3, double *b3, double *W4, double *b4) {
+bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
     FILE *f = fopen(filename, "rb");
     if (!f) return false;
     size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) +
