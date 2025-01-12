@@ -169,7 +169,7 @@ int main(int argc, char *argv[]) {
                 }
 
                 #ifdef LOG
-                double reward = DT_CONTROL;
+                double reward = 1;
                 rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
                 rewards[reward_count] = reward;
                 trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
