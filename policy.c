@@ -327,7 +327,9 @@ int main(int argc, char **argv) {
             token = strtok(NULL, ",");
         }
 
-        // Skip reward and read advantage
+        // Skip reward, cumulative reward and read advantage
+        token = strtok(NULL, ",");
+        (void)atof(token);
         token = strtok(NULL, ",");
         all_advantages[i] = atof(token);
         indices[i] = i;
