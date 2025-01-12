@@ -208,13 +208,28 @@ int main(int argc, char **argv) {
         char *ptr = line;
         strsep(&ptr, ",");  // Skip rollout number
         
-        // Read input data (pos, vel, ang_vel, R)
-        for(int j = 0; j < M_IN; j++) {
+        // Read position (3)
+        for(int j = 0; j < 3; j++) {
             data[i][j] = atof(strsep(&ptr, ","));
         }
         
-        // Skip middle columns (acc_s, gyro_s, means, vars, omega)
-        for(int j = 0; j < 15; j++) strsep(&ptr, ",");
+        // Read velocity (3)
+        for(int j = 0; j < 3; j++) {
+            data[i][j+3] = atof(strsep(&ptr, ","));
+        }
+        
+        // Read angular velocity (3)
+        for(int j = 0; j < 3; j++) {
+            data[i][j+6] = atof(strsep(&ptr, ","));
+        }
+        
+        // Read rotation matrix (9)
+        for(int j = 0; j < 9; j++) {
+            data[i][j+9] = atof(strsep(&ptr, ","));
+        }
+        
+        // Skip acc_s (3), gyro_s (3), means (4), vars (4), omega (4)
+        for(int j = 0; j < 18; j++) strsep(&ptr, ",");
         
         // Skip immediate reward
         strsep(&ptr, ",");
