@@ -70,13 +70,14 @@ int main(int argc, char **argv) {
     int rows = -1;
     while (fgets(line, sizeof(line), f)) rows++;
     rewind(f);
-    fgets(line, sizeof(line), f);
+    fgets(line, sizeof(line), f);  // Skip header
 
     FILE *temp = fopen("temp.csv", "w");
     if (!temp) return 1;
 
+    // Copy header and add advantage column
     line[strcspn(line, "\n")] = 0;
-    fprintf(temp, "%s,advantage\n", line);
+    fprintf(temp, "%s\n", line);
     printf("Processing %d rows...\n", rows);
 
     while (fgets(line, sizeof(line), f)) {
@@ -86,22 +87,32 @@ int main(int argc, char **argv) {
         
         double state[M_IN];
         char *token = strtok(line, ",");
+        
+        // Skip rollout number
         token = strtok(NULL, ",");
         
+        // Read position (3), velocity (3), angular velocity (3), and rotation matrix (9)
         for(int i = 0; i < M_IN && token; i++) {
             state[i] = atof(token);
             token = strtok(NULL, ",");
         }
 
-        for(int i = 0; i < 18 && token; i++) token = strtok(NULL, ",");
-        token = strtok(NULL, ",");
-        token = strtok(NULL, ",");
-
-        if (token) {
-            double value_pred;
-            forward(W1, b1, W2, b2, W3, b3, W4, b4, state, h1, h2, h3, &value_pred);
-            fprintf(temp, "%s,%f\n", original, atof(token) - value_pred);
+        // Skip accelerometer (3), gyroscope (3), means (4), variances (4), and actions (4)
+        for(int i = 0; i < 18 && token; i++) {
+            token = strtok(NULL, ",");
         }
+
+        // Get reward and discounted return
+        double reward = atof(token);  // reward
+        token = strtok(NULL, ",");
+        double discounted_return = atof(token);  // discounted return
+
+        // Calculate advantage
+        double value_pred;
+        forward(W1, b1, W2, b2, W3, b3, W4, b4, state, h1, h2, h3, &value_pred);
+        double advantage = discounted_return - value_pred;
+
+        fprintf(temp, "%s,%f\n", original, advantage);
         free(original);
     }
 
