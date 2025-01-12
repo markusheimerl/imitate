@@ -12,7 +12,6 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
-#define VEC3_MAG2(v) ((v)[0]*(v)[0] + (v)[1]*(v)[1] + (v)[2]*(v)[2])
 #define D1 64
 #define D2 32
 #define D3 16
@@ -132,8 +131,7 @@ int main(int argc, char *argv[]) {
         }
 
         double t_physics = 0.0, t_control = 0.0;
-        while (t_physics < 200.0 && linear_position_W[1] != 0.0 && VEC3_MAG2(linear_position_W) <= 1000.0*1000.0 && 
-               VEC3_MAG2(linear_velocity_W) <= 100.0*100.0 && VEC3_MAG2(angular_velocity_B) <= 100.0*100.0) {
+        while (t_physics < 3000.0 && linear_position_W[1] > 0.2 && fabs(linear_position_W[0]) < 2.0 && fabs(linear_position_W[1]) < 2.0 && fabs(linear_position_W[2]) < 2.0) {
             
             update_drone_physics(DT_PHYSICS);
             t_physics += DT_PHYSICS;
@@ -157,38 +155,7 @@ int main(int argc, char *argv[]) {
                 }
 
                 #ifdef LOG
-                double ang_vel_error = sqrt(pow(angular_velocity_B[0], 2) + 
-                                        pow(angular_velocity_B[1], 2) + 
-                                        pow(angular_velocity_B[2], 2));
-
-                double vel_error = sqrt(pow(linear_velocity_W[0], 2) + 
-                                    pow(linear_velocity_W[2], 2));  // horizontal velocity
-
-                double vert_vel_error = fabs(linear_velocity_W[1]);   // vertical velocity
-
-                // Position error (all dimensions)
-                double pos_error = sqrt(pow(linear_position_W[0], 2) + 
-                                    pow(linear_position_W[1] - 1.0, 2) + 
-                                    pow(linear_position_W[2], 2));
-
-                // Rewards with stronger position emphasis
-                double stability_reward = 1.0 / (1.0 + ang_vel_error);
-                double drift_reward = 1.0 / (1.0 + vel_error);
-                double hover_reward = 1.0 / (1.0 + vert_vel_error);
-                double position_reward = 1.0 / (1.0 + pos_error * pos_error);  // Quadratic penalty for position error
-
-                // Motor efficiency
-                double motor_usage = (omega[0] + omega[1] + omega[2] + omega[3]) / 4.0;
-                double efficiency_penalty = exp(-(motor_usage - 70.0) * (motor_usage - 70.0) / 100.0);
-
-                // Combined reward with higher weight on position
-                double reward = efficiency_penalty * (0.3 * stability_reward + 
-                                                    0.2 * hover_reward + 
-                                                    0.2 * drift_reward +
-                                                    0.3 * position_reward);  // Increased position weight
-
-                // Additional time bonus to encourage longer flights
-                reward *= (1.0 + t_physics / 20.0);  // Scales up with flight duration
+                double reward = DT_CONTROL;
                 rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
                 rewards[reward_count] = reward;
                 trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
@@ -212,9 +179,7 @@ int main(int argc, char *argv[]) {
                 for(int i = 0; i < 4; i++) omega[i] = omega_next[i];
 
                 #ifdef RENDER
-                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", 
-                       linear_position_W[0], linear_position_W[1], linear_position_W[2], 
-                       omega[0], omega[1], omega[2], omega[3]);
+                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
                 fflush(stdout);
                 #endif
 
