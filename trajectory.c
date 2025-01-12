@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
         }
 
         double t_physics = 0.0, t_control = 0.0;
-        while (t_physics < 200.0 && VEC3_MAG2(linear_position_W) <= 1000.0*1000.0 && 
+        while (t_physics < 200.0 && linear_position_W[1] != 0.0 && VEC3_MAG2(linear_position_W) <= 1000.0*1000.0 && 
                VEC3_MAG2(linear_velocity_W) <= 100.0*100.0 && VEC3_MAG2(angular_velocity_B) <= 100.0*100.0) {
             
             update_drone_physics(DT_PHYSICS);
