@@ -181,16 +181,13 @@ int main(int argc, char *argv[]) {
                 }
 
                 #ifdef LOG
-                // Base reward for staying alive
-                double reward = 1.0;
-
-                // Add hover-specific rewards
+                // Hover-specific rewards
                 double height_error = fabs(linear_position_W[1] - 1.0);
                 double horizontal_error = fabs(linear_position_W[0]) + fabs(linear_position_W[2]);
                 double velocity_penalty = (fabs(linear_velocity_W[0]) + fabs(linear_velocity_W[1]) + fabs(linear_velocity_W[2])) * 0.1;
 
-                // Reward being close to hover state (higher reward for better hovering)
-                reward = 1.0 + (1.0 / (1.0 + height_error) - horizontal_error - velocity_penalty);
+                // Base reward for staying alive + reward being close to hover state (higher reward for better hovering)
+                double reward = 1.0 + (1.0 / (1.0 + height_error) - horizontal_error - velocity_penalty);
 
                 rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
                 rewards[reward_count] = reward;
