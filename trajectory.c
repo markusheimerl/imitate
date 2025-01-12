@@ -197,7 +197,7 @@ int main(int argc, char *argv[]) {
                 trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
                 trajectory_lines[reward_count] = malloc(1024);
                 snprintf(trajectory_lines[reward_count], 1024, 
-                        "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n",
+                        "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n",
                         linear_position_W[0], linear_position_W[1], linear_position_W[2],
                         linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2],
                         angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
