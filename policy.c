@@ -16,7 +16,7 @@
 #define BETA2 0.999
 #define EPSILON 1e-8
 #define DECAY 0.01
-#define LEARNING_RATE 1e-6
+#define LEARNING_RATE 1e-7
 #define PPO_EPSILON 0.2
 #define PI 3.14159265358979323846
 #define ENTROPY_COEF 0.01
