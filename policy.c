@@ -22,9 +22,9 @@
 #define ENTROPY_COEF 0.01
 #define LOG_INTERVAL 10000
 #define TARGET_KL 0.015
-#define KL_ADAPT_RATE 1.5    // Less aggressive (was 2.0)
-#define MIN_KL_PENALTY 1e-2  // Higher minimum penalty
-#define MAX_KL_PENALTY 1e2   // Lower maximum penalty
+#define KL_ADAPT_RATE 1.5
+#define MIN_KL_PENALTY 1e-2
+#define MAX_KL_PENALTY 1e2
 
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
     FILE *f = fopen(filename, "rb");
