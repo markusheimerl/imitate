@@ -11,6 +11,7 @@
 #define D3 16
 #define M_IN 6
 #define M_OUT 8  // 4 means, 4 variances
+
 #define BETA1 0.9
 #define BETA2 0.999
 #define EPSILON 1e-8

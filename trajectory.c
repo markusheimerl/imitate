@@ -9,61 +9,74 @@
 #include "quad.h"
 #include <stdbool.h>
 
-#define DT_PHYSICS  (1.0 / 1000.0)
-#define DT_CONTROL  (1.0 / 60.0)
-#define DT_RENDER   (1.0 / 30.0)
 #define D1 64
 #define D2 32
 #define D3 16
 #define M_IN 6
 #define M_OUT 8  // 4 means, 4 variances
 
+#define DT_PHYSICS  (1.0 / 1000.0)
+#define DT_CONTROL  (1.0 / 60.0)
+#define DT_RENDER   (1.0 / 30.0)
+
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
-    FILE* f = fopen(filename, "rb");
+    FILE *f = fopen(filename, "rb");
     if (!f) return false;
-    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) + fread(b1, sizeof(double), D1, f) + 
-                       fread(W2, sizeof(double), D2*D1, f) + fread(b2, sizeof(double), D2, f) + 
-                       fread(W3, sizeof(double), D3*D2, f) + fread(b3, sizeof(double), D3, f) + 
-                       fread(W4, sizeof(double), M_OUT*D3, f) + fread(b4, sizeof(double), M_OUT, f);
+    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) +
+                       fread(b1, sizeof(double), D1, f) +
+                       fread(W2, sizeof(double), D2*D1, f) +
+                       fread(b2, sizeof(double), D2, f) +
+                       fread(W3, sizeof(double), D3*D2, f) +
+                       fread(b3, sizeof(double), D3, f) +
+                       fread(W4, sizeof(double), M_OUT*D3, f) +
+                       fread(b4, sizeof(double), M_OUT, f);
     fclose(f);
     return items_read == (D1*M_IN + D1 + D2*D1 + D2 + D3*D2 + D3 + M_OUT*D3 + M_OUT);
 }
 
 void save_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
-    FILE* f = fopen(filename, "wb");
-    fwrite(W1, sizeof(double), D1*M_IN, f); fwrite(b1, sizeof(double), D1, f);
-    fwrite(W2, sizeof(double), D2*D1, f); fwrite(b2, sizeof(double), D2, f);
-    fwrite(W3, sizeof(double), D3*D2, f); fwrite(b3, sizeof(double), D3, f);
-    fwrite(W4, sizeof(double), M_OUT*D3, f); fwrite(b4, sizeof(double), M_OUT, f);
+    FILE *f = fopen(filename, "wb");
+    fwrite(W1, sizeof(double), D1*M_IN, f);
+    fwrite(b1, sizeof(double), D1, f);
+    fwrite(W2, sizeof(double), D2*D1, f);
+    fwrite(b2, sizeof(double), D2, f);
+    fwrite(W3, sizeof(double), D3*D2, f);
+    fwrite(b3, sizeof(double), D3, f);
+    fwrite(W4, sizeof(double), M_OUT*D3, f);
+    fwrite(b4, sizeof(double), M_OUT, f);
     fclose(f);
 }
 
-void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, 
-            double *input, double *h1, double *h2, double *h3, double *output) {
+void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3,
+            double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
     for(int i = 0; i < D1; i++) {
         double sum = b1[i];
         for(int j = 0; j < M_IN; j++) sum += W1[i*M_IN + j] * input[j];
         h1[i] = sum > 0 ? sum : sum * 0.1;
     }
+
     for(int i = 0; i < D2; i++) {
         double sum = b2[i];
         for(int j = 0; j < D1; j++) sum += W2[i*D1 + j] * h1[j];
         h2[i] = sum > 0 ? sum : sum * 0.1;
     }
+
     for(int i = 0; i < D3; i++) {
         double sum = b3[i];
         for(int j = 0; j < D2; j++) sum += W3[i*D2 + j] * h2[j];
         h3[i] = sum > 0 ? sum : sum * 0.1;
     }
-    for(int i = 0; i < M_OUT/2; i++) {  // First 4 outputs are means
+
+    for(int i = 0; i < M_OUT/2; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));  // Mean in [0,100]
+        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));
     }
-    for(int i = M_OUT/2; i < M_OUT; i++) {  // Last 4 outputs are variances
+    
+    for(int i = M_OUT/2; i < M_OUT; i++) {
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 10.0 / (1.0 + exp(-sum));  // Variance in [0,10]
+        output[i] = 10.0 / (1.0 + exp(-sum));
     }
 }
 
