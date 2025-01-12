@@ -85,6 +85,7 @@ int main(int argc, char *argv[]) {
     struct tm tm = *localtime(&t);
     char filename[100];
     int max_rollouts = 1000;
+    srand(time(NULL));
 
     double *W1 = malloc(D1*M_IN*sizeof(double)), *b1 = calloc(D1, sizeof(double));
     double *W2 = malloc(D2*D1*sizeof(double)), *b2 = calloc(D2, sizeof(double));
@@ -97,11 +98,21 @@ int main(int argc, char *argv[]) {
         printf("Failed to load weights\n");
         return 1;
     } else if (argc == 1) {
-        srand(time(NULL));
-        for(int i = 0; i < D1*M_IN; i++) W1[i] = ((double)rand()/RAND_MAX - 0.5) * sqrt(2.0/M_IN);
-        for(int i = 0; i < D2*D1; i++) W2[i] = ((double)rand()/RAND_MAX - 0.5) * sqrt(2.0/D1);
-        for(int i = 0; i < D3*D2; i++) W3[i] = ((double)rand()/RAND_MAX - 0.5) * sqrt(2.0/D2);
-        for(int i = 0; i < M_OUT*D3; i++) W4[i] = ((double)rand()/RAND_MAX - 0.5) * sqrt(2.0/D3);
+        // Initialize weights with small values
+        for(int i = 0; i < D1*M_IN; i++) W1[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
+        for(int i = 0; i < D2*D1; i++) W2[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
+        for(int i = 0; i < D3*D2; i++) W3[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
+        for(int i = 0; i < M_OUT*D3; i++) W4[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
+
+        // Initialize the final layer biases to output around 50
+        for(int i = 0; i < M_OUT/2; i++) {
+            b4[i] = 50.0;  // Mean outputs start at 50
+        }
+        
+        // Initialize log variances to small values
+        for(int i = M_OUT/2; i < M_OUT; i++) {
+            b4[i] = -1.0;  // Small initial standard deviation
+        }
     }
 
     #ifdef RENDER
