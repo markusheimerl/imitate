@@ -16,7 +16,7 @@
 #define BETA2 0.999
 #define EPSILON 1e-8
 #define DECAY 0.01
-#define LEARNING_RATE 1e-5
+#define LEARNING_RATE 1e-6
 #define PPO_EPSILON 0.2
 #define PI 3.14159265358979323846
 #define ENTROPY_COEF 0.01
@@ -110,57 +110,104 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
     double d_W4[M_OUT*D3] = {0}, d_b4[M_OUT] = {0};
     double d_h1[D1], d_h2[D2], d_h3[D3];
 
+    // Calculate log probabilities in a numerically stable way
     double log_prob_new = 0, log_prob_old = 0;
-    double entropy = 0;
-    
     for(int i = 0; i < 4; i++) {
-        log_prob_new += gaussian_log_prob(actions[i], output[i], output[i+4]);
-        log_prob_old += gaussian_log_prob(actions[i], old_means[i], old_vars[i]);
-        entropy += 0.5 * (log(2.0 * PI * output[i+4]) + 1.0);
+        // Compute individual action log probs for debugging
+        double lp_new = gaussian_log_prob(actions[i], output[i], output[i+4]);
+        double lp_old = gaussian_log_prob(actions[i], old_means[i], old_vars[i]);
+        
+        if (step % 10000 == 0) {
+            printf("Action %d: action=%.3f, new_mean=%.3f, new_std=%.3f, old_mean=%.3f, old_std=%.3f, lp_new=%.3f, lp_old=%.3f\n",
+                   i, actions[i], output[i], sqrt(output[i+4]), old_means[i], sqrt(old_vars[i]), lp_new, lp_old);
+        }
+        
+        log_prob_new += lp_new;
+        log_prob_old += lp_old;
     }
-    
-    double prob_ratio = exp(log_prob_new - log_prob_old);
-    double clipped_ratio = fmax(fmin(prob_ratio, 1.0 + PPO_EPSILON), 1.0 - PPO_EPSILON);
-    double surrogate = -fmin(prob_ratio * advantage, clipped_ratio * advantage);
-    double total_loss = surrogate - ENTROPY_COEF * entropy;
 
+    // Compute probability ratio in a numerically stable way
+    double ratio = exp(log_prob_new - log_prob_old);
+    double clipped_ratio = fmax(fmin(ratio, 1.0 + PPO_EPSILON), 1.0 - PPO_EPSILON);
+    
+    // Compute surrogate loss
+    double surrogate_1 = ratio * advantage;
+    double surrogate_2 = clipped_ratio * advantage;
+    double surrogate_loss = -fmin(surrogate_1, surrogate_2);  // Negative because we're minimizing
+
+    if (step % 10000 == 0) {
+        printf("ratio=%.3f, clipped_ratio=%.3f, advantage=%.3f, loss=%.3f\n",
+               ratio, clipped_ratio, advantage, surrogate_loss);
+    }
+
+    // Compute gradients for each action dimension
     for(int i = 0; i < 4; i++) {
-        double d_mean = total_loss * (actions[i] - output[i]) / output[i+4];
-        double d_var = total_loss * (pow(actions[i] - output[i], 2) / (2.0 * pow(output[i+4], 2)) - 0.5 / output[i+4]);
+        double mean = output[i];
+        double var = output[i+4];
+        double action = actions[i];
         
+        // Determine if we should use the clipped or unclipped objective
+        bool use_clipped = (advantage >= 0 && ratio > 1.0 + PPO_EPSILON) || 
+                          (advantage < 0 && ratio < 1.0 - PPO_EPSILON);
+        double grad_scale = use_clipped ? 0.0 : ratio;
+
+        // Gradient for mean
+        double d_mean = grad_scale * advantage * (action - mean) / var;
         d_b4[i] = d_mean;
-        d_b4[i+4] = d_var;
         
+        // Gradient for variance with minimum variance constraint
+        double d_var = grad_scale * advantage * (
+            (action - mean) * (action - mean) / (2.0 * var * var) - 1.0 / (2.0 * var)
+        );
+        
+        // Apply chain rule through exp (since variance is parameterized as log variance)
+        d_b4[i+4] = d_var * var;
+        
+        // Weight gradients
         for(int j = 0; j < D3; j++) {
             d_W4[i*D3 + j] = d_mean * h3[j];
-            d_W4[(i+4)*D3 + j] = d_var * h3[j];
+            d_W4[(i+4)*D3 + j] = d_var * var * h3[j];
         }
     }
 
+    // Backpropagate through hidden layers
     for(int i = 0; i < D3; i++) {
         d_h3[i] = 0;
-        for(int j = 0; j < M_OUT; j++) d_h3[i] += d_b4[j] * W4[j*D3 + i];
-        d_h3[i] *= (h3[i] > 0 ? 1.0 : 0.1);
-        for(int j = 0; j < D2; j++) d_W3[i*D2 + j] = d_h3[i] * h2[j];
+        for(int j = 0; j < M_OUT; j++) {
+            d_h3[i] += d_b4[j] * W4[j*D3 + i];
+        }
+        d_h3[i] *= (h3[i] > 0 ? 1.0 : 0.1);  // Leaky ReLU derivative
+        for(int j = 0; j < D2; j++) {
+            d_W3[i*D2 + j] = d_h3[i] * h2[j];
+        }
         d_b3[i] = d_h3[i];
     }
 
     for(int i = 0; i < D2; i++) {
         d_h2[i] = 0;
-        for(int j = 0; j < D3; j++) d_h2[i] += d_h3[j] * W3[j*D2 + i];
+        for(int j = 0; j < D3; j++) {
+            d_h2[i] += d_h3[j] * W3[j*D2 + i];
+        }
         d_h2[i] *= (h2[i] > 0 ? 1.0 : 0.1);
-        for(int j = 0; j < D1; j++) d_W2[i*D1 + j] = d_h2[i] * h1[j];
+        for(int j = 0; j < D1; j++) {
+            d_W2[i*D1 + j] = d_h2[i] * h1[j];
+        }
         d_b2[i] = d_h2[i];
     }
 
     for(int i = 0; i < D1; i++) {
         d_h1[i] = 0;
-        for(int j = 0; j < D2; j++) d_h1[i] += d_h2[j] * W2[j*D1 + i];
+        for(int j = 0; j < D2; j++) {
+            d_h1[i] += d_h2[j] * W2[j*D1 + i];
+        }
         d_h1[i] *= (h1[i] > 0 ? 1.0 : 0.1);
-        for(int j = 0; j < M_IN; j++) d_W1[i*M_IN + j] = d_h1[i] * input[j];
+        for(int j = 0; j < M_IN; j++) {
+            d_W1[i*M_IN + j] = d_h1[i] * input[j];
+        }
         d_b1[i] = d_h1[i];
     }
 
+    // Apply updates with Adam
     adam_update(W1, d_W1, m_W1, v_W1, D1*M_IN, step);
     adam_update(b1, d_b1, m_b1, v_b1, D1, step);
     adam_update(W2, d_W2, m_W2, v_W2, D2*D1, step);

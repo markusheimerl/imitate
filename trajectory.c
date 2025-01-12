@@ -158,14 +158,16 @@ int main(int argc, char *argv[]) {
 
                 // Sample actions from Gaussian distributions
                 for(int i = 0; i < 4; i++) {
-                    double mean = output[i];                // Raw mean from network
-                    double std = sqrt(output[i + 4]);       // Standard deviation from variance
-                    
-                    // Sample from Gaussian (Box-Muller transform)
+                    double mean = output[i];
+                    double std = sqrt(output[i + 4]);
                     double u1 = (double)rand() / RAND_MAX;
                     double u2 = (double)rand() / RAND_MAX;
                     double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                     omega_next[i] = mean + std * z;
+                    if (rollout == 0 && t_physics < 0.1) {
+                        printf("Motor %d: mean=%.3f, std=%.3f, action=%.3f\n", 
+                            i, mean, std, omega_next[i]);
+                    }
                 }
 
                 #ifdef LOG
