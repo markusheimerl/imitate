@@ -9,7 +9,7 @@ TRAJECTORY_LOG_TARGET = trajectory_log.out
 ADVANTAGE_TARGET = advantage.out
 POLICY_TARGET = policy.out
 
-ITERATIONS = 10
+ITERATIONS = 3
 
 .PHONY: clean run train
 
