@@ -9,6 +9,7 @@
 #define D2 32
 #define D3 16
 #define M_IN 18  // pos[3], vel[3], ang_vel[3], R[9]
+
 #define BETA1 0.9
 #define BETA2 0.999
 #define EPSILON 1e-8
