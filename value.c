@@ -8,7 +8,7 @@
 #define D1 64
 #define D2 32
 #define D3 16
-#define M_IN 18  // pos[3], vel[3], ang_vel[3], R[9]
+#define M_IN 9  // pos[3], vel[3], ang_vel[3]
 
 #define BETA1 0.9
 #define BETA2 0.999
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
         for(int i = 0; i < D3*D2; i++) W3[i] = ((double)rand()/RAND_MAX - 0.5) * sqrt(2.0/D2);
         for(int i = 0; i < D3; i++) W4[i] = ((double)rand()/RAND_MAX - 0.5) * sqrt(2.0/D3);
     }
-
+    
     FILE *f = fopen(argv[1], "r");
     if (!f) { printf("Failed to open file\n"); return 1; }
 
@@ -207,26 +207,10 @@ int main(int argc, char **argv) {
     for(int i = 0; i < rows; i++) {
         if (!fgets(line, sizeof(line), f)) break;
         char *ptr = line;
-        strsep(&ptr, ",");  // Skip rollout number
         
-        // Read position (3)
-        for(int j = 0; j < 3; j++) {
+        // Read position (3), velocity (3), and angular velocity (3)
+        for(int j = 0; j < M_IN; j++) {
             data[i][j] = atof(strsep(&ptr, ","));
-        }
-        
-        // Read velocity (3)
-        for(int j = 0; j < 3; j++) {
-            data[i][j+3] = atof(strsep(&ptr, ","));
-        }
-        
-        // Read angular velocity (3)
-        for(int j = 0; j < 3; j++) {
-            data[i][j+6] = atof(strsep(&ptr, ","));
-        }
-        
-        // Read rotation matrix (9)
-        for(int j = 0; j < 9; j++) {
-            data[i][j+9] = atof(strsep(&ptr, ","));
         }
         
         // Skip acc_s (3), gyro_s (3), means (4), vars (4), omega (4)

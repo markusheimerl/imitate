@@ -260,37 +260,43 @@ int main(int argc, char **argv) {
     double *all_old_vars = malloc(num_rows * 4 * sizeof(double));
     double *all_advantages = malloc(num_rows * sizeof(double));
     int *indices = malloc(num_rows * sizeof(int));
-    
+
     printf("Loading %d training samples...\n", num_rows);
-    
+
     for(int i = 0; i < num_rows; i++) {
         fgets(line, sizeof(line), f);
         char *token = strtok(line, ",");
-        token = strtok(NULL, ",");
         
-        for(int j = 0; j < 18; j++) token = strtok(NULL, ",");
+        // Read position (3), velocity (3), and angular velocity (3)
+        for(int j = 0; j < 9; j++) token = strtok(NULL, ",");
         
+        // Read accelerometer and gyroscope readings (policy inputs)
         for(int j = 0; j < M_IN; j++) {
             all_inputs[i * M_IN + j] = atof(token);
             token = strtok(NULL, ",");
         }
 
+        // Read means (4)
         for(int j = 0; j < 4; j++) {
             all_old_means[i * 4 + j] = atof(token);
             token = strtok(NULL, ",");
         }
+        
+        // Read variances (4)
         for(int j = 0; j < 4; j++) {
             all_old_vars[i * 4 + j] = atof(token);
             token = strtok(NULL, ",");
         }
 
+        // Read actions (4)
         for(int j = 0; j < 4; j++) {
             all_actions[i * 4 + j] = atof(token);
             token = strtok(NULL, ",");
         }
 
-        for(int j = 0; j < 2; j++) token = strtok(NULL, ",");
-        all_advantages[i] = atof(token);
+        // Skip reward and read advantage
+        token = strtok(NULL, ",");  // skip reward
+        all_advantages[i] = atof(token);  // read advantage
         indices[i] = i;
     }
     fclose(f);

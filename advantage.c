@@ -6,7 +6,7 @@
 #define D1 64
 #define D2 32
 #define D3 16
-#define M_IN 18
+#define M_IN 9  // pos[3], vel[3], ang_vel[3]
 
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, 
                  double *W3, double *b3, double *W4, double *b4) {
@@ -88,10 +88,7 @@ int main(int argc, char **argv) {
         double state[M_IN];
         char *token = strtok(line, ",");
         
-        // Skip rollout number
-        token = strtok(NULL, ",");
-        
-        // Read position (3), velocity (3), angular velocity (3), and rotation matrix (9)
+        // Read position (3), velocity (3), and angular velocity (3)
         for(int i = 0; i < M_IN && token; i++) {
             state[i] = atof(token);
             token = strtok(NULL, ",");
