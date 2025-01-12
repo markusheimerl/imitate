@@ -9,17 +9,22 @@
 #define D2 32
 #define D3 16
 #define M_IN 6
-#define M_OUT 4
+#define M_OUT 8  // 4 means, 4 variances
 #define BETA1 0.9
 #define BETA2 0.999
 #define EPSILON 1e-8
 #define DECAY 0.01
 #define LEARNING_RATE 1e-5
+#define PPO_EPSILON 0.2  // PPO clipping parameter
+#define PI 3.14159265358979323846
 
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
-    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) + fread(b1, sizeof(double), D1, f) + fread(W2, sizeof(double), D2*D1, f) + fread(b2, sizeof(double), D2, f) + fread(W3, sizeof(double), D3*D2, f) + fread(b3, sizeof(double), D3, f) + fread(W4, sizeof(double), M_OUT*D3, f) + fread(b4, sizeof(double), M_OUT, f);
+    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) + fread(b1, sizeof(double), D1, f) + 
+                       fread(W2, sizeof(double), D2*D1, f) + fread(b2, sizeof(double), D2, f) + 
+                       fread(W3, sizeof(double), D3*D2, f) + fread(b3, sizeof(double), D3, f) + 
+                       fread(W4, sizeof(double), M_OUT*D3, f) + fread(b4, sizeof(double), M_OUT, f);
     fclose(f);
     return items_read == (D1*M_IN + D1 + D2*D1 + D2 + D3*D2 + D3 + M_OUT*D3 + M_OUT);
 }
@@ -50,11 +55,20 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
         for(int j = 0; j < D2; j++) sum += W3[i*D2 + j] * h2[j];
         h3[i] = sum > 0 ? sum : sum * 0.1;
     }
-    for(int i = 0; i < M_OUT; i++) {
+    for(int i = 0; i < M_OUT/2; i++) {  // First 4 outputs are means
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));
+        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));  // Mean in [0,100]
     }
+    for(int i = M_OUT/2; i < M_OUT; i++) {  // Last 4 outputs are variances
+        double sum = b4[i];
+        for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
+        output[i] = 10.0 / (1.0 + exp(-sum));  // Variance in [0,10]
+    }
+}
+
+double gaussian_log_prob(double x, double mean, double var) {
+    return -0.5 * (log(2.0 * PI * var) + (x - mean) * (x - mean) / var);
 }
 
 void adam_update(double *params, double *grads, double *m, double *v, int size, int step) {
@@ -69,18 +83,39 @@ void adam_update(double *params, double *grads, double *m, double *v, int size, 
 void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4,
              double *m_W1, double *m_b1, double *m_W2, double *m_b2, double *m_W3, double *m_b3, double *m_W4, double *m_b4,
              double *v_W1, double *v_b1, double *v_W2, double *v_b2, double *v_W3, double *v_b3, double *v_W4, double *v_b4,
-             double *input, double *h1, double *h2, double *h3, double *output, double advantage, int step,
+             double *input, double *h1, double *h2, double *h3, double *output, double *actions,
+             double *old_means, double *old_vars, double advantage, int step,
              double *dW1, double *db1, double *dW2, double *db2, double *dW3, double *db3, double *dW4, double *db4) {
+
+    // Compute probability ratio
+    double log_prob_new = 0, log_prob_old = 0;
+    for(int i = 0; i < 4; i++) {
+        log_prob_new += gaussian_log_prob(actions[i], output[i], output[i+4]);
+        log_prob_old += gaussian_log_prob(actions[i], old_means[i], old_vars[i]);
+    }
+    double prob_ratio = exp(log_prob_new - log_prob_old);
+    
+    // Compute clipped surrogate objective
+    double clipped_ratio = fmax(fmin(prob_ratio, 1.0 + PPO_EPSILON), 1.0 - PPO_EPSILON);
+    double surrogate = -fmin(prob_ratio * advantage, clipped_ratio * advantage);
 
     memset(dW1, 0, D1*M_IN*sizeof(double)); memset(db1, 0, D1*sizeof(double));
     memset(dW2, 0, D2*D1*sizeof(double)); memset(db2, 0, D2*sizeof(double));
     memset(dW3, 0, D3*D2*sizeof(double)); memset(db3, 0, D3*sizeof(double));
     memset(dW4, 0, M_OUT*D3*sizeof(double)); memset(db4, 0, M_OUT*sizeof(double));
 
-    for(int i = 0; i < M_OUT; i++) {
-        double sigmoid = (output[i] - 50.0) / 50.0;
-        db4[i] = advantage * sigmoid * (1 - sigmoid);
-        for(int j = 0; j < D3; j++) dW4[i*D3 + j] = db4[i] * h3[j];
+    // Backpropagate through Gaussian distributions
+    for(int i = 0; i < 4; i++) {
+        double d_mean = surrogate * (actions[i] - output[i]) / output[i+4];
+        double d_var = surrogate * (pow(actions[i] - output[i], 2) / (2.0 * pow(output[i+4], 2)) - 0.5 / output[i+4]);
+        
+        db4[i] = d_mean;
+        db4[i+4] = d_var;
+        
+        for(int j = 0; j < D3; j++) {
+            dW4[i*D3 + j] = d_mean * h3[j];
+            dW4[(i+4)*D3 + j] = d_var * h3[j];
+        }
     }
 
     for(int i = 0; i < D3; i++) {
@@ -169,6 +204,9 @@ int main(int argc, char **argv) {
 
     // Read all data into memory
     double *all_inputs = malloc(num_rows * M_IN * sizeof(double));
+    double *all_actions = malloc(num_rows * 4 * sizeof(double));
+    double *all_old_means = malloc(num_rows * 4 * sizeof(double));
+    double *all_old_vars = malloc(num_rows * 4 * sizeof(double));
     double *all_advantages = malloc(num_rows * sizeof(double));
     int *indices = malloc(num_rows * sizeof(int));
     
@@ -184,7 +222,24 @@ int main(int argc, char **argv) {
             token = strtok(NULL, ",");
         }
 
-        for(int j = 0; j < 6; j++) token = strtok(NULL, ",");  // Skip to advantage
+        // Read means and variances
+        for(int j = 0; j < 4; j++) {
+            all_old_means[i * 4 + j] = atof(token);
+            token = strtok(NULL, ",");
+        }
+        for(int j = 0; j < 4; j++) {
+            all_old_vars[i * 4 + j] = atof(token);
+            token = strtok(NULL, ",");
+        }
+
+        // Read actions
+        for(int j = 0; j < 4; j++) {
+            all_actions[i * 4 + j] = atof(token);
+            token = strtok(NULL, ",");
+        }
+
+        // Skip to advantage
+        for(int j = 0; j < 2; j++) token = strtok(NULL, ",");
         all_advantages[i] = atof(token);
         indices[i] = i;
     }
@@ -204,25 +259,27 @@ int main(int argc, char **argv) {
             indices[j] = temp;
         }
 
-        double running_advantage = 0;
+        double running_loss = 0;
         for(int step = 0; step < num_rows; step++) {
             int idx = indices[step];
             double *input = &all_inputs[idx * M_IN];
+            double *actions = &all_actions[idx * 4];
+            double *old_means = &all_old_means[idx * 4];
+            double *old_vars = &all_old_vars[idx * 4];
             double advantage = all_advantages[idx];
 
             forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
             backward(W1, b1, W2, b2, W3, b3, W4, b4,
                     m_W1, m_b1, m_W2, m_b2, m_W3, m_b3, m_W4, m_b4,
                     v_W1, v_b1, v_W2, v_b2, v_W3, v_b3, v_W4, v_b4,
-                    input, h1, h2, h3, output, advantage, step + 1,
+                    input, h1, h2, h3, output, actions, old_means, old_vars,
+                    advantage, step + 1,
                     dW1, db1, dW2, db2, dW3, db3, dW4, db4);
 
-            running_advantage += advantage;
-            if((step + 1) % 100 == 0) {
-                printf("\rEpoch %d/%d, Step %d/%d, Average advantage: %f", 
-                       epoch + 1, epochs, step + 1, num_rows, running_advantage/100);
+            if((step + 1) % 1000 == 0) {
+                printf("\rEpoch %d/%d, Step %d/%d", 
+                       epoch + 1, epochs, step + 1, num_rows);
                 fflush(stdout);
-                running_advantage = 0;
             }
         }
         printf("\n");
@@ -240,6 +297,9 @@ int main(int argc, char **argv) {
     free(dW1); free(db1); free(dW2); free(db2);
     free(dW3); free(db3); free(dW4); free(db4);
     free(all_inputs);
+    free(all_actions);
+    free(all_old_means);
+    free(all_old_vars);
     free(all_advantages);
     free(indices);
 

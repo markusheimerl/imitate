@@ -206,17 +206,20 @@ int main(int argc, char **argv) {
     for(int i = 0; i < rows; i++) {
         if (!fgets(line, sizeof(line), f)) break;
         char *ptr = line;
-        strsep(&ptr, ",");  // Skip timestamp
+        strsep(&ptr, ",");  // Skip rollout number
         
-        // Read input data
+        // Read input data (pos, vel, ang_vel, R)
         for(int j = 0; j < M_IN; j++) {
             data[i][j] = atof(strsep(&ptr, ","));
         }
         
-        // Skip middle columns and reward
-        for(int j = 0; j < 11; j++) strsep(&ptr, ",");
+        // Skip middle columns (acc_s, gyro_s, means, vars, omega)
+        for(int j = 0; j < 15; j++) strsep(&ptr, ",");
         
-        // Get target
+        // Skip immediate reward
+        strsep(&ptr, ",");
+        
+        // Get discounted return (target)
         targets[i] = atof(strsep(&ptr, ",\n"));
     }
     fclose(f);
@@ -229,6 +232,7 @@ int main(int argc, char **argv) {
     printf("------------------------------------------------\n");
 
     for(int epoch = 0; epoch < 3; epoch++) {
+        // Shuffle indices
         for(int i = rows-1; i > 0; i--) {
             int j = rand() % (i + 1);
             int temp = indices[i];
@@ -238,13 +242,18 @@ int main(int argc, char **argv) {
 
         for(int i = 0; i < rows; i++, step++) {
             forward(W1, b1, W2, b2, W3, b3, W4, b4, data[indices[i]], h1, h2, h3, &output);
-            running_loss += backward(W1, b1, W2, b2, W3, b3, W4, b4, m_W1, m_b1, m_W2, m_b2, m_W3, m_b3, m_W4, m_b4, v_W1, v_b1, v_W2, v_b2, v_W3, v_b3, v_W4, v_b4, data[indices[i]], h1, h2, h3, &output, targets[indices[i]], d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_W4, d_h1, d_h2, d_h3, step);
+            running_loss += backward(W1, b1, W2, b2, W3, b3, W4, b4,
+                                  m_W1, m_b1, m_W2, m_b2, m_W3, m_b3, m_W4, m_b4,
+                                  v_W1, v_b1, v_W2, v_b2, v_W3, v_b3, v_W4, v_b4,
+                                  data[indices[i]], h1, h2, h3, &output, targets[indices[i]],
+                                  d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_W4, d_h1, d_h2, d_h3, step);
 
             if(step % 30000 == 0) {
                 double avg_loss = running_loss/30000;
                 learning_rate *= (avg_loss > prev_loss) ? 0.95 : 1.05;
                 learning_rate = fmax(1e-6, fmin(1e-2, learning_rate));
-                printf("%3d | %6d | %.6f | %.2e | %.6f | %.6f\n", epoch, step, avg_loss, learning_rate, output, targets[indices[i]]);
+                printf("%3d | %6d | %.6f | %.2e | %.6f | %.6f\n",
+                       epoch, step, avg_loss, learning_rate, output, targets[indices[i]]);
                 prev_loss = avg_loss;
                 running_loss = 0;
             }

@@ -17,12 +17,15 @@
 #define D2 32
 #define D3 16
 #define M_IN 6
-#define M_OUT 4
+#define M_OUT 8  // 4 means, 4 variances
 
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
-    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) + fread(b1, sizeof(double), D1, f) + fread(W2, sizeof(double), D2*D1, f) + fread(b2, sizeof(double), D2, f) + fread(W3, sizeof(double), D3*D2, f) + fread(b3, sizeof(double), D3, f) + fread(W4, sizeof(double), M_OUT*D3, f) + fread(b4, sizeof(double), M_OUT, f);
+    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) + fread(b1, sizeof(double), D1, f) + 
+                       fread(W2, sizeof(double), D2*D1, f) + fread(b2, sizeof(double), D2, f) + 
+                       fread(W3, sizeof(double), D3*D2, f) + fread(b3, sizeof(double), D3, f) + 
+                       fread(W4, sizeof(double), M_OUT*D3, f) + fread(b4, sizeof(double), M_OUT, f);
     fclose(f);
     return items_read == (D1*M_IN + D1 + D2*D1 + D2 + D3*D2 + D3 + M_OUT*D3 + M_OUT);
 }
@@ -36,7 +39,8 @@ void save_weights(const char* filename, double *W1, double *b1, double *W2, doub
     fclose(f);
 }
 
-void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
+void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, 
+            double *input, double *h1, double *h2, double *h3, double *output) {
     for(int i = 0; i < D1; i++) {
         double sum = b1[i];
         for(int j = 0; j < M_IN; j++) sum += W1[i*M_IN + j] * input[j];
@@ -52,10 +56,15 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
         for(int j = 0; j < D2; j++) sum += W3[i*D2 + j] * h2[j];
         h3[i] = sum > 0 ? sum : sum * 0.1;
     }
-    for(int i = 0; i < M_OUT; i++) {
+    for(int i = 0; i < M_OUT/2; i++) {  // First 4 outputs are means
         double sum = b4[i];
         for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));
+        output[i] = 50.0 + 50.0 / (1.0 + exp(-sum));  // Mean in [0,100]
+    }
+    for(int i = M_OUT/2; i < M_OUT; i++) {  // Last 4 outputs are variances
+        double sum = b4[i];
+        for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
+        output[i] = 10.0 / (1.0 + exp(-sum));  // Variance in [0,10]
     }
 }
 
@@ -100,7 +109,11 @@ int main(int argc, char *argv[]) {
     linear_position_d_W[1] = 1.0;
     sprintf(filename, "%d-%d-%d_%d-%d-%d_trajectory.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     FILE *csv_file = fopen(filename, "w");
-    fprintf(csv_file, "rollout,pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],R[0],R[1],R[2],R[3],R[4],R[5],R[6],R[7],R[8],acc_s[0],acc_s[1],acc_s[2],gyro_s[0],gyro_s[1],gyro_s[2],omega[0],omega[1],omega[2],omega[3],reward,discounted_return\n");
+    fprintf(csv_file, "rollout,pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],"
+                     "R[0],R[1],R[2],R[3],R[4],R[5],R[6],R[7],R[8],"
+                     "acc_s[0],acc_s[1],acc_s[2],gyro_s[0],gyro_s[1],gyro_s[2],"
+                     "mean[0],mean[1],mean[2],mean[3],var[0],var[1],var[2],var[3],"
+                     "omega[0],omega[1],omega[2],omega[3],reward,discounted_return\n");
     #endif
 
     for(int rollout = 0; rollout < max_rollouts; rollout++) {
@@ -118,7 +131,8 @@ int main(int argc, char *argv[]) {
         }
 
         double t_physics = 0.0, t_control = 0.0;
-        while (t_physics < 20.0 && VEC3_MAG2(linear_position_W) <= 100.0*100.0 && VEC3_MAG2(linear_velocity_W) <= 10.0*10.0 && VEC3_MAG2(angular_velocity_B) <= 10.0*10.0) {
+        while (t_physics < 20.0 && VEC3_MAG2(linear_position_W) <= 100.0*100.0 && 
+               VEC3_MAG2(linear_velocity_W) <= 10.0*10.0 && VEC3_MAG2(angular_velocity_B) <= 10.0*10.0) {
             
             update_drone_physics(DT_PHYSICS);
             t_physics += DT_PHYSICS;
@@ -129,24 +143,52 @@ int main(int argc, char *argv[]) {
                     input[i+3] = angular_velocity_B_s[i];
                 }
                 forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
-                memcpy(omega_next, output, M_OUT * sizeof(double));
+
+                // Sample actions from Gaussian distributions
+                for(int i = 0; i < 4; i++) {
+                    double mean = output[i];
+                    double std = sqrt(output[i+4]);
+                    double u1 = (double)rand() / RAND_MAX;
+                    double u2 = (double)rand() / RAND_MAX;
+                    double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+                    omega_next[i] = mean + std * z;
+                    omega_next[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
+                }
 
                 #ifdef LOG
-                double pos_error = sqrt(pow(linear_position_W[0] - linear_position_d_W[0], 2) + pow(linear_position_W[1] - linear_position_d_W[1], 2) + pow(linear_position_W[2] - linear_position_d_W[2], 2));
-                double ang_vel_error = sqrt(pow(angular_velocity_B[0] - angular_velocity_d_B[0], 2) + pow(angular_velocity_B[1] - angular_velocity_d_B[1], 2) + pow(angular_velocity_B[2] - angular_velocity_d_B[2], 2));
+                double pos_error = sqrt(pow(linear_position_W[0] - linear_position_d_W[0], 2) + 
+                                     pow(linear_position_W[1] - linear_position_d_W[1], 2) + 
+                                     pow(linear_position_W[2] - linear_position_d_W[2], 2));
+                double ang_vel_error = sqrt(pow(angular_velocity_B[0] - angular_velocity_d_B[0], 2) + 
+                                         pow(angular_velocity_B[1] - angular_velocity_d_B[1], 2) + 
+                                         pow(angular_velocity_B[2] - angular_velocity_d_B[2], 2));
                 double reward = exp(-(pos_error * 2.0 + ang_vel_error * 0.5));
                 rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
                 rewards[reward_count] = reward;
                 trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
                 trajectory_lines[reward_count] = malloc(1024);
-                snprintf(trajectory_lines[reward_count], 1024, "%d,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n", rollout, linear_position_W[0], linear_position_W[1], linear_position_W[2], linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2], angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2], R_W_B[0], R_W_B[1], R_W_B[2], R_W_B[3], R_W_B[4], R_W_B[5], R_W_B[6], R_W_B[7], R_W_B[8], linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2], angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2], omega_next[0], omega_next[1], omega_next[2], omega_next[3], reward);
+                snprintf(trajectory_lines[reward_count], 1024, 
+                        "%d,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n",
+                        rollout, 
+                        linear_position_W[0], linear_position_W[1], linear_position_W[2],
+                        linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2],
+                        angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
+                        R_W_B[0], R_W_B[1], R_W_B[2], R_W_B[3], R_W_B[4], R_W_B[5], R_W_B[6], R_W_B[7], R_W_B[8],
+                        linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2],
+                        angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2],
+                        output[0], output[1], output[2], output[3],  // means
+                        output[4], output[5], output[6], output[7],  // variances
+                        omega_next[0], omega_next[1], omega_next[2], omega_next[3],
+                        reward);
                 reward_count++;
                 #endif
 
-                for(int i = 0; i < 4; i++) omega[i] = fmax(OMEGA_MIN, fmin(OMEGA_MAX, omega_next[i]));
+                for(int i = 0; i < 4; i++) omega[i] = omega_next[i];
 
                 #ifdef RENDER
-                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
+                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", 
+                       linear_position_W[0], linear_position_W[1], linear_position_W[2], 
+                       omega[0], omega[1], omega[2], omega[3]);
                 fflush(stdout);
                 #endif
 
@@ -164,6 +206,7 @@ int main(int argc, char *argv[]) {
             }
             #endif
         }
+
         #ifdef LOG
         // Calculate and write trajectory with discounted returns
         for(int i = 0; i < reward_count; i++) {
@@ -191,7 +234,7 @@ int main(int argc, char *argv[]) {
     printf("\nSimulation complete\n");
 
     if (argc > 1) save_weights(argv[1], W1, b1, W2, b2, W3, b3, W4, b4);
-    else{
+    else {
         sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
         save_weights(filename, W1, b1, W2, b2, W3, b3, W4, b4);
     }

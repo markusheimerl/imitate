@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
     FILE *temp = fopen("temp.csv", "w");
     if (!temp) { printf("Failed to create temporary file\n"); return 1; }
 
-    // Write header
+    // Write header (copy original header and add advantage column)
     line[strcspn(line, "\n")] = 0;
     fprintf(temp, "%s,advantage\n", line);
 
@@ -106,11 +106,14 @@ int main(int argc, char **argv) {
             token = strtok(NULL, ",");
         }
         
-        // Skip to discounted return
-        for(int i = 0; i < 11; i++) {
+        // Skip to discounted return (acc_s, gyro_s, means, vars, omega, reward)
+        for(int i = 0; i < 15; i++) {
             if (!token) { printf("Error: malformed input\n"); return 1; }
             token = strtok(NULL, ",");
         }
+        
+        // Skip immediate reward
+        token = strtok(NULL, ",");
         
         double actual_return = atof(token);
         double value_pred;
