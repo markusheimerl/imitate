@@ -20,8 +20,11 @@
 #define PPO_EPSILON 0.2
 #define PI 3.14159265358979323846
 #define ENTROPY_COEF 0.01
-#define MAX_KL 0.015
 #define LOG_INTERVAL 10000
+#define TARGET_KL 0.015
+#define KL_ADAPT_RATE 1.5    // Less aggressive (was 2.0)
+#define MIN_KL_PENALTY 1e-2  // Higher minimum penalty
+#define MAX_KL_PENALTY 1e2   // Lower maximum penalty
 
 bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
     FILE *f = fopen(filename, "rb");
@@ -104,7 +107,8 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
              double *m_W1, double *m_b1, double *m_W2, double *m_b2, double *m_W3, double *m_b3, double *m_W4, double *m_b4,
              double *v_W1, double *v_b1, double *v_W2, double *v_b2, double *v_W3, double *v_b3, double *v_W4, double *v_b4,
              double *input, double *h1, double *h2, double *h3, double *output,
-             double *actions, double *old_means, double *old_vars, double advantage, int step) {
+             double *actions, double *old_means, double *old_vars, double advantage, int step,
+             double *kl_penalty) {
     
     double d_W1[D1*M_IN] = {0}, d_b1[D1] = {0};
     double d_W2[D2*D1] = {0}, d_b2[D2] = {0};
@@ -129,12 +133,11 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
         log_prob_old += lp_old;
     }
 
-    // Early stopping based on KL divergence
-    if (kl_div > MAX_KL) {
-        if (step % LOG_INTERVAL == 0) {
-            printf("Early stopping: KL=%.3f\n", kl_div);
-        }
-        return;
+    // Adapt KL penalty
+    if (kl_div > TARGET_KL * 1.5) {
+        *kl_penalty = fmin(*kl_penalty * KL_ADAPT_RATE, MAX_KL_PENALTY);
+    } else if (kl_div < TARGET_KL / 1.5) {
+        *kl_penalty = fmax(*kl_penalty / KL_ADAPT_RATE, MIN_KL_PENALTY);
     }
 
     // Compute probability ratio and clipping
@@ -151,12 +154,14 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
         entropy += 0.5 * (log(2 * PI * output[i+4]) + 1);
     }
     
-    // Combined loss with entropy regularization
-    double surrogate_loss = -fmin(surrogate_1, surrogate_2) - ENTROPY_COEF * entropy;
+    // Combined loss with entropy regularization and KL penalty
+    double surrogate_loss = -fmin(surrogate_1, surrogate_2) 
+                        - ENTROPY_COEF * entropy 
+                        + (*kl_penalty) * kl_div;
 
     if (step % LOG_INTERVAL == 0) {
-        printf("KL=%.3f, ratio=%.2f, adv=%.2f, entropy=%.3f\n",
-               kl_div, ratio, advantage, entropy);
+        printf("KL=%.3f, penalty=%.3f, ratio=%.2f, adv=%.2f, entropy=%.3f\n",
+               kl_div, *kl_penalty, ratio, advantage, entropy);
     }
 
     // Compute gradients for each action dimension
@@ -171,12 +176,19 @@ void backward(double *W1, double *b1, double *W2, double *b2, double *W3, double
 
         // Gradient for mean
         double d_mean = grad_scale * advantage * (action - mean) / var;
+        
+        // Add KL penalty gradient for mean
+        d_mean += (*kl_penalty) * (mean - old_means[i]) / var;
+        
         d_b4[i] = d_mean;
         
         // Gradient for variance
         double d_var = grad_scale * advantage * (
             (action - mean) * (action - mean) / (2.0 * var * var) - 1.0 / (2.0 * var)
         );
+        
+        // Add KL penalty gradient for variance
+        d_var += (*kl_penalty) * 0.5 * (1.0 / var - 1.0 / old_vars[i]);
         
         // Add entropy gradients
         d_var += ENTROPY_COEF * 0.5 / var;
@@ -340,6 +352,7 @@ int main(int argc, char **argv) {
     double output[M_OUT];
     double h1[D1], h2[D2], h3[D3];
     int epochs = 10;
+    double kl_penalty = 1.0;
     
     printf("\nStarting PPO training for %d epochs...\n", epochs);
     double avg_kl = 0;
@@ -367,7 +380,7 @@ int main(int argc, char **argv) {
                     m_W1, m_b1, m_W2, m_b2, m_W3, m_b3, m_W4, m_b4,
                     v_W1, v_b1, v_W2, v_b2, v_W3, v_b3, v_W4, v_b4,
                     input, h1, h2, h3, output, actions, old_means, old_vars,
-                    advantage, step + 1);
+                    advantage, step + 1, &kl_penalty);
 
             if((step + 1) % LOG_INTERVAL == 0) {
                 printf("\rEpoch %d/%d: %.1f%% complete", 
