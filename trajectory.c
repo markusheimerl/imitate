@@ -33,7 +33,7 @@ void sample_action(double *output, double *omega_next) {
     }
 }
 
-void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
+void forward_policy(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
     for (int i = 0; i < D1; i++) h1[i] = l_relu(b1[i] + dot(&W1[i * M_IN], input, M_IN));
     for (int i = 0; i < D2; i++) h2[i] = l_relu(b2[i] + dot(&W2[i * D1], h1, D1));
     for (int i = 0; i < D3; i++) h3[i] = l_relu(b3[i] + dot(&W3[i * D2], h2, D2));
@@ -42,6 +42,19 @@ void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double 
 }
 
 int main(int argc, char *argv[]) {
+
+    #if defined(RENDER)
+        Sim* sim = init_sim(true);
+        int max_rollouts = 1;
+        double t_render = 0.0;
+    #elif defined(LOG)
+        Sim* sim = init_sim(false);
+        Logger* logger = init_logger();
+        int max_rollouts = 1000;
+    #else
+        return 1;
+    #endif
+
     srand(time(NULL));
 
     double *W1, *b1, *W2, *b2, *W3, *b3, *W4, *b4;
@@ -58,21 +71,6 @@ int main(int argc, char *argv[]) {
         init_linear(&W4, &b4, D3, M_OUT);
     }
 
-    #if defined(RENDER)
-        Sim* sim = init_sim(true);
-        int max_rollouts = 1;
-        double t_render = 0.0;
-    #elif defined(LOG)
-        Sim* sim = init_sim(false);
-        Logger* logger = init_logger();
-        double *rewards = NULL;
-        char **trajectory_lines = NULL;
-        int reward_count = 0;
-        int max_rollouts = 1000;
-    #else
-        return 1;
-    #endif
-    
     for(int rollout = 0; rollout < max_rollouts; rollout++) {
         #if defined(LOG)
             printf("\rRollout %d/%d ", rollout + 1, max_rollouts);
@@ -97,13 +95,13 @@ int main(int argc, char *argv[]) {
             if (t_control <= t_physics) {
                 double input[M_IN] = {sim->quad->linear_acceleration_B_s[0], sim->quad->linear_acceleration_B_s[1], sim->quad->linear_acceleration_B_s[2], sim->quad->angular_velocity_B_s[0], sim->quad->angular_velocity_B_s[1], sim->quad->angular_velocity_B_s[2]};
                 double output[M_OUT] = {0.0};
-                forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
+                forward_policy(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
                 sample_action(output, sim->quad->omega_next);
 
                 #if defined(RENDER)
                     print_quad(sim->quad);
                     fflush(stdout);
-                #elif defined(LOG)
+                #elif defined(LOG)               
                     log_trajectory(logger, sim, output, calculate_reward(sim));
                 #endif
 
@@ -115,6 +113,8 @@ int main(int argc, char *argv[]) {
             save_logger(logger);
         #endif
     }
+
+    printf("\n");
 
     if (argc > 1) {
         save_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
@@ -129,7 +129,7 @@ int main(int argc, char *argv[]) {
     free_sim(sim);
 
     #ifdef LOG
-    free_logger(logger);
+        free_logger(logger);
     #endif
 
     return 0;
