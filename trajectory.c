@@ -40,42 +40,43 @@ int main(int argc, char *argv[]) {
 
     if(argc > 1) load_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
 
+    Sim* sim = init_sim();
+
     #ifdef RENDER
-    Sim* sim = init_sim_render();
     double t_render = 0.0;
     int max_rollouts = 1;
     #endif
 
     #ifdef LOG
-    Sim* sim = init_sim_log();
     double *rewards = NULL;
     char **trajectory_lines = NULL;
     int reward_count = 0;
-    linear_position_d_W[1] = 1.0;
     int max_rollouts = 1000;
+
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char filename[100];
+    sprintf(filename, "%d-%d-%d_%d-%d-%d_trajectory.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    FILE* csv_file = fopen(filename, "w");
+    fprintf(csv_file, "pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],acc_s[0],acc_s[1],acc_s[2],gyro_s[0],gyro_s[1],gyro_s[2],mean[0],mean[1],mean[2],mean[3],var[0],var[1],var[2],var[3],omega[0],omega[1],omega[2],omega[3],reward,discounted_return\n");
     #endif
 
     for(int rollout = 0; rollout < max_rollouts; rollout++) {
         printf("\rRollout %d/%d ", rollout + 1, max_rollouts);
         fflush(stdout);
 
-        memset(linear_position_W, 0, sizeof(double) * 3);
-        memset(linear_velocity_W, 0, sizeof(double) * 3);
-        memset(angular_velocity_B, 0, sizeof(double) * 3);
-        memcpy(R_W_B, (double[9]){1,0,0, 0,1,0, 0,0,1}, sizeof(double) * 9);
-
-        linear_position_W[1] = 1.0;
+        reset_quad(sim->quad, 0.0, 1.0, 0.0);
 
         double t_physics = 0.0, t_control = 0.0;
-        while (t_physics < 3000.0 && linear_position_W[1] > 0.2 && fabs(linear_position_W[0]) < 2.0 && fabs(linear_position_W[1]) < 2.0 && fabs(linear_position_W[2]) < 2.0) {
+        while (t_physics < 3000.0 && sim->quad->linear_position_W[1] > 0.2 && fabs(sim->quad->linear_position_W[0]) < 2.0 && fabs(sim->quad->linear_position_W[1]) < 2.0 && fabs(sim->quad->linear_position_W[2]) < 2.0) {
             
-            update_drone_physics(DT_PHYSICS);
+            update_quad(sim->quad, DT_PHYSICS);
             t_physics += DT_PHYSICS;
 
             if (t_control <= t_physics) {
                 for(int i = 0; i < 3; i++) {
-                    input[i] = linear_acceleration_B_s[i];
-                    input[i+3] = angular_velocity_B_s[i];
+                    input[i] = sim->quad->linear_acceleration_B_s[i];
+                    input[i+3] = sim->quad->angular_velocity_B_s[i];
                 }
                 forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
 
@@ -86,14 +87,14 @@ int main(int argc, char *argv[]) {
                     double u1 = (double)rand() / RAND_MAX;
                     double u2 = (double)rand() / RAND_MAX;
                     double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                    omega_next[i] = mean + std * z;
-                    if (rollout == 0 && t_physics < 0.1) printf("Motor %d: mean=%.3f, std=%.3f, action=%.3f\n", i, mean, std, omega_next[i]);
+                    sim->quad->omega_next[i] = mean + std * z;
+                    if (rollout == 0 && t_physics < 0.1) printf("Motor %d: mean=%.3f, std=%.3f, action=%.3f\n", i, mean, std, sim->quad->omega_next[i]);
                 }
 
                 #ifdef LOG
-                double height_error = fabs(linear_position_W[1] - 1.0);
-                double horizontal_error = fabs(linear_position_W[0]) + fabs(linear_position_W[2]);
-                double velocity_penalty = (fabs(linear_velocity_W[0]) + fabs(linear_velocity_W[1]) + fabs(linear_velocity_W[2])) * 0.1;
+                double height_error = fabs(sim->quad->linear_position_W[1] - 1.0);
+                double horizontal_error = fabs(sim->quad->linear_position_W[0]) + fabs(sim->quad->linear_position_W[2]);
+                double velocity_penalty = (fabs(sim->quad->linear_velocity_W[0]) + fabs(sim->quad->linear_velocity_W[1]) + fabs(sim->quad->linear_velocity_W[2])) * 0.1;
                 double reward = 1.0 + (1.0 / (1.0 + height_error) - horizontal_error - velocity_penalty);
 
                 rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
@@ -102,22 +103,20 @@ int main(int argc, char *argv[]) {
                 trajectory_lines[reward_count] = malloc(1024);
                 snprintf(trajectory_lines[reward_count], 1024, 
                         "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n",
-                        linear_position_W[0], linear_position_W[1], linear_position_W[2],
-                        linear_velocity_W[0], linear_velocity_W[1], linear_velocity_W[2],
-                        angular_velocity_B[0], angular_velocity_B[1], angular_velocity_B[2],
-                        linear_acceleration_B_s[0], linear_acceleration_B_s[1], linear_acceleration_B_s[2],
-                        angular_velocity_B_s[0], angular_velocity_B_s[1], angular_velocity_B_s[2],
+                        sim->quad->linear_position_W[0], sim->quad->linear_position_W[1], sim->quad->linear_position_W[2],
+                        sim->quad->linear_velocity_W[0], sim->quad->linear_velocity_W[1], sim->quad->linear_velocity_W[2],
+                        sim->quad->angular_velocity_B[0], sim->quad->angular_velocity_B[1], sim->quad->angular_velocity_B[2],
+                        sim->quad->linear_acceleration_B_s[0], sim->quad->linear_acceleration_B_s[1], sim->quad->linear_acceleration_B_s[2],
+                        sim->quad->angular_velocity_B_s[0], sim->quad->angular_velocity_B_s[1], sim->quad->angular_velocity_B_s[2],
                         output[0], output[1], output[2], output[3],  // means
                         output[4], output[5], output[6], output[7],  // variances
-                        omega_next[0], omega_next[1], omega_next[2], omega_next[3],
+                        sim->quad->omega_next[0], sim->quad->omega_next[1], sim->quad->omega_next[2], sim->quad->omega_next[3],
                         reward);
                 reward_count++;
                 #endif
 
-                update_rotor_speeds();
-
                 #ifdef RENDER
-                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
+                print_quad(sim->quad);
                 fflush(stdout);
                 #endif
 
@@ -146,7 +145,7 @@ int main(int argc, char *argv[]) {
                 char *line = trajectory_lines[i];
                 char *last_comma = strrchr(line, ',');
                 sprintf(last_comma + 1, "%f\n", discounted_return);
-                fprintf(sim->csv_file, "%s", line);
+                fprintf(csv_file, "%s", line);
                 free(line);
             }
             
@@ -165,9 +164,11 @@ int main(int argc, char *argv[]) {
         save_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
     else {
+        #ifndef LOG
         time_t t = time(NULL);
         struct tm tm = *localtime(&t);
         char filename[100];
+        #endif
         sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
         save_weights(filename, (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
@@ -176,11 +177,11 @@ int main(int argc, char *argv[]) {
     free(h1); free(h2); free(h3);
     
     #ifdef RENDER
-    free_sim_render(sim);
+    free_sim(sim);
     #endif
 
     #ifdef LOG
-    fclose(sim->csv_file);
+    fclose(csv_file);
     #endif
 
     return 0;
