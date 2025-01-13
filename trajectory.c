@@ -8,6 +8,7 @@
 #endif
 #include "quad.h"
 #include <stdbool.h>
+#include "util.h"
 
 #define D1 64
 #define D2 32
@@ -18,34 +19,6 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
-
-bool load_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
-    FILE *f = fopen(filename, "rb");
-    if (!f) return false;
-    size_t items_read = fread(W1, sizeof(double), D1*M_IN, f) +
-                       fread(b1, sizeof(double), D1, f) +
-                       fread(W2, sizeof(double), D2*D1, f) +
-                       fread(b2, sizeof(double), D2, f) +
-                       fread(W3, sizeof(double), D3*D2, f) +
-                       fread(b3, sizeof(double), D3, f) +
-                       fread(W4, sizeof(double), M_OUT*D3, f) +
-                       fread(b4, sizeof(double), M_OUT, f);
-    fclose(f);
-    return items_read == (D1*M_IN + D1 + D2*D1 + D2 + D3*D2 + D3 + M_OUT*D3 + M_OUT);
-}
-
-void save_weights(const char* filename, double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4) {
-    FILE *f = fopen(filename, "wb");
-    fwrite(W1, sizeof(double), D1*M_IN, f);
-    fwrite(b1, sizeof(double), D1, f);
-    fwrite(W2, sizeof(double), D2*D1, f);
-    fwrite(b2, sizeof(double), D2, f);
-    fwrite(W3, sizeof(double), D3*D2, f);
-    fwrite(b3, sizeof(double), D3, f);
-    fwrite(W4, sizeof(double), M_OUT*D3, f);
-    fwrite(b4, sizeof(double), M_OUT, f);
-    fclose(f);
-}
 
 void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3,
             double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
@@ -258,10 +231,22 @@ int main(int argc, char *argv[]) {
 
     printf("\nSimulation complete\n");
 
-    if (argc > 1) save_weights(argv[1], W1, b1, W2, b2, W3, b3, W4, b4);
+    if (argc > 1) {
+        double** params = malloc(8 * sizeof(double*));
+        params[0] = W1; params[1] = b1; params[2] = W2; params[3] = b2;
+        params[4] = W3; params[5] = b3; params[6] = W4; params[7] = b4;
+        int sizes[8] = {D1*M_IN, D1, D2*D1, D2, D3*D2, D3, M_OUT*D3, M_OUT};
+        save_weights(argv[1], params, sizes, 8);
+        free(params);
+    }
     else {
         sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-        save_weights(filename, W1, b1, W2, b2, W3, b3, W4, b4);
+        double** params = malloc(8 * sizeof(double*));
+        params[0] = W1; params[1] = b1; params[2] = W2; params[3] = b2;
+        params[4] = W3; params[5] = b3; params[6] = W4; params[7] = b4;
+        int sizes[8] = {D1*M_IN, D1, D2*D1, D2, D3*D2, D3, M_OUT*D3, M_OUT};
+        save_weights(filename, params, sizes, 8);
+        free(params);
     }
 
     free(W1); free(b1); free(W2); free(b2); free(W3); free(b3); free(W4); free(b4);
