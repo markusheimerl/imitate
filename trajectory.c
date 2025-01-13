@@ -6,6 +6,7 @@
 #include "sim.h"
 #include "util.h"
 #include "grad.h"
+#include "log.h"
 
 #define D1 64
 #define D2 32
@@ -16,6 +17,14 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
+
+void sample_action(double *output, double *omega_next) {
+    for(int i = 0; i < 4; i++) {
+        double mean = output[i];
+        double std = sqrt(output[i + 4]);
+        omega_next[i] = mean + std * sqrt(-2.0 * log((double)rand() / RAND_MAX)) * cos(2.0 * M_PI * ((double)rand() / RAND_MAX));
+    }
+}
 
 void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
     for (int i = 0; i < D1; i++) h1[i] = l_relu(b1[i] + dot(&W1[i * M_IN], input, M_IN));
@@ -29,38 +38,34 @@ int main(int argc, char *argv[]) {
     srand(time(NULL));
 
     double *W1, *b1, *W2, *b2, *W3, *b3, *W4, *b4;
-    double *h1, *h2, *h3, input[M_IN], output[M_OUT];
-    init_linear(&W1, &b1, M_IN, D1);
-    init_linear(&W2, &b2, D1, D2);
-    init_linear(&W3, &b3, D2, D3);
-    init_linear(&W4, &b4, D3, M_OUT);
-    h1 = malloc(D1 * sizeof(double));
-    h2 = malloc(D2 * sizeof(double));
-    h3 = malloc(D3 * sizeof(double));
+    double* h1 = malloc(D1 * sizeof(double));
+    double* h2 = malloc(D2 * sizeof(double));
+    double* h3 = malloc(D3 * sizeof(double));
 
-    if(argc > 1) load_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
+    if(argc > 1){
+        load_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
+    }else{
+        init_linear(&W1, &b1, M_IN, D1);
+        init_linear(&W2, &b2, D1, D2);
+        init_linear(&W3, &b3, D2, D3);
+        init_linear(&W4, &b4, D3, M_OUT);
+    }
 
-    Sim* sim = init_sim();
-
-    #ifdef RENDER
-    double t_render = 0.0;
-    int max_rollouts = 1;
+    #if defined(RENDER)
+        Sim* sim = init_sim(true);
+        int max_rollouts = 1;
+        double t_render = 0.0;
+    #elif defined(LOG)
+        Sim* sim = init_sim(false);
+        double *rewards = NULL;
+        char **trajectory_lines = NULL;
+        int reward_count = 0;
+        int max_rollouts = 1000;
+        FILE* csv_file = create_log_file();
+    #else
+        return 1;
     #endif
-
-    #ifdef LOG
-    double *rewards = NULL;
-    char **trajectory_lines = NULL;
-    int reward_count = 0;
-    int max_rollouts = 1000;
-
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char filename[100];
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_trajectory.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    FILE* csv_file = fopen(filename, "w");
-    fprintf(csv_file, "pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],acc_s[0],acc_s[1],acc_s[2],gyro_s[0],gyro_s[1],gyro_s[2],mean[0],mean[1],mean[2],mean[3],var[0],var[1],var[2],var[3],omega[0],omega[1],omega[2],omega[3],reward,discounted_return\n");
-    #endif
-
+    
     for(int rollout = 0; rollout < max_rollouts; rollout++) {
         printf("\rRollout %d/%d ", rollout + 1, max_rollouts);
         fflush(stdout);
@@ -73,23 +78,18 @@ int main(int argc, char *argv[]) {
             update_quad(sim->quad, DT_PHYSICS);
             t_physics += DT_PHYSICS;
 
-            if (t_control <= t_physics) {
-                for(int i = 0; i < 3; i++) {
-                    input[i] = sim->quad->linear_acceleration_B_s[i];
-                    input[i+3] = sim->quad->angular_velocity_B_s[i];
-                }
-                forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
+            #ifdef RENDER
+            if (t_render <= t_physics) {
+                render_sim(sim);
+                t_render += DT_RENDER;
+            }
+            #endif
 
-                // Sample actions from Gaussian distributions
-                for(int i = 0; i < 4; i++) {
-                    double mean = output[i];
-                    double std = sqrt(output[i + 4]);
-                    double u1 = (double)rand() / RAND_MAX;
-                    double u2 = (double)rand() / RAND_MAX;
-                    double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                    sim->quad->omega_next[i] = mean + std * z;
-                    if (rollout == 0 && t_physics < 0.1) printf("Motor %d: mean=%.3f, std=%.3f, action=%.3f\n", i, mean, std, sim->quad->omega_next[i]);
-                }
+            if (t_control <= t_physics) {
+                double input[M_IN] = {sim->quad->linear_acceleration_B_s[0], sim->quad->linear_acceleration_B_s[1], sim->quad->linear_acceleration_B_s[2], sim->quad->angular_velocity_B_s[0], sim->quad->angular_velocity_B_s[1], sim->quad->angular_velocity_B_s[2]};
+                double output[M_OUT] = {0.0};
+                forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
+                sample_action(output, sim->quad->omega_next);
 
                 #ifdef LOG
                 double height_error = fabs(sim->quad->linear_position_W[1] - 1.0);
@@ -122,13 +122,6 @@ int main(int argc, char *argv[]) {
 
                 t_control += DT_CONTROL;
             }
-
-            #ifdef RENDER
-            if (t_render <= t_physics) {
-                render_sim(sim);
-                t_render += DT_RENDER;
-            }
-            #endif
         }
 
         #ifdef LOG
@@ -164,12 +157,8 @@ int main(int argc, char *argv[]) {
         save_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
     else {
-        #ifndef LOG
-        time_t t = time(NULL);
-        struct tm tm = *localtime(&t);
         char filename[100];
-        #endif
-        sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        strftime(filename, 100, "%Y-%m-%d_%H-%M-%S_policy_weights.bin", localtime(&(time_t){time(NULL)}));
         save_weights(filename, (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
 
