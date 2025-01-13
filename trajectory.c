@@ -2,12 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#ifdef RENDER
-#include "gif.h"
-#include "rasterizer.h"
-#endif
-#include "quad.h"
 #include <stdbool.h>
+#include "sim.h"
 #include "util.h"
 #include "grad.h"
 
@@ -21,38 +17,15 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
 
-void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3,
-             double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
-    for (int i = 0; i < D1; i++) {
-        double sum = b1[i] + dot(&W1[i * M_IN], input, M_IN);
-        h1[i] = l_relu(sum);
-    }
-
-    for (int i = 0; i < D2; i++) {
-        double sum = b2[i] + dot(&W2[i * D1], h1, D1);
-        h2[i] = l_relu(sum);
-    }
-
-    for (int i = 0; i < D3; i++) {
-        double sum = b3[i] + dot(&W3[i * D2], h2, D2);
-        h3[i] = l_relu(sum);
-    }
-
-    for (int i = 0; i < M_OUT / 2; i++) {
-        output[i] = b4[i] + dot(&W4[i * D3], h3, D3); // Raw mean output
-    }
-
-    for (int i = M_OUT / 2; i < M_OUT; i++) {
-        double sum = b4[i] + dot(&W4[i * D3], h3, D3);
-        output[i] = exp(sum); // Log-variance to variance (standard in PPO)
-    }
+void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3, double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
+    for (int i = 0; i < D1; i++) h1[i] = l_relu(b1[i] + dot(&W1[i * M_IN], input, M_IN));
+    for (int i = 0; i < D2; i++) h2[i] = l_relu(b2[i] + dot(&W2[i * D1], h1, D1));
+    for (int i = 0; i < D3; i++) h3[i] = l_relu(b3[i] + dot(&W3[i * D2], h2, D2));
+    for (int i = 0; i < M_OUT / 2; i++) output[i] = b4[i] + dot(&W4[i * D3], h3, D3);
+    for (int i = M_OUT / 2; i < M_OUT; i++) output[i] = exp(b4[i] + dot(&W4[i * D3], h3, D3));
 }
 
 int main(int argc, char *argv[]) {
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char filename[100];
-    int max_rollouts = 1000;
     srand(time(NULL));
 
     double *W1, *b1, *W2, *b2, *W3, *b3, *W4, *b4;
@@ -65,32 +38,21 @@ int main(int argc, char *argv[]) {
     h2 = malloc(D2 * sizeof(double));
     h3 = malloc(D3 * sizeof(double));
 
-    if (argc > 1 && !load_weights(argv[1], W1, b1, W2, b2, W3, b3, W4, b4)) {
-        printf("Failed to load weights\n");
-        return 1;
-    }
+    if(argc > 1) load_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
 
     #ifdef RENDER
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_flight.gif", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    Mesh* meshes[] = {create_mesh("sim/rasterizer/drone.obj", "sim/rasterizer/drone.bmp"), create_mesh("sim/rasterizer/ground.obj", "sim/rasterizer/ground.bmp")};
-    uint8_t *frame_buffer = calloc(WIDTH * HEIGHT * 3, sizeof(uint8_t));
-    ge_GIF *gif = ge_new_gif(filename, WIDTH, HEIGHT, 4, -1, 0);
-    transform_mesh(meshes[1], (double[3]){0.0, -0.2, 0.0}, 1.0, (double[9]){1,0,0, 0,1,0, 0,0,1});
+    Sim* sim = init_sim_render();
     double t_render = 0.0;
-    max_rollouts = 1;
+    int max_rollouts = 1;
     #endif
 
     #ifdef LOG
+    Sim* sim = init_sim_log();
     double *rewards = NULL;
     char **trajectory_lines = NULL;
     int reward_count = 0;
     linear_position_d_W[1] = 1.0;
-    sprintf(filename, "%d-%d-%d_%d-%d-%d_trajectory.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    FILE *csv_file = fopen(filename, "w");
-    fprintf(csv_file, "pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],ang_vel[0],ang_vel[1],ang_vel[2],"
-                    "acc_s[0],acc_s[1],acc_s[2],gyro_s[0],gyro_s[1],gyro_s[2],"
-                    "mean[0],mean[1],mean[2],mean[3],var[0],var[1],var[2],var[3],"
-                    "omega[0],omega[1],omega[2],omega[3],reward,discounted_return\n");
+    int max_rollouts = 1000;
     #endif
 
     for(int rollout = 0; rollout < max_rollouts; rollout++) {
@@ -98,15 +60,11 @@ int main(int argc, char *argv[]) {
         fflush(stdout);
 
         memset(linear_position_W, 0, sizeof(double) * 3);
-        linear_position_W[1] = 1.0;
         memset(linear_velocity_W, 0, sizeof(double) * 3);
         memset(angular_velocity_B, 0, sizeof(double) * 3);
         memcpy(R_W_B, (double[9]){1,0,0, 0,1,0, 0,0,1}, sizeof(double) * 9);
 
-        for(int i = 0; i < 3; i++) {
-            accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
-            gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
-        }
+        linear_position_W[1] = 1.0;
 
         double t_physics = 0.0, t_control = 0.0;
         while (t_physics < 3000.0 && linear_position_W[1] > 0.2 && fabs(linear_position_W[0]) < 2.0 && fabs(linear_position_W[1]) < 2.0 && fabs(linear_position_W[2]) < 2.0) {
@@ -129,19 +87,13 @@ int main(int argc, char *argv[]) {
                     double u2 = (double)rand() / RAND_MAX;
                     double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                     omega_next[i] = mean + std * z;
-                    if (rollout == 0 && t_physics < 0.1) {
-                        printf("Motor %d: mean=%.3f, std=%.3f, action=%.3f\n", 
-                            i, mean, std, omega_next[i]);
-                    }
+                    if (rollout == 0 && t_physics < 0.1) printf("Motor %d: mean=%.3f, std=%.3f, action=%.3f\n", i, mean, std, omega_next[i]);
                 }
 
                 #ifdef LOG
-                // Hover-specific rewards
                 double height_error = fabs(linear_position_W[1] - 1.0);
                 double horizontal_error = fabs(linear_position_W[0]) + fabs(linear_position_W[2]);
                 double velocity_penalty = (fabs(linear_velocity_W[0]) + fabs(linear_velocity_W[1]) + fabs(linear_velocity_W[2])) * 0.1;
-
-                // Base reward for staying alive + reward being close to hover state (higher reward for better hovering)
                 double reward = 1.0 + (1.0 / (1.0 + height_error) - horizontal_error - velocity_penalty);
 
                 rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
@@ -165,7 +117,7 @@ int main(int argc, char *argv[]) {
                 update_rotor_speeds();
 
                 #ifdef RENDER
-                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]   ", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
+                printf("\rPos: [%.2f, %.2f, %.2f] Motors: [%.2f, %.2f, %.2f, %.2f]", linear_position_W[0], linear_position_W[1], linear_position_W[2], omega[0], omega[1], omega[2], omega[3]);
                 fflush(stdout);
                 #endif
 
@@ -174,11 +126,7 @@ int main(int argc, char *argv[]) {
 
             #ifdef RENDER
             if (t_render <= t_physics) {
-                transform_mesh(meshes[0], linear_position_W, 0.5, R_W_B);
-                memset(frame_buffer, 0, WIDTH * HEIGHT * 3);
-                vertex_shader(meshes, 2, (double[3]){-2.0, 2.0, -2.0}, (double[3]){0.0, 0.0, 0.0});
-                rasterize(frame_buffer, meshes, 2);
-                ge_add_frame(gif, frame_buffer, 6);
+                render_sim(sim);
                 t_render += DT_RENDER;
             }
             #endif
@@ -198,7 +146,7 @@ int main(int argc, char *argv[]) {
                 char *line = trajectory_lines[i];
                 char *last_comma = strrchr(line, ',');
                 sprintf(last_comma + 1, "%f\n", discounted_return);
-                fprintf(csv_file, "%s", line);
+                fprintf(sim->csv_file, "%s", line);
                 free(line);
             }
             
@@ -214,34 +162,25 @@ int main(int argc, char *argv[]) {
     printf("\nSimulation complete\n");
 
     if (argc > 1) {
-        double** params = malloc(8 * sizeof(double*));
-        params[0] = W1; params[1] = b1; params[2] = W2; params[3] = b2;
-        params[4] = W3; params[5] = b3; params[6] = W4; params[7] = b4;
-        int sizes[8] = {D1*M_IN, D1, D2*D1, D2, D3*D2, D3, M_OUT*D3, M_OUT};
-        save_weights(argv[1], params, sizes, 8);
-        free(params);
+        save_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
     else {
+        time_t t = time(NULL);
+        struct tm tm = *localtime(&t);
+        char filename[100];
         sprintf(filename, "%d-%d-%d_%d-%d-%d_policy_weights.bin", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-        double** params = malloc(8 * sizeof(double*));
-        params[0] = W1; params[1] = b1; params[2] = W2; params[3] = b2;
-        params[4] = W3; params[5] = b3; params[6] = W4; params[7] = b4;
-        int sizes[8] = {D1*M_IN, D1, D2*D1, D2, D3*D2, D3, M_OUT*D3, M_OUT};
-        save_weights(filename, params, sizes, 8);
-        free(params);
+        save_weights(filename, (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
 
     free(W1); free(b1); free(W2); free(b2); free(W3); free(b3); free(W4); free(b4);
     free(h1); free(h2); free(h3);
     
     #ifdef RENDER
-    free(frame_buffer);
-    free_meshes(meshes, 2);
-    ge_close_gif(gif);
+    free_sim_render(sim);
     #endif
 
     #ifdef LOG
-    fclose(csv_file);
+    fclose(sim->csv_file);
     #endif
 
     return 0;

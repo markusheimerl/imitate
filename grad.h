@@ -15,7 +15,7 @@ double l_relu(double x) {
 }
 
 void he_init(double *W, int n_in, int n_out) {
-    double stddev = sqrt(2.0 / n_in)
+    double stddev = sqrt(2.0 / n_in);
     for (int i = 0; i < n_in * n_out; i++) {
         double u1 = (double)rand() / RAND_MAX;
         double u2 = (double)rand() / RAND_MAX;
