@@ -9,6 +9,7 @@
 #include "quad.h"
 #include <stdbool.h>
 #include "util.h"
+#include "grad.h"
 
 #define D1 64
 #define D2 32
@@ -21,35 +22,29 @@
 #define DT_RENDER   (1.0 / 30.0)
 
 void forward(double *W1, double *b1, double *W2, double *b2, double *W3, double *b3,
-            double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
-    for(int i = 0; i < D1; i++) {
-        double sum = b1[i];
-        for(int j = 0; j < M_IN; j++) sum += W1[i*M_IN + j] * input[j];
-        h1[i] = sum > 0 ? sum : sum * 0.1;
+             double *W4, double *b4, double *input, double *h1, double *h2, double *h3, double *output) {
+    for (int i = 0; i < D1; i++) {
+        double sum = b1[i] + dot(&W1[i * M_IN], input, M_IN);
+        h1[i] = l_relu(sum);
     }
 
-    for(int i = 0; i < D2; i++) {
-        double sum = b2[i];
-        for(int j = 0; j < D1; j++) sum += W2[i*D1 + j] * h1[j];
-        h2[i] = sum > 0 ? sum : sum * 0.1;
+    for (int i = 0; i < D2; i++) {
+        double sum = b2[i] + dot(&W2[i * D1], h1, D1);
+        h2[i] = l_relu(sum);
     }
 
-    for(int i = 0; i < D3; i++) {
-        double sum = b3[i];
-        for(int j = 0; j < D2; j++) sum += W3[i*D2 + j] * h2[j];
-        h3[i] = sum > 0 ? sum : sum * 0.1;
+    for (int i = 0; i < D3; i++) {
+        double sum = b3[i] + dot(&W3[i * D2], h2, D2);
+        h3[i] = l_relu(sum);
     }
 
-    for(int i = 0; i < M_OUT/2; i++) {
-        double sum = b4[i];
-        for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = sum;  // Raw mean output
+    for (int i = 0; i < M_OUT / 2; i++) {
+        output[i] = b4[i] + dot(&W4[i * D3], h3, D3); // Raw mean output
     }
 
-    for(int i = M_OUT/2; i < M_OUT; i++) {
-        double sum = b4[i];
-        for(int j = 0; j < D3; j++) sum += W4[i*D3 + j] * h3[j];
-        output[i] = exp(sum);  // Log-variance to variance (standard in PPO)
+    for (int i = M_OUT / 2; i < M_OUT; i++) {
+        double sum = b4[i] + dot(&W4[i * D3], h3, D3);
+        output[i] = exp(sum); // Log-variance to variance (standard in PPO)
     }
 }
 
@@ -60,32 +55,19 @@ int main(int argc, char *argv[]) {
     int max_rollouts = 1000;
     srand(time(NULL));
 
-    double *W1 = malloc(D1*M_IN*sizeof(double)), *b1 = calloc(D1, sizeof(double));
-    double *W2 = malloc(D2*D1*sizeof(double)), *b2 = calloc(D2, sizeof(double));
-    double *W3 = malloc(D3*D2*sizeof(double)), *b3 = calloc(D3, sizeof(double));
-    double *W4 = malloc(M_OUT*D3*sizeof(double)), *b4 = calloc(M_OUT, sizeof(double));
-    double *h1 = malloc(D1*sizeof(double)), *h2 = malloc(D2*sizeof(double));
-    double *h3 = malloc(D3*sizeof(double)), input[M_IN], output[M_OUT];
+    double *W1, *b1, *W2, *b2, *W3, *b3, *W4, *b4;
+    double *h1, *h2, *h3, input[M_IN], output[M_OUT];
+    init_linear(&W1, &b1, M_IN, D1);
+    init_linear(&W2, &b2, D1, D2);
+    init_linear(&W3, &b3, D2, D3);
+    init_linear(&W4, &b4, D3, M_OUT);
+    h1 = malloc(D1 * sizeof(double));
+    h2 = malloc(D2 * sizeof(double));
+    h3 = malloc(D3 * sizeof(double));
 
     if (argc > 1 && !load_weights(argv[1], W1, b1, W2, b2, W3, b3, W4, b4)) {
         printf("Failed to load weights\n");
         return 1;
-    } else if (argc == 1) {
-        // Initialize weights with small values
-        for(int i = 0; i < D1*M_IN; i++) W1[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
-        for(int i = 0; i < D2*D1; i++) W2[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
-        for(int i = 0; i < D3*D2; i++) W3[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
-        for(int i = 0; i < M_OUT*D3; i++) W4[i] = ((double)rand()/RAND_MAX - 0.5) * 0.1;
-
-        // Initialize the final layer biases to output around 50
-        for(int i = 0; i < M_OUT/2; i++) {
-            b4[i] = 50.0;  // Mean outputs start at 50
-        }
-        
-        // Initialize log variances to small values
-        for(int i = M_OUT/2; i < M_OUT; i++) {
-            b4[i] = -1.0;  // Small initial standard deviation
-        }
     }
 
     #ifdef RENDER
