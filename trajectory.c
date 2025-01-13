@@ -4,7 +4,6 @@
 #include <time.h>
 #include <stdbool.h>
 #include "sim.h"
-#include "util.h"
 #include "grad.h"
 #include "log.h"
 
