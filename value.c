@@ -5,6 +5,7 @@
 #include <time.h>
 #include <stdbool.h>
 #include "grad.h"
+#include "log.h"
 
 #define D1 64
 #define D2 32
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
                 double avg_loss = (running_loss/30000);
                 learning_rate *= (avg_loss > prev_loss) ? 0.95 : 1.05;
                 learning_rate = fmax(1e-6, fmin(1e-2, learning_rate));
-                printf("%3d | %6d | %.6f | %.2e | %.6f | %.6f\n", epoch, step, avg_loss, learning_rate, output, targets[indices[i]]);
+                printf("%3d | %6d | %.6f | %.2e | %.6f | %.6f\n", epoch, step, avg_loss, learning_rate, output, logger->targets[logger->indices[i]]);
                 prev_loss = avg_loss;
                 running_loss = 0;
             }
@@ -149,7 +150,6 @@ int main(int argc, char **argv) {
 
     // Cleanup
     free_logger(logger);
-    free(data); free(targets); free(indices);
     free(W1); free(b1); free(W2); free(b2); free(W3); free(b3); free(W4); free(b4);
     free(h1); free(h2); free(h3);
     free(m_W1); free(m_b1); free(m_W2); free(m_b2);

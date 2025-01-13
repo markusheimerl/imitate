@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdbool.h>
+#include "sim.h"
 
 typedef struct{
     FILE* csv_file;
@@ -72,12 +73,12 @@ void save_trajectories(Logger* logger){
 
 void read_trajectories(Logger* logger, const char* filename){
     FILE *f = fopen(filename, "r");
-    if (!f) { printf("Failed to open file\n"); return 1; }
+    if (!f) { printf("Failed to open file\n"); return; }
 
     // Count rows (excluding header)
     char line[1024];
     logger->rows = -1;
-    while (fgets(line, sizeof(line), f)) logger->rowsrows++;
+    while (fgets(line, sizeof(line), f)) logger->rows++;
     rewind(f);
     fgets(line, sizeof(line), f);  // Skip header
 
@@ -86,26 +87,20 @@ void read_trajectories(Logger* logger, const char* filename){
     logger->targets = malloc(logger->rows * sizeof(double));
     logger->indices = malloc(logger->rows * sizeof(int));
     for(int i = 0; i < logger->rows; i++) {
-        data[i] = malloc(M_IN * sizeof(double));
-        indices[i] = i;
+        logger->data[i] = malloc(9 * sizeof(double));
+        logger->indices[i] = i;
     }
 
     // Read data
     for(int i = 0; i < logger->rows; i++) {
         if (!fgets(line, sizeof(line), f)) break;
         char *ptr = line;
-        
         // Read position (3), velocity (3), and angular velocity (3)
-        for(int j = 0; j < M_IN; j++) {
-            logger->data[i][j] = atof(strsep(&ptr, ","));
-        }
-        
+        for(int j = 0; j < 9; j++) logger->data[i][j] = atof(strsep(&ptr, ","));
         // Skip acc_s (3), gyro_s (3), means (4), vars (4), omega (4)
         for(int j = 0; j < 18; j++) strsep(&ptr, ",");
-        
         // Skip immediate reward
         strsep(&ptr, ",");
-        
         // Get discounted return (target)
         logger->targets[i] = atof(strsep(&ptr, ",\n"));
     }

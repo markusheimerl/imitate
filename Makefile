@@ -17,7 +17,7 @@ $(POLICY_TARGET): policy.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 $(VALUE_TARGET): value.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
 $(ADVANTAGE_TARGET): advantage.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
