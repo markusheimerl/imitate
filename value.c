@@ -108,68 +108,28 @@ int main(int argc, char **argv) {
         init_linear(&W4, &b4, D3, M_OUT);
     }
     
-    FILE *f = fopen(argv[1], "r");
-    if (!f) { printf("Failed to open file\n"); return 1; }
-
-    // Count rows (excluding header)
-    char line[1024];
-    int rows = -1;
-    while (fgets(line, sizeof(line), f)) rows++;
-    rewind(f);
-    fgets(line, sizeof(line), f);  // Skip header
-
-    // Allocate memory
-    double **data = malloc(rows * sizeof(double*));
-    double *targets = malloc(rows * sizeof(double));
-    int *indices = malloc(rows * sizeof(int));
-    for(int i = 0; i < rows; i++) {
-        data[i] = malloc(M_IN * sizeof(double));
-        indices[i] = i;
-    }
-
-    // Read data
-    for(int i = 0; i < rows; i++) {
-        if (!fgets(line, sizeof(line), f)) break;
-        char *ptr = line;
-        
-        // Read position (3), velocity (3), and angular velocity (3)
-        for(int j = 0; j < M_IN; j++) {
-            data[i][j] = atof(strsep(&ptr, ","));
-        }
-        
-        // Skip acc_s (3), gyro_s (3), means (4), vars (4), omega (4)
-        for(int j = 0; j < 18; j++) strsep(&ptr, ",");
-        
-        // Skip immediate reward
-        strsep(&ptr, ",");
-        
-        // Get discounted return (target)
-        targets[i] = atof(strsep(&ptr, ",\n"));
-    }
-    fclose(f);
+    Logger* logger = init_logger();
+    read_trajectories(logger, argv[1]);
 
     // Training loop
     double output, running_loss = 0;
     int step = 1;
 
-    printf("Epoch | Step | Loss | Learning Rate | Prediction | Target\n");
-    printf("------------------------------------------------\n");
-
     for(int epoch = 0; epoch < 3; epoch++) {
         // Shuffle indices
-        for(int i = rows-1; i > 0; i--) {
+        for(int i = logger->rows-1; i > 0; i--) {
             int j = rand() % (i + 1);
-            int temp = indices[i];
-            indices[i] = indices[j];
-            indices[j] = temp;
+            int temp = logger->indices[i];
+            logger->indices[i] = logger->indices[j];
+            logger->indices[j] = temp;
         }
 
-        for(int i = 0; i < rows; i++, step++) {
-            forward_value(W1, b1, W2, b2, W3, b3, W4, b4, data[indices[i]], h1, h2, h3, &output);
-            running_loss += backward_value(W1, b1, W2, b2, W3, b3, W4, b4, m_W1, m_b1, m_W2, m_b2, m_W3, m_b3, m_W4, m_b4, v_W1, v_b1, v_W2, v_b2, v_W3, v_b3, v_W4, v_b4, data[indices[i]], h1, h2, h3, &output, targets[indices[i]], d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_W4, d_h1, d_h2, d_h3, step);
+        for(int i = 0; i < logger->rows; i++, step++) {
+            forward_value(W1, b1, W2, b2, W3, b3, W4, b4, logger->data[logger->indices[i]], h1, h2, h3, &output);
+            running_loss += backward_value(W1, b1, W2, b2, W3, b3, W4, b4, m_W1, m_b1, m_W2, m_b2, m_W3, m_b3, m_W4, m_b4, v_W1, v_b1, v_W2, v_b2, v_W3, v_b3, v_W4, v_b4, logger->data[logger->indices[i]], h1, h2, h3, &output, logger->targets[logger->indices[i]], d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_W4, d_h1, d_h2, d_h3, step);
 
             if(step % 30000 == 0) {
-                double avg_loss = running_loss/30000;
+                double avg_loss = (running_loss/30000);
                 learning_rate *= (avg_loss > prev_loss) ? 0.95 : 1.05;
                 learning_rate = fmax(1e-6, fmin(1e-2, learning_rate));
                 printf("%3d | %6d | %.6f | %.2e | %.6f | %.6f\n", epoch, step, avg_loss, learning_rate, output, targets[indices[i]]);
@@ -188,7 +148,7 @@ int main(int argc, char **argv) {
     }
 
     // Cleanup
-    for(int i = 0; i < rows; i++) free(data[i]);
+    free_logger(logger);
     free(data); free(targets); free(indices);
     free(W1); free(b1); free(W2); free(b2); free(W3); free(b3); free(W4); free(b4);
     free(h1); free(h2); free(h3);

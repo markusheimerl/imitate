@@ -109,7 +109,7 @@ int main(int argc, char *argv[]) {
         }
 
         #ifdef LOG
-            save_logger(logger);
+            save_trajectories(logger);
         #endif
     }
 
