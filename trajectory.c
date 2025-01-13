@@ -18,6 +18,13 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 30.0)
 
+int calculate_reward(Sim* sim) {
+    double height_error = fabs(sim->quad->linear_position_W[1] - 1.0);
+    double horizontal_error = fabs(sim->quad->linear_position_W[0]) + fabs(sim->quad->linear_position_W[2]);
+    double velocity_penalty = (fabs(sim->quad->linear_velocity_W[0]) + fabs(sim->quad->linear_velocity_W[1]) + fabs(sim->quad->linear_velocity_W[2])) * 0.1;
+    return 1.0 + (1.0 / (1.0 + height_error) - horizontal_error - velocity_penalty);
+}
+
 void sample_action(double *output, double *omega_next) {
     for(int i = 0; i < 4; i++) {
         double mean = output[i];
@@ -57,18 +64,20 @@ int main(int argc, char *argv[]) {
         double t_render = 0.0;
     #elif defined(LOG)
         Sim* sim = init_sim(false);
+        Logger* logger = init_logger();
         double *rewards = NULL;
         char **trajectory_lines = NULL;
         int reward_count = 0;
         int max_rollouts = 1000;
-        FILE* csv_file = create_log_file();
     #else
         return 1;
     #endif
     
     for(int rollout = 0; rollout < max_rollouts; rollout++) {
-        printf("\rRollout %d/%d ", rollout + 1, max_rollouts);
-        fflush(stdout);
+        #if defined(LOG)
+            printf("\rRollout %d/%d ", rollout + 1, max_rollouts);
+            fflush(stdout);
+        #endif
 
         reset_quad(sim->quad, 0.0, 1.0, 0.0);
 
@@ -91,33 +100,11 @@ int main(int argc, char *argv[]) {
                 forward(W1, b1, W2, b2, W3, b3, W4, b4, input, h1, h2, h3, output);
                 sample_action(output, sim->quad->omega_next);
 
-                #ifdef LOG
-                double height_error = fabs(sim->quad->linear_position_W[1] - 1.0);
-                double horizontal_error = fabs(sim->quad->linear_position_W[0]) + fabs(sim->quad->linear_position_W[2]);
-                double velocity_penalty = (fabs(sim->quad->linear_velocity_W[0]) + fabs(sim->quad->linear_velocity_W[1]) + fabs(sim->quad->linear_velocity_W[2])) * 0.1;
-                double reward = 1.0 + (1.0 / (1.0 + height_error) - horizontal_error - velocity_penalty);
-
-                rewards = realloc(rewards, (reward_count + 1) * sizeof(double));
-                rewards[reward_count] = reward;
-                trajectory_lines = realloc(trajectory_lines, (reward_count + 1) * sizeof(char*));
-                trajectory_lines[reward_count] = malloc(1024);
-                snprintf(trajectory_lines[reward_count], 1024, 
-                        "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,0.0\n",
-                        sim->quad->linear_position_W[0], sim->quad->linear_position_W[1], sim->quad->linear_position_W[2],
-                        sim->quad->linear_velocity_W[0], sim->quad->linear_velocity_W[1], sim->quad->linear_velocity_W[2],
-                        sim->quad->angular_velocity_B[0], sim->quad->angular_velocity_B[1], sim->quad->angular_velocity_B[2],
-                        sim->quad->linear_acceleration_B_s[0], sim->quad->linear_acceleration_B_s[1], sim->quad->linear_acceleration_B_s[2],
-                        sim->quad->angular_velocity_B_s[0], sim->quad->angular_velocity_B_s[1], sim->quad->angular_velocity_B_s[2],
-                        output[0], output[1], output[2], output[3],  // means
-                        output[4], output[5], output[6], output[7],  // variances
-                        sim->quad->omega_next[0], sim->quad->omega_next[1], sim->quad->omega_next[2], sim->quad->omega_next[3],
-                        reward);
-                reward_count++;
-                #endif
-
-                #ifdef RENDER
-                print_quad(sim->quad);
-                fflush(stdout);
+                #if defined(RENDER)
+                    print_quad(sim->quad);
+                    fflush(stdout);
+                #elif defined(LOG)
+                    log_trajectory(logger, sim, output, calculate_reward(sim));
                 #endif
 
                 t_control += DT_CONTROL;
@@ -125,33 +112,9 @@ int main(int argc, char *argv[]) {
         }
 
         #ifdef LOG
-        // Calculate and write trajectory with discounted returns
-        if (reward_count > 0) {
-            for(int i = 0; i < reward_count; i++) {
-                double discounted_return = 0.0;
-                double gamma = 0.99;
-                double discount = 1.0;
-                for(int j = i; j < reward_count; j++) {
-                    discounted_return += discount * rewards[j];
-                    discount *= gamma;
-                }
-                char *line = trajectory_lines[i];
-                char *last_comma = strrchr(line, ',');
-                sprintf(last_comma + 1, "%f\n", discounted_return);
-                fprintf(csv_file, "%s", line);
-                free(line);
-            }
-            
-            free(trajectory_lines);
-            free(rewards);
-            rewards = NULL;
-            trajectory_lines = NULL;
-            reward_count = 0;
-        }
+            save_logger(logger);
         #endif
     }
-
-    printf("\nSimulation complete\n");
 
     if (argc > 1) {
         save_weights(argv[1], (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
@@ -162,15 +125,11 @@ int main(int argc, char *argv[]) {
         save_weights(filename, (double*[]){W1, b1, W2, b2, W3, b3, W4, b4}, (int[]){M_IN * D1, D1, D1 * D2, D2, D2 * D3, D3, D3 * M_OUT, M_OUT}, 8);
     }
 
-    free(W1); free(b1); free(W2); free(b2); free(W3); free(b3); free(W4); free(b4);
-    free(h1); free(h2); free(h3);
-    
-    #ifdef RENDER
+    free(W1); free(b1); free(W2); free(b2); free(W3); free(b3); free(W4); free(b4); free(h1); free(h2); free(h3);
     free_sim(sim);
-    #endif
 
     #ifdef LOG
-    fclose(csv_file);
+    free_logger(logger);
     #endif
 
     return 0;

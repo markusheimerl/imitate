@@ -61,6 +61,4 @@ run: render train
 	./$(TRAJECTORY_RENDER_TARGET) $$POLICY_WEIGHTS
 
 clean:
-	rm -f $(VALUE_TARGET) $(TRAJECTORY_LOG_TARGET) $(TRAJECTORY_RENDER_TARGET) \
-		$(ADVANTAGE_TARGET) $(POLICY_TARGET) *_flight.gif *_trajectory.csv \
-		*_policy_weights.bin *_value_weights.bin
+	rm -f $(VALUE_TARGET) $(TRAJECTORY_LOG_TARGET) $(TRAJECTORY_RENDER_TARGET) $(ADVANTAGE_TARGET) $(POLICY_TARGET) *_flight.gif *_trajectory.csv *_policy_weights.bin *_value_weights.bin
