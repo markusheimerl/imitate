@@ -135,8 +135,7 @@ Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
 int main(int argc, char** argv) {
     srand(time(NULL));
     
-    Net* policy = argc > 1 ? load_weights(argv[1]) : 
-                            init_net(4, (int[]){STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM});
+    Net* policy = argc > 1 ? load_weights(argv[1]) : init_net(4, (int[]){STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM});
     if(!policy) return 1;
     
     Sim* sim = init_sim(false);
@@ -144,12 +143,17 @@ int main(int argc, char** argv) {
     printf("\nCollecting %d rollouts...\n", NUM_ROLLOUTS);
     for(int i = 0; i < NUM_ROLLOUTS; i++) {
         Data* data = collect_rollout(sim, policy, i);
-        printf("Rollout %d: %d steps, final return: %.3f\n", 
-               i, data->n, data->y[0][ACTION_DIM + 1]);
+        printf("Rollout %d: %d steps, final return: %.3f\n", i, data->n, data->y[0][ACTION_DIM + 1]);
         free_data(data);
     }
+
+    if(argc > 1){
+        save_weights(policy, argv[1]);
+    }else{
+        char* policy_filename = get_timestamp_filename("policy.bin");
+        save_weights(policy, policy_filename);
+    }
     
-    save_weights(policy, "policy.bin");
     free_net(policy);
     free_sim(sim);
     return 0;
