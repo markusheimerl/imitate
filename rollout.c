@@ -83,7 +83,6 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
         if(t_control <= t_physics) {
             get_state(sim->quad, states[step]);
             fwd(policy, states[step], act);
-            memcpy(actions[step], act[4], ACTION_DIM * sizeof(double));
             
             for(int i = 0; i < 4; i++) {
                 double mean = fabs(act[4][i]) * 50.0;
@@ -92,6 +91,8 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
                 double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * cos(2.0 * M_PI * (double)rand()/RAND_MAX);
                 sim->quad->omega_next[i] = mean + std * noise;
             }
+
+            memcpy(actions[step], sim->quad->omega_next, (ACTION_DIM / 2) * sizeof(double));
             
             rewards[step] = compute_reward(sim->quad);
             total_reward += rewards[step];
@@ -105,7 +106,7 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     Data* data = malloc(sizeof(Data));
     data->n = step;
     data->fx = STATE_DIM;
-    data->fy = ACTION_DIM + 1;  // +1 for returns
+    data->fy = (ACTION_DIM / 2) + 1;  // +1 for returns
     data->X = malloc(step * sizeof(double*));
     data->y = malloc(step * sizeof(double*));
     
@@ -114,9 +115,9 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     for(int i = step-1; i >= 0; i--) {
         data->X[i] = states[i];
         data->y[i] = malloc(data->fy * sizeof(double));
-        memcpy(data->y[i], actions[i], ACTION_DIM * sizeof(double));
+        memcpy(data->y[i], actions[i], (ACTION_DIM / 2) * sizeof(double));
         G = rewards[i] + GAMMA * G;
-        data->y[i][ACTION_DIM] = G;
+        data->y[i][(ACTION_DIM / 2)] = G;
     }
     
     char filename[64];
