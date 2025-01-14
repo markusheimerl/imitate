@@ -6,52 +6,43 @@
 #include "grad/data.h"
 
 #define STATE_DIM 12
-#define ACTION_DIM 8  // 4 means + 4 logvars
-
-Data* load_rollout(const char* filename) {
-    Data* data = load_csv(filename);
-    if(!data) printf("Failed to load %s\n", filename);
-    return data;
-}
+#define ACTION_DIM 8
 
 void update_policy(Net* policy, Data** rollouts, int num_rollouts) {
-    double** act = malloc(4 * sizeof(double*));
-    double* grad = malloc(ACTION_DIM * sizeof(double));
+    double** act = malloc(5 * sizeof(double*));
+    double** grad = malloc(5 * sizeof(double*));
     
-    for(int i = 0; i < 4; i++) {
+    for(int i = 0; i < 5; i++) {
         act[i] = malloc(policy->sz[i] * sizeof(double));
+        grad[i] = malloc(policy->sz[i] * sizeof(double));
     }
     
-    // Process all trajectories
-    for(int i = 0; i < num_rollouts; i++) {
-        for(int t = 0; t < rollouts[i]->n; t++) {
-            // Get return (discounted reward-to-go)
-            double G = rollouts[i]->y[t][ACTION_DIM + 1];
+    for(int r = 0; r < num_rollouts; r++) {
+        for(int t = 0; t < rollouts[r]->n; t++) {
+            double G = rollouts[r]->y[t][ACTION_DIM];
             
-            // Forward pass
-            fwd(policy, rollouts[i]->X[t], act);
+            fwd(policy, rollouts[r]->X[t], act);
             
             // Compute policy gradients
             for(int j = 0; j < 4; j++) {
-                double mean = act[3][j];
-                double logvar = act[3][j + 4];
+                double mean = act[4][j];
+                double logvar = act[4][j + 4];
                 double std = exp(0.5 * logvar);
-                double action = rollouts[i]->y[t][j];
+                double action = rollouts[r]->y[t][j];
                 
-                // Mean gradient
-                grad[j] = (action - mean) * G / (std * std);
-                
-                // Logvar gradient
-                grad[j + 4] = 0.5 * ((action - mean) * (action - mean) / 
-                             (std * std) - 1.0) * G;
+                grad[4][j] = (action - mean) * G / (std * std);
+                grad[4][j + 4] = 0.5 * ((action - mean) * (action - mean) / 
+                                (std * std) - 1.0) * G;
             }
             
-            // Update policy
             bwd(policy, act, grad);
         }
     }
     
-    for(int i = 0; i < 4; i++) free(act[i]);
+    for(int i = 0; i < 5; i++) {
+        free(act[i]);
+        free(grad[i]);
+    }
     free(act);
     free(grad);
 }
@@ -72,8 +63,8 @@ int main(int argc, char** argv) {
     struct dirent *ent;
     while((ent = readdir(dir)) && num_rollouts < 100) {
         if(strstr(ent->d_name, "rollout.csv")) {
-            if((rollouts[num_rollouts] = load_rollout(ent->d_name)))
-                num_rollouts++;
+            rollouts[num_rollouts] = load_csv(ent->d_name);
+            if(rollouts[num_rollouts]) num_rollouts++;
         }
     }
     closedir(dir);
@@ -82,7 +73,7 @@ int main(int argc, char** argv) {
     if(num_rollouts == 0) return 1;
     
     update_policy(policy, rollouts, num_rollouts);
-    save_weights(policy, argv[1]);
+    save_weights(argv[1], policy);
     
     for(int i = 0; i < num_rollouts; i++) free_data(rollouts[i]);
     free_net(policy);
