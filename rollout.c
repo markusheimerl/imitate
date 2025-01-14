@@ -7,7 +7,7 @@
 #include "sim/sim.h"
 
 #define STATE_DIM 12
-#define ACTION_DIM 4
+#define ACTION_DIM 8  // 4 means + 4 variances
 #define HIDDEN_DIM 64
 #define MAX_STEPS 1000
 #define DT_PHYSICS (1.0/1000.0)
@@ -20,6 +20,14 @@ void get_state(Quad* q, double* state) {
     state[9] = q->R_W_B[0];
     state[10] = q->R_W_B[4];
     state[11] = q->R_W_B[8];
+}
+
+double sample_gaussian(double mean, double logvar) {
+    double std = exp(0.5 * logvar);
+    double u1 = (double)rand() / RAND_MAX;
+    double u2 = (double)rand() / RAND_MAX;
+    double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+    return mean + std * z;
 }
 
 int main(int argc, char** argv) {
@@ -58,18 +66,23 @@ int main(int argc, char** argv) {
             fwd(policy, data->X[step], act);
             memcpy(data->y[step], act[3], ACTION_DIM * sizeof(double));
             
-            for(int i = 0; i < ACTION_DIM; i++) {
-                sim->quad->omega_next[i] = OMEGA_MIN + (OMEGA_MAX - OMEGA_MIN) * 
-                                         (tanh(data->y[step][i]) + 1.0) / 2.0;
+            // Sample from Gaussian for each motor
+            for(int i = 0; i < 4; i++) {
+                double mean = data->y[step][i];
+                double logvar = data->y[step][i + 4];
+                sim->quad->omega_next[i] = sample_gaussian(mean, logvar);
             }
             
-            if(step % 100 == 0) printf("\rStep %d/%d", step, MAX_STEPS);
+            printf("\rStep %d/%d", step + 1, MAX_STEPS);
+            fflush(stdout);
             t_control += DT_CONTROL;
             step++;
         }
     }
     
-    const char* header = "px,py,pz,vx,vy,vz,wx,wy,wz,r11,r22,r33,m1,m2,m3,m4";
+    const char* header = "px,py,pz,vx,vy,vz,wx,wy,wz,r11,r22,r33,"
+                        "m1_mean,m2_mean,m3_mean,m4_mean,"
+                        "m1_logvar,m2_logvar,m3_logvar,m4_logvar";
     char* fname = save_csv("rollout.csv", data, header);
     printf("\nSaved to: %s\n", fname);
     
