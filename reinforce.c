@@ -54,6 +54,9 @@ int main(int argc, char** argv) {
     
     Net* policy = load_weights(argv[1]);
     if(!policy) return 1;
+
+    // Substatially reduce learning rate
+    policy->lr = 1e-8;
     
     Data* rollouts[100];
     int num_rollouts = 0;
