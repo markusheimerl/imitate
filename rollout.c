@@ -149,6 +149,7 @@ int main(int argc, char** argv) {
         free_data(data);
     }
     
+    save_weights(policy, "policy.bin");
     free_net(policy);
     free_sim(sim);
     return 0;
