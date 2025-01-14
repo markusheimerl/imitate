@@ -25,12 +25,12 @@ void update_policy(Net* policy, Data** rollouts, int num_rollouts) {
             
             // Compute policy gradients
             for(int j = 0; j < 4; j++) {
-                double mean = act[4][j];
+                double mean = fabs(act[4][j]) * 50.0;
                 double logvar = act[4][j + 4];
                 double std = exp(0.5 * logvar);
                 double action = rollouts[r]->y[t][j];
                 
-                grad[4][j] = (action - mean) * G / (std * std);
+                grad[4][j] = (action - mean) * G / (std * std) / 50.0 * (act[4][j] >= 0 ? 1.0 : -1.0);
                 grad[4][j + 4] = 0.5 * ((action - mean) * (action - mean) / (std * std) - 1.0) * G;
             }
             

@@ -86,11 +86,10 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
             memcpy(actions[step], act[4], ACTION_DIM * sizeof(double));
             
             for(int i = 0; i < 4; i++) {
-                double mean = act[4][i];
+                double mean = fabs(act[4][i]) * 50.0;
                 double logvar = act[4][i + 4];
                 double std = exp(0.5 * logvar);
-                double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * 
-                             cos(2.0 * M_PI * (double)rand()/RAND_MAX);
+                double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * cos(2.0 * M_PI * (double)rand()/RAND_MAX);
                 sim->quad->omega_next[i] = mean + std * noise;
             }
             
