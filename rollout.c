@@ -15,7 +15,7 @@
 #define MAX_DISTANCE 2.0
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
-#define NUM_ROLLOUTS 10
+#define NUM_ROLLOUTS 100
 #define GAMMA 0.99
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
@@ -123,8 +123,9 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     char filename[64];
     sprintf(filename, "%d_rollout.csv", rollout_num);
     save_csv(filename, data);
-    
-    printf("Rollout %d: %d steps, reward: %.3f\n", rollout_num, step, total_reward);
+
+    if(rollout_num % 10 == 0)
+        printf("Rollout %d: %d steps, reward: %.3f\n", rollout_num, step, total_reward);
     
     // Cleanup
     free(rewards);
@@ -147,9 +148,13 @@ int main(int argc, char** argv) {
         collect_rollout(sim, policy, i);
     }
     
-    char filename[64];
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
-    save_weights(filename, policy);
+    if(argc > 1) {
+        save_weights(argv[1], policy);
+    } else {
+        char filename[64];
+        strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
+        save_weights(filename, policy);
+    }
     
     free_net(policy);
     free_sim(sim);
