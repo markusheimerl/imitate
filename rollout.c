@@ -15,7 +15,7 @@
 #define MAX_DISTANCE 2.0
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
-#define NUM_ROLLOUTS 10
+#define NUM_ROLLOUTS 100
 #define GAMMA 0.99
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
@@ -135,7 +135,14 @@ Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
 int main(int argc, char** argv) {
     srand(time(NULL));
     
-    Net* policy = argc > 1 ? load_weights(argv[1]) : init_net(4, (int[]){STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM});
+    Net* policy;
+    if(argc > 1){
+        printf("Loading weights from %s...\n", argv[1]);
+        policy = load_weights(argv[1]);
+    }else{
+        printf("Initializing policy network...\n");
+        policy = init_net(4, (int[]){STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM});
+    }
     if(!policy) return 1;
     
     Sim* sim = init_sim(false);
@@ -143,7 +150,8 @@ int main(int argc, char** argv) {
     printf("\nCollecting %d rollouts...\n", NUM_ROLLOUTS);
     for(int i = 0; i < NUM_ROLLOUTS; i++) {
         Data* data = collect_rollout(sim, policy, i);
-        printf("Rollout %d: %d steps, final return: %.3f\n", i, data->n, data->y[0][ACTION_DIM + 1]);
+        if(i % 20 == 0 || i == NUM_ROLLOUTS - 1)
+            printf("Rollout %d: %d steps, final return: %.3f\n", i, data->n, data->y[0][ACTION_DIM + 1]);
         free_data(data);
     }
 

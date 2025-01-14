@@ -26,6 +26,7 @@ run: $(TARGETS)
 	@# Remaining iterations
 	@for i in $$(seq 2 $(ITERATIONS)); do \
 		echo "\nIteration $$i/$(ITERATIONS)"; \
+		rm -f *_rollout.csv; \
 		POLICY=$$(ls -t *_policy.bin | head -1) && \
 		./rollout.out $$POLICY && \
 		./reinforce.out $$POLICY || break; \
