@@ -124,8 +124,8 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     sprintf(filename, "%d_rollout.csv", rollout_num);
     save_csv(filename, data);
 
-    if(rollout_num % 10 == 0)
-        printf("Rollout %d: %d steps, reward: %.3f\n", rollout_num, step, total_reward);
+    printf("\rRollout %d: %d steps, total reward: %.3f", rollout_num, step, total_reward);
+    fflush(stdout);
     
     // Cleanup
     free(rewards);
@@ -147,6 +147,8 @@ int main(int argc, char** argv) {
     for(int i = 0; i < NUM_ROLLOUTS; i++) {
         collect_rollout(sim, policy, i);
     }
+
+    printf("\n");
     
     if(argc > 1) {
         save_weights(argv[1], policy);

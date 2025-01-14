@@ -31,8 +31,7 @@ void update_policy(Net* policy, Data** rollouts, int num_rollouts) {
                 double action = rollouts[r]->y[t][j];
                 
                 grad[4][j] = (action - mean) * G / (std * std);
-                grad[4][j + 4] = 0.5 * ((action - mean) * (action - mean) / 
-                                (std * std) - 1.0) * G;
+                grad[4][j + 4] = 0.5 * ((action - mean) * (action - mean) / (std * std) - 1.0) * G;
             }
             
             bwd(policy, act, grad);
@@ -61,7 +60,7 @@ int main(int argc, char** argv) {
     
     DIR *dir = opendir(".");
     struct dirent *ent;
-    while((ent = readdir(dir)) && num_rollouts < 100) {
+    while((ent = readdir(dir)) && num_rollouts < 1000) {
         if(strstr(ent->d_name, "rollout.csv")) {
             rollouts[num_rollouts] = load_csv(ent->d_name);
             if(rollouts[num_rollouts]) num_rollouts++;
