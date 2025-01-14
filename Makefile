@@ -2,8 +2,8 @@ CC = clang
 CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
 LDFLAGS = -flto -lm
 
-TARGET = reinforce.out
-SRC = reinforce.c
+TARGET = rollout.out
+SRC = rollout.c
 
 .PHONY: clean run
 
