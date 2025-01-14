@@ -9,7 +9,8 @@
 #define ACTION_DIM 8
 #define HIDDEN_DIM 64
 #define NUM_ROLLOUTS 10
-#define LEARNING_RATE 0.001
+#define LEARNING_RATE 0.0001
+#define MAX_GRAD_NORM 1.0
 
 // Load a single rollout file
 Data* load_rollout(const char* filename) {
@@ -21,10 +22,48 @@ Data* load_rollout(const char* filename) {
     return data;
 }
 
-// Compute log probability of action under Gaussian policy
-double log_prob(double action, double mean, double logvar) {
-    double var = exp(logvar);
-    return -0.5 * (log(2 * M_PI) + logvar + pow(action - mean, 2) / var);
+// Compute statistics of returns across all rollouts
+void compute_return_stats(Data** rollouts, int num_rollouts, 
+                         double* mean, double* std) {
+    int total_steps = 0;
+    *mean = 0.0;
+    *std = 0.0;
+    
+    // Calculate mean
+    for(int r = 0; r < num_rollouts; r++) {
+        for(int t = 0; t < rollouts[r]->n; t++) {
+            *mean += rollouts[r]->y[t][ACTION_DIM + 1];
+            total_steps++;
+        }
+    }
+    *mean /= total_steps;
+    
+    // Calculate standard deviation
+    for(int r = 0; r < num_rollouts; r++) {
+        for(int t = 0; t < rollouts[r]->n; t++) {
+            *std += pow(rollouts[r]->y[t][ACTION_DIM + 1] - *mean, 2);
+        }
+    }
+    *std = sqrt(*std / total_steps);
+    
+    // Prevent division by zero
+    if(*std < 1e-6) *std = 1.0;
+}
+
+// Clip gradients to prevent explosive updates
+void clip_gradients(double* grad, int size, double max_norm) {
+    double norm = 0.0;
+    for(int i = 0; i < size; i++) {
+        norm += grad[i] * grad[i];
+    }
+    norm = sqrt(norm);
+    
+    if(norm > max_norm) {
+        double scale = max_norm / norm;
+        for(int i = 0; i < size; i++) {
+            grad[i] *= scale;
+        }
+    }
 }
 
 // Update policy using REINFORCE
@@ -36,31 +75,42 @@ void update_policy(Net* policy, Data** rollouts, int num_rollouts) {
         grad[i] = malloc(policy->sz[i] * sizeof(double));
     }
     
+    // Compute return statistics for normalization
+    double mean_return, std_return;
+    compute_return_stats(rollouts, num_rollouts, &mean_return, &std_return);
+    printf("Return stats - Mean: %.3f, Std: %.3f\n", mean_return, std_return);
+    
     // Process all timesteps from all rollouts
     for(int r = 0; r < num_rollouts; r++) {
         for(int t = 0; t < rollouts[r]->n; t++) {
             // Forward pass
             fwd(policy, rollouts[r]->X[t], act);
             
-            // Get return for this timestep
-            double G = rollouts[r]->y[t][ACTION_DIM + 1];
+            // Get normalized return for this timestep
+            double G = (rollouts[r]->y[t][ACTION_DIM + 1] - mean_return) / std_return;
+            
+            // Zero out gradients
+            memset(grad[3], 0, policy->sz[3] * sizeof(double));
             
             // Compute gradients for means and logvars
             for(int i = 0; i < 4; i++) {
-                double mean = rollouts[r]->y[t][i];
-                double logvar = rollouts[r]->y[t][i + 4];
-                double action = rollouts[r]->y[t][i];  // Sampled action
+                double mean = act[3][i];
+                double logvar = act[3][i + 4];
+                double action = rollouts[r]->y[t][i];
                 double var = exp(logvar);
                 
-                // Mean gradient: (action - mean) / var * return
+                // Mean gradient
                 grad[3][i] = (action - mean) / var * G;
                 
-                // Logvar gradient: (0.5 * ((action - mean)^2 / var - 1)) * return
+                // Logvar gradient
                 grad[3][i + 4] = 0.5 * (pow(action - mean, 2) / var - 1.0) * G;
             }
             
-            // Backward pass
-            bwd(policy, act, grad[3], grad, 0.0);
+            // Clip gradients
+            clip_gradients(grad[3], policy->sz[3], MAX_GRAD_NORM);
+            
+            // Backward pass with learning rate
+            bwd(policy, act, grad[3], grad, LEARNING_RATE);
         }
     }
     
@@ -114,18 +164,10 @@ int main(int argc, char** argv) {
     
     printf("Loaded %d rollouts\n", loaded_rollouts);
     
-    // Print average return across rollouts
-    double avg_return = 0.0;
-    for(int i = 0; i < loaded_rollouts; i++) {
-        avg_return += rollouts[i]->y[0][ACTION_DIM + 1];
-    }
-    avg_return /= loaded_rollouts;
-    printf("Average return: %.3f\n", avg_return);
-    
     // Update policy
     update_policy(policy, rollouts, loaded_rollouts);
     
-    // Overwrite existing policy file
+    // Save updated policy
     save_weights(policy, argv[1]);
     printf("Updated policy saved to %s\n", argv[1]);
     

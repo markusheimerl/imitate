@@ -3,7 +3,7 @@ CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
 LDFLAGS = -flto -lm
 
 TARGETS = rollout.out reinforce.out
-ITERATIONS = 100  # Number of training iterations
+ITERATIONS = 10
 
 .PHONY: clean run
 
@@ -31,6 +31,7 @@ run: $(TARGETS)
 		./rollout.out $$POLICY && \
 		./reinforce.out $$POLICY || break; \
 	done
+	@rm -f *_rollout.csv; \
 
 clean:
 	rm -f $(TARGETS) *.csv *.bin

@@ -15,7 +15,7 @@
 #define MAX_DISTANCE 2.0
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
-#define NUM_ROLLOUTS 100
+#define NUM_ROLLOUTS 10
 #define GAMMA 0.99
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
@@ -24,9 +24,9 @@ void get_state(Quad* q, double* state) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
     memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
     memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
-    state[9] = q->R_W_B[0];
-    state[10] = q->R_W_B[4];
-    state[11] = q->R_W_B[8];
+    state[9] = q->R_W_B[0];   // Roll
+    state[10] = q->R_W_B[4];  // Pitch
+    state[11] = q->R_W_B[8];  // Yaw
 }
 
 double compute_reward(Quad* q) {
@@ -36,8 +36,14 @@ double compute_reward(Quad* q) {
         vel_error += pow(q->linear_velocity_W[i], 2);
         ang_error += pow(q->angular_velocity_B[i], 2);
     }
-    return -(0.5 * pos_error + 0.2 * vel_error + 0.2 * ang_error + 
-             0.1 * pow(1.0 - q->R_W_B[4], 2));
+    
+    // Weighted reward components
+    double position_reward = -pos_error;
+    double velocity_penalty = -0.1 * vel_error;
+    double angular_penalty = -0.1 * ang_error;
+    double upright_reward = 5.0 * q->R_W_B[4];  // Reward for being upright
+    
+    return position_reward + velocity_penalty + angular_penalty + upright_reward;
 }
 
 bool is_terminated(Quad* q) {
@@ -49,7 +55,8 @@ bool is_terminated(Quad* q) {
     }
     return sqrt(dist) > MAX_DISTANCE || 
            sqrt(vel) > MAX_VELOCITY || 
-           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY;
+           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY ||
+           q->R_W_B[4] < 0.0;  // Terminate if flipped
 }
 
 Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
@@ -75,20 +82,26 @@ Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     
     double t_physics = 0.0, t_control = 0.0;
     int step = 0;
+    double total_reward = 0.0;
     
     while(step < MAX_STEPS && !is_terminated(sim->quad)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
+            // Get current state
             get_state(sim->quad, data->X[step]);
+            
+            // Get policy output
             fwd(policy, data->X[step], act);
+            
+            // Store means and logvars
             memcpy(data->y[step], act[3], ACTION_DIM * sizeof(double));
             
             // Sample actions from Gaussian
             for(int i = 0; i < 4; i++) {
-                double mean = data->y[step][i];
-                double logvar = data->y[step][i + 4];
+                double mean = act[3][i];
+                double logvar = act[3][i + 4];
                 double std = exp(0.5 * logvar);
                 double u1 = (double)rand() / RAND_MAX;
                 double u2 = (double)rand() / RAND_MAX;
@@ -96,7 +109,11 @@ Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
                     sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
             }
             
-            data->y[step][ACTION_DIM] = compute_reward(sim->quad);
+            // Compute and store reward
+            double reward = compute_reward(sim->quad);
+            data->y[step][ACTION_DIM] = reward;
+            total_reward += reward;
+            
             step++;
             t_control += DT_CONTROL;
         }
@@ -106,7 +123,7 @@ Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     
     // Calculate returns (backwards)
     double* returns = malloc(step * sizeof(double));
-    returns[step - 1] = data->y[step - 1][ACTION_DIM];  // Last reward
+    returns[step - 1] = data->y[step - 1][ACTION_DIM];
     
     for(int i = step - 2; i >= 0; i--) {
         returns[i] = data->y[i][ACTION_DIM] + GAMMA * returns[i + 1];
@@ -125,6 +142,9 @@ Data* collect_rollout(Sim* sim, Net* policy, int rollout_num) {
                         "m1_logvar,m2_logvar,m3_logvar,m4_logvar,reward,return";
     save_csv(filename, data, header);
     
+    printf("Rollout %d completed: %d steps, total reward: %.3f\n", 
+           rollout_num, step, total_reward);
+    
     free(returns);
     for(int i = 0; i < 4; i++) free(act[i]);
     free(act);
@@ -136,10 +156,10 @@ int main(int argc, char** argv) {
     srand(time(NULL));
     
     Net* policy;
-    if(argc > 1){
+    if(argc > 1) {
         printf("Loading weights from %s...\n", argv[1]);
         policy = load_weights(argv[1]);
-    }else{
+    } else {
         printf("Initializing policy network...\n");
         policy = init_net(4, (int[]){STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM});
     }
@@ -150,16 +170,15 @@ int main(int argc, char** argv) {
     printf("\nCollecting %d rollouts...\n", NUM_ROLLOUTS);
     for(int i = 0; i < NUM_ROLLOUTS; i++) {
         Data* data = collect_rollout(sim, policy, i);
-        if(i % 20 == 0 || i == NUM_ROLLOUTS - 1)
-            printf("Rollout %d: %d steps, final return: %.3f\n", i, data->n, data->y[0][ACTION_DIM + 1]);
         free_data(data);
     }
 
-    if(argc > 1){
+    if(argc > 1) {
         save_weights(policy, argv[1]);
-    }else{
+    } else {
         char* policy_filename = get_timestamp_filename("policy.bin");
         save_weights(policy, policy_filename);
+        free(policy_filename);
     }
     
     free_net(policy);
