@@ -12,6 +12,7 @@
 #define NUM_ROLLOUTS 100
 #define NUM_ITERATIONS 2000
 #define GAMMA 0.99
+#define ALPHA 0.01
 
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
@@ -132,19 +133,24 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             // log(p(x)) = -0.5 * (log(2π) + logvar + z²)
             double log_prob = -0.5 * (1.8378770664093453 + logvar + z * z);
             
-            // 5. Compute gradient for mean
+            // 5. Compute entropy of the Gaussian distribution
+            // H = 0.5 * (log(2πe) + logvar)
+            double entropy = 0.5 * (2.837877066 + logvar);
+            
+            // 6. Compute gradient for mean
             // ∂log_prob/∂mean = z/std
             // ∂mean/∂θ = 20 * (1 - tanh²)
             double dmean = z / std;
             double dtanh_mean = 1.0 - tanh_mean * tanh_mean;
-            grad[4][i] = returns[t] * log_prob * dmean * 20.0 * dtanh_mean;
+            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * 20.0 * dtanh_mean;
             
-            // 6. Compute gradient for log variance
+            // 7. Compute gradient for log variance
             // ∂log_prob/∂logvar = 0.5 * (z² - 1)
+            // ∂entropy/∂logvar = 0.5
             // ∂logvar/∂θ = 11.0 * (1 - tanh²)
             double dlogvar = 0.5 * (z * z - 1.0);
             double dtanh_logvar = 1.0 - tanh_logvar * tanh_logvar;
-            grad[4][i + 4] = returns[t] * log_prob * dlogvar * 11.0 * dtanh_logvar;
+            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * 11.0 * dtanh_logvar;
         }
         
         // Backward pass to update policy parameters
