@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         printf("Failed to load policy from %s\n", argv[1]);
         return 1;
     }
-    policy->lr = 1e-4;
+    policy->lr = 1e-7;
     
     // Allocate memory for activations and gradients
     double** act = malloc(5 * sizeof(double*));
