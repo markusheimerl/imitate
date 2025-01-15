@@ -24,8 +24,6 @@ void process_rollout(const char* filename, Net* policy, double** act, double** g
     // Forward pass through the network for each state
     for(int t = 0; t < rollout->n; t++) {
         fwd(policy, rollout->X[t], act);
-        
-        // Compute policy gradients for means and logvars
         double G = rollout->y[t][0];  // Return value
         
         for(int i = 0; i < 4; i++) {
@@ -34,15 +32,15 @@ void process_rollout(const char* filename, Net* policy, double** act, double** g
             double logvar = act[4][i + 4];
             double action = rollout->X[t][STATE_DIM + i];
             
-            // Gradient for mean
-            double dmean = (action - mean) / exp(logvar);
-            // Chain rule through tanh transformation
-            double dtanh = 1.0 - tanh_x * tanh_x;
-            grad[4][i] = G * dmean * 20.0 * dtanh;
+            // Compute log probability
+            double log_prob = compute_log_prob(action, mean, logvar);
             
-            // Gradient for logvar
-            double dlogvar = 0.5 * ((action - mean) * (action - mean) / exp(logvar) - 1.0);
-            grad[4][i + 4] = G * dlogvar;
+            // Policy gradient = ∇θ log π(a|s) * G
+            double dmean = (action - mean) / exp(logvar);
+            double dtanh = 1.0 - tanh_x * tanh_x;
+            grad[4][i] = log_prob * G * dmean * 20.0 * dtanh;
+            
+            grad[4][i + 4] = log_prob * G * 0.5 * ((action - mean) * (action - mean) / exp(logvar) - 1.0);
         }
         
         bwd(policy, act, grad);
@@ -64,7 +62,7 @@ int main(int argc, char** argv) {
         printf("Failed to load policy from %s\n", argv[1]);
         return 1;
     }
-    policy->lr = 1e-7;
+    policy->lr = 5e-7;
     
     // Allocate memory for activations and gradients
     double** act = malloc(5 * sizeof(double*));
@@ -83,10 +81,6 @@ int main(int argc, char** argv) {
         if(strstr(entry->d_name, "_rollout.csv")) {
             process_rollout(entry->d_name, policy, act, grad);
             processed++;
-            
-            if(processed % BATCH_SIZE == 0) {
-                printf("Processed %d rollouts\n", processed);
-            }
         }
     }
     closedir(dir);
