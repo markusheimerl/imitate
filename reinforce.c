@@ -29,13 +29,16 @@ void process_rollout(const char* filename, Net* policy, double** act, double** g
         double G = rollout->y[t][0];  // Return value
         
         for(int i = 0; i < 4; i++) {
-            double mean = fabs(act[4][i]) * 50.0;
+            double tanh_x = tanh(act[4][i]);
+            double mean = 50.0 + 20.0 * tanh_x;
             double logvar = act[4][i + 4];
             double action = rollout->X[t][STATE_DIM + i];
             
             // Gradient for mean
-            double dmean = (action - mean) / (exp(logvar));
-            grad[4][i] = G * dmean * (action > 0 ? 50.0 : -50.0);
+            double dmean = (action - mean) / exp(logvar);
+            // Chain rule through tanh transformation
+            double dtanh = 1.0 - tanh_x * tanh_x;
+            grad[4][i] = G * dmean * 20.0 * dtanh;
             
             // Gradient for logvar
             double dlogvar = 0.5 * ((action - mean) * (action - mean) / exp(logvar) - 1.0);

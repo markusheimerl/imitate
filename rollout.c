@@ -101,7 +101,7 @@ double collect_rollout(Sim* sim, Net* policy, int rollout_num) {
             // Get and store actions
             fwd(policy, states, act);
             for(int i = 0; i < 4; i++) {
-                double mean = fabs(act[4][i]) * 50.0;
+                double mean = 50.0 + 20.0 * tanh(act[4][i]); // Map network output through tanh to [30, 70] range
                 double logvar = act[4][i + 4];
                 double std = exp(0.5 * logvar);
                 double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * cos(2.0 * M_PI * (double)rand()/RAND_MAX);

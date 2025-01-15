@@ -3,7 +3,7 @@ CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
 LDFLAGS = -flto -lm
 
 TARGETS = rollout.out reinforce.out
-ITERATIONS = 20
+ITERATIONS = 2000
 
 .PHONY: clean run
 
