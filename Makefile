@@ -2,35 +2,27 @@ CC = clang
 CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
 LDFLAGS = -flto -lm
 
-TARGETS = rollout.out reinforce.out
+TARGET = reinforce.out
 ITERATIONS = 2000
 
 .PHONY: clean run
 
-all: $(TARGETS)
+all: $(TARGET)
 
-rollout.out: rollout.c
+$(TARGET): reinforce.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-reinforce.out: reinforce.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-# Training loop
-run: $(TARGETS)
+run: $(TARGET)
 	@echo "Starting training loop..."
 	@# First iteration without policy file
 	@echo "\nIteration 1/$(ITERATIONS)"
-	@./rollout.out
-	@POLICY=$$(ls -t *_policy.bin | head -1) && \
-	./reinforce.out $$POLICY
+	@./$(TARGET)
 	@# Remaining iterations
 	@for i in $$(seq 2 $(ITERATIONS)); do \
 		echo "\nIteration $$i/$(ITERATIONS)"; \
 		POLICY=$$(ls -t *_policy.bin | head -1) && \
-		./rollout.out $$POLICY && \
-		./reinforce.out $$POLICY || break; \
+		./$(TARGET) $$POLICY || break; \
 	done
-	#@rm -f *_rollout.csv; \
 
 clean:
-	rm -f $(TARGETS) *.csv *.bin
+	rm -f $(TARGET) *.bin
