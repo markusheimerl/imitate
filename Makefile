@@ -11,8 +11,11 @@ all: $(TARGET)
 $(TARGET): reinforce.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
+visualize.out: visualize.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
 run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -f $(TARGET) *.bin
+	rm -f *.out *.bin *.gif
