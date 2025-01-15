@@ -18,14 +18,6 @@
 #define GAMMA 0.99
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
-const char* HEADERS[] = {
-    "pos_x", "pos_y", "pos_z",
-    "vel_x", "vel_y", "vel_z",
-    "ang_vel_x", "ang_vel_y", "ang_vel_z",
-    "roll", "pitch", "yaw",
-    "action1", "action2", "action3", "action4",
-    "return"
-};
 
 void get_state(Quad* q, double* state) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
@@ -73,7 +65,19 @@ double collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     rollout->n = 0;               // will be filled during collection
     rollout->X = malloc(MAX_STEPS * sizeof(double*));
     rollout->y = malloc(MAX_STEPS * sizeof(double*));
-    
+    rollout->headers = malloc((rollout->fx + rollout->fy) * sizeof(char*));
+    const char* header_names[] = {
+        "pos_x", "pos_y", "pos_z",
+        "vel_x", "vel_y", "vel_z",
+        "ang_vel_x", "ang_vel_y", "ang_vel_z",
+        "roll", "pitch", "yaw",
+        "action1", "action2", "action3", "action4",
+        "return"
+    };
+    for(int i = 0; i < rollout->fx + rollout->fy; i++) {
+        rollout->headers[i] = strdup(header_names[i]);
+    }
+
     reset_quad(sim->quad, 
               TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
               TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
@@ -125,7 +129,7 @@ double collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     // Save rollout to CSV
     char filename[64];
     sprintf(filename, "%d_rollout.csv", rollout_num);
-    save_csv(filename, rollout, HEADERS);
+    save_csv(filename, rollout);
     
     // Cleanup
     free(states);
