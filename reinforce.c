@@ -80,8 +80,8 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
                 // Get mean (constrained between 30 and 70)
                 double mean = 50.0 + 20.0 * tanh(act[4][i]);
                 
-                // Get standard deviation from log variance (constrained between -20 and 2)
-                double logvar = -20.0 + 11.0 * (tanh(act[4][i + 4]) + 1.0);
+                // Get standard deviation from log variance (using direct log variance with soft constraint)
+                double logvar = -5.0 * tanh(act[4][i + 4]);
                 double std = exp(0.5 * logvar);
                 
                 // Sample from normal distribution using Box-Muller transform
@@ -121,9 +121,9 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double tanh_mean = tanh(act[4][i]);
             double mean = 50.0 + 20.0 * tanh_mean;
             
-            // 2. Get log variance of action distribution (constrained between -20 and 2)
+            // 2. Get log variance of action distribution (using direct log variance with soft constraint)
             double tanh_logvar = tanh(act[4][i + 4]);
-            double logvar = -20.0 + 11.0 * (tanh_logvar + 1.0);
+            double logvar = -5.0 * tanh_logvar;
             double std = exp(0.5 * logvar);
             
             // 3. Compute normalized action (z-score)
@@ -147,10 +147,10 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             // 7. Compute gradient for log variance
             // ∂log_prob/∂logvar = 0.5 * (z² - 1)
             // ∂entropy/∂logvar = 0.5
-            // ∂logvar/∂θ = 11.0 * (1 - tanh²)
+            // ∂logvar/∂θ = -5.0 * (1 - tanh²)
             double dlogvar = 0.5 * (z * z - 1.0);
             double dtanh_logvar = 1.0 - tanh_logvar * tanh_logvar;
-            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * 11.0 * dtanh_logvar;
+            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * -5.0 * dtanh_logvar;
         }
         
         // Backward pass to update policy parameters
