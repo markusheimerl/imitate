@@ -89,10 +89,13 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
         fwd(policy, states[t], act);
         
         for(int i = 0; i < 4; i++) {
-            // Get policy outputs
-            double tanh_x = tanh(act[4][i]);
-            double mean = 50.0 + 20.0 * tanh_x;
-            double logvar = fmax(fmin(act[4][i + 4], 2.0), -20.0);
+            // Get policy outputs for mean
+            double tanh_mean = tanh(act[4][i]);
+            double mean = 50.0 + 20.0 * tanh_mean;
+            
+            // Get policy outputs for logvar using tanh
+            double tanh_logvar = tanh(act[4][i + 4]);
+            double logvar = -20.0 + 11.0 * (tanh_logvar + 1.0);  // Maps to [-20, 2]
             double std = exp(0.5 * logvar);
             
             // Compute normalized action (z-score)
@@ -103,14 +106,15 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double log_prob = -0.5 * (1.8378770664093453 + logvar + z * z);
             
             // Update mean (first 4 outputs)
-            double dmean = z / std;                    // Derivative of log prob wrt mean
-            double dtanh = 1.0 - tanh_x * tanh_x;     // Derivative of tanh
-            grad[4][i] = log_prob * returns[t] * dmean * 20.0 * dtanh;
+            double dmean = z / std;                        // Derivative of log prob wrt mean
+            double dtanh_mean = 1.0 - tanh_mean * tanh_mean;  // Derivative of tanh
+            grad[4][i] = log_prob * returns[t] * dmean * 20.0 * dtanh_mean;
             
             // Update log variance (last 4 outputs)
-            double dlogvar = 0.5 * (z * z - 1.0);     // Derivative of log prob wrt logvar
-            double entropy = -0.01 * (logvar + 1.0);   // Entropy bonus to prevent collapse
-            grad[4][i + 4] = (log_prob * returns[t] * dlogvar + entropy) * 0.1;
+            double dlogvar = 0.5 * (z * z - 1.0);         // Derivative of log prob wrt logvar
+            double entropy = -0.01 * (logvar + 1.0);      // Entropy bonus to prevent collapse
+            double dtanh_logvar = 1.0 - tanh_logvar * tanh_logvar;  // Derivative of tanh
+            grad[4][i + 4] = (log_prob * returns[t] * dlogvar + entropy) * 11.0 * dtanh_logvar * 0.1;
         }
         
         bwd(policy, act, grad);
@@ -123,7 +127,7 @@ int main(int argc, char** argv) {
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
     Net* policy = init_net(5, layers);
     if(!policy) return 1;
-    policy->lr = 5e-7;
+    policy->lr = 1e-4;
     
     Sim* sim = init_sim(false);
     
