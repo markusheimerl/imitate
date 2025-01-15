@@ -51,7 +51,7 @@ bool is_terminated(Quad* q) {
            q->R_W_B[4] < 0.0;
 }
 
-void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
+double collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     double** actions = malloc(MAX_STEPS * sizeof(double*));
     double** means = malloc(MAX_STEPS * sizeof(double*));
     double** logvars = malloc(MAX_STEPS * sizeof(double*));
@@ -73,7 +73,6 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     
     double t_physics = 0.0, t_control = 0.0;
     int step = 0;
-    double total_reward = 0.0;
     
     while(step < MAX_STEPS && !is_terminated(sim->quad)) {
         update_quad(sim->quad, DT_PHYSICS);
@@ -87,7 +86,8 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
                 double mean = fabs(act[4][i]) * 50.0;
                 double logvar = act[4][i + 4];
                 double std = exp(0.5 * logvar);
-                double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * cos(2.0 * M_PI * (double)rand()/RAND_MAX);
+                double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * 
+                             cos(2.0 * M_PI * (double)rand()/RAND_MAX);
                 sim->quad->omega_next[i] = mean + std * noise;
                 
                 means[step][i] = mean;
@@ -96,7 +96,6 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
             }
             
             rewards[step] = compute_reward(sim->quad);
-            total_reward += rewards[step];
             step++;
             t_control += DT_CONTROL;
         }
@@ -106,31 +105,20 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     sprintf(filename, "%d_rollout.csv", rollout_num);
     FILE* f = fopen(filename, "w");
 
-    // Write header
-    fprintf(f, "action1,action2,action3,action4,");
-    fprintf(f, "mean1,mean2,mean3,mean4,");
-    fprintf(f, "logvar1,logvar2,logvar3,logvar4,");
-    fprintf(f, "return\n");
+    fprintf(f, "action1,action2,action3,action4,mean1,mean2,mean3,mean4,"
+           "logvar1,logvar2,logvar3,logvar4,return\n");
 
-    // Calculate returns first
-    double* returns = malloc(step * sizeof(double));
-    double G = 0;
+    double G = 0, initial_return = 0;
     for(int i = step-1; i >= 0; i--) {
         G = rewards[i] + GAMMA * G;
-        returns[i] = G;
-    }
-
-    // Write data in chronological order
-    for(int i = 0; i < step; i++) {
+        if(i == 0) initial_return = G;
+        
         for(int j = 0; j < 4; j++) fprintf(f, "%.6f,", actions[i][j]);
         for(int j = 0; j < 4; j++) fprintf(f, "%.6f,", means[i][j]);
         for(int j = 0; j < 4; j++) fprintf(f, "%.6f,", logvars[i][j]);
-        fprintf(f, "%.6f\n", returns[i]);
+        fprintf(f, "%.6f\n", G);
     }
     fclose(f);
-    free(returns);
-
-    printf("\rRollout %d: %d steps, reward: %.3f", rollout_num, step, total_reward);
     
     for(int i = 0; i < MAX_STEPS; i++) {
         free(actions[i]); free(means[i]); free(logvars[i]);
@@ -138,6 +126,8 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     free(actions); free(means); free(logvars); free(rewards); free(states);
     for(int i = 0; i < 5; i++) free(act[i]);
     free(act);
+    
+    return initial_return;
 }
 
 int main(int argc, char** argv) {
@@ -148,13 +138,28 @@ int main(int argc, char** argv) {
     if(!policy) return 1;
     
     Sim* sim = init_sim(false);
-    for(int i = 0; i < NUM_ROLLOUTS; i++) collect_rollout(sim, policy, i);
-    printf("\n");
+    
+    double sum_returns = 0.0, sum_squared = 0.0;
+    double min_return = 1e9, max_return = -1e9;
+    
+    for(int i = 0; i < NUM_ROLLOUTS; i++) {
+        double ret = collect_rollout(sim, policy, i);
+        sum_returns += ret;
+        sum_squared += ret * ret;
+        min_return = fmin(min_return, ret);
+        max_return = fmax(max_return, ret);
+    }
+    
+    double mean = sum_returns / NUM_ROLLOUTS;
+    double std = sqrt(sum_squared/NUM_ROLLOUTS - mean*mean);
+    printf("Rollouts [n=%d]: %.2f ± %.2f (min: %.2f, max: %.2f)\n", 
+           NUM_ROLLOUTS, mean, std, min_return, max_return);
     
     char filename[64];
     if(argc > 1) save_weights(argv[1], policy);
     else {
-        strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
+        strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", 
+                localtime(&(time_t){time(NULL)}));
         save_weights(filename, policy);
     }
     
