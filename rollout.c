@@ -3,7 +3,6 @@
 #include <string.h>
 #include <time.h>
 #include "grad/grad.h"
-#include "grad/data.h"
 #include "sim/sim.h"
 
 #define STATE_DIM 12
@@ -53,14 +52,19 @@ bool is_terminated(Quad* q) {
 }
 
 void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
-    double** states = malloc(MAX_STEPS * sizeof(double*));
     double** actions = malloc(MAX_STEPS * sizeof(double*));
+    double** means = malloc(MAX_STEPS * sizeof(double*));
+    double** logvars = malloc(MAX_STEPS * sizeof(double*));
     double* rewards = malloc(MAX_STEPS * sizeof(double));
+    double* states = malloc(STATE_DIM * sizeof(double));
+    double** act = malloc(5 * sizeof(double*));
     
     for(int i = 0; i < MAX_STEPS; i++) {
-        states[i] = malloc(STATE_DIM * sizeof(double));
-        actions[i] = malloc(ACTION_DIM * sizeof(double));
+        actions[i] = malloc(4 * sizeof(double));
+        means[i] = malloc(4 * sizeof(double));
+        logvars[i] = malloc(4 * sizeof(double));
     }
+    for(int i = 0; i < 5; i++) act[i] = malloc(policy->sz[i] * sizeof(double));
     
     reset_quad(sim->quad, 
               TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
@@ -71,18 +75,13 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
     int step = 0;
     double total_reward = 0.0;
     
-    double** act = malloc(5 * sizeof(double*));
-    for(int i = 0; i < 5; i++) {
-        act[i] = malloc(policy->sz[i] * sizeof(double));
-    }
-    
     while(step < MAX_STEPS && !is_terminated(sim->quad)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, states[step]);
-            fwd(policy, states[step], act);
+            get_state(sim->quad, states);
+            fwd(policy, states, act);
             
             for(int i = 0; i < 4; i++) {
                 double mean = fabs(act[4][i]) * 50.0;
@@ -90,49 +89,55 @@ void collect_rollout(Sim* sim, Net* policy, int rollout_num) {
                 double std = exp(0.5 * logvar);
                 double noise = sqrt(-2.0 * log((double)rand()/RAND_MAX)) * cos(2.0 * M_PI * (double)rand()/RAND_MAX);
                 sim->quad->omega_next[i] = mean + std * noise;
+                
+                means[step][i] = mean;
+                logvars[step][i] = logvar;
+                actions[step][i] = sim->quad->omega_next[i];
             }
-
-            memcpy(actions[step], sim->quad->omega_next, (ACTION_DIM / 2) * sizeof(double));
             
             rewards[step] = compute_reward(sim->quad);
             total_reward += rewards[step];
-            
             step++;
             t_control += DT_CONTROL;
         }
     }
     
-    // Create dataset
-    Data* data = malloc(sizeof(Data));
-    data->n = step;
-    data->fx = STATE_DIM;
-    data->fy = (ACTION_DIM / 2) + 1;  // +1 for returns
-    data->X = malloc(step * sizeof(double*));
-    data->y = malloc(step * sizeof(double*));
-    
-    // Calculate returns and store data
-    double G = 0;
-    for(int i = step-1; i >= 0; i--) {
-        data->X[i] = states[i];
-        data->y[i] = malloc(data->fy * sizeof(double));
-        memcpy(data->y[i], actions[i], (ACTION_DIM / 2) * sizeof(double));
-        G = rewards[i] + GAMMA * G;
-        data->y[i][(ACTION_DIM / 2)] = G;
-    }
-    
     char filename[64];
     sprintf(filename, "%d_rollout.csv", rollout_num);
-    save_csv(filename, data);
+    FILE* f = fopen(filename, "w");
 
-    printf("\rRollout %d: %d steps, total reward: %.3f", rollout_num, step, total_reward);
-    fflush(stdout);
+    // Write header
+    fprintf(f, "action1,action2,action3,action4,");
+    fprintf(f, "mean1,mean2,mean3,mean4,");
+    fprintf(f, "logvar1,logvar2,logvar3,logvar4,");
+    fprintf(f, "return\n");
+
+    // Calculate returns first
+    double* returns = malloc(step * sizeof(double));
+    double G = 0;
+    for(int i = step-1; i >= 0; i--) {
+        G = rewards[i] + GAMMA * G;
+        returns[i] = G;
+    }
+
+    // Write data in chronological order
+    for(int i = 0; i < step; i++) {
+        for(int j = 0; j < 4; j++) fprintf(f, "%.6f,", actions[i][j]);
+        for(int j = 0; j < 4; j++) fprintf(f, "%.6f,", means[i][j]);
+        for(int j = 0; j < 4; j++) fprintf(f, "%.6f,", logvars[i][j]);
+        fprintf(f, "%.6f\n", returns[i]);
+    }
+    fclose(f);
+    free(returns);
+
+    printf("\rRollout %d: %d steps, reward: %.3f", rollout_num, step, total_reward);
     
-    // Cleanup
-    free(rewards);
-    free(actions);
+    for(int i = 0; i < MAX_STEPS; i++) {
+        free(actions[i]); free(means[i]); free(logvars[i]);
+    }
+    free(actions); free(means); free(logvars); free(rewards); free(states);
     for(int i = 0; i < 5; i++) free(act[i]);
     free(act);
-    free_data(data);
 }
 
 int main(int argc, char** argv) {
@@ -143,17 +148,12 @@ int main(int argc, char** argv) {
     if(!policy) return 1;
     
     Sim* sim = init_sim(false);
-    
-    for(int i = 0; i < NUM_ROLLOUTS; i++) {
-        collect_rollout(sim, policy, i);
-    }
-
+    for(int i = 0; i < NUM_ROLLOUTS; i++) collect_rollout(sim, policy, i);
     printf("\n");
     
-    if(argc > 1) {
-        save_weights(argv[1], policy);
-    } else {
-        char filename[64];
+    char filename[64];
+    if(argc > 1) save_weights(argv[1], policy);
+    else {
         strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
         save_weights(filename, policy);
     }
