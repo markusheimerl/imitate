@@ -1,2 +1,2 @@
 # control
-A quadcopter controller
+A learned quadcopter controller
