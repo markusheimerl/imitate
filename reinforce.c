@@ -62,10 +62,8 @@ double compute_reward(Quad* q) {
                         (ang_vel_magnitude * 0.5) +    // Angular velocity third
                         (orientation_error * 2.0);     // Orientation also important
     
-    // Convert error to reward (100 at perfect hover, decreasing but always positive)
-    double reward = 100.0 * exp(-total_error);
-    
-    return reward;
+    // Convert error to reward (1.0 at perfect hover, decreasing but always positive)
+    return exp(-total_error);
 }
 
 bool is_terminated(Quad* q) {
