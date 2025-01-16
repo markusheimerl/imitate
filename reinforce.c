@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
     srand(time(NULL));
     
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
-    Net* policy = init_net(5, layers);
+    Net* policy = init_net(5, layers, adamw);
     if(!policy) return 1;
     policy->lr = 1e-4;
     
