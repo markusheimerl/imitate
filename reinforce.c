@@ -32,13 +32,40 @@ void get_state(Quad* q, double* state) {
 }
 
 double compute_reward(Quad* q) {
-    double pos_error = 0.0, vel_error = 0.0, ang_error = 0.0;
+    // Calculate position error (distance from target hover point)
+    double pos_error = 0.0;
     for(int i = 0; i < 3; i++) {
         pos_error += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
-        vel_error += pow(q->linear_velocity_W[i], 2);
-        ang_error += pow(q->angular_velocity_B[i], 2);
     }
-    return -pos_error - 0.1 * vel_error - 0.1 * ang_error + 5.0 * q->R_W_B[4];
+    pos_error = sqrt(pos_error);  // Convert to actual distance
+    
+    // Calculate velocity magnitude (should be 0 for perfect hover)
+    double vel_magnitude = 0.0;
+    for(int i = 0; i < 3; i++) {
+        vel_magnitude += pow(q->linear_velocity_W[i], 2);
+    }
+    vel_magnitude = sqrt(vel_magnitude);
+    
+    // Calculate angular velocity magnitude (should be 0 for perfect hover)
+    double ang_vel_magnitude = 0.0;
+    for(int i = 0; i < 3; i++) {
+        ang_vel_magnitude += pow(q->angular_velocity_B[i], 2);
+    }
+    ang_vel_magnitude = sqrt(ang_vel_magnitude);
+    
+    // Calculate orientation error (should be upright, so R_W_B[4] should be 1.0)
+    double orientation_error = 1.0 - q->R_W_B[4];  // Will be 0 when perfectly upright
+    
+    // Combine all errors with appropriate scaling
+    double total_error = (pos_error * 2.0) +          // Position has highest weight
+                        (vel_magnitude * 1.0) +        // Velocity is second
+                        (ang_vel_magnitude * 0.5) +    // Angular velocity third
+                        (orientation_error * 2.0);     // Orientation also important
+    
+    // Convert error to reward (100 at perfect hover, decreasing but always positive)
+    double reward = 100.0 * exp(-total_error);
+    
+    return reward;
 }
 
 bool is_terminated(Quad* q) {
@@ -167,9 +194,9 @@ int main(int argc, char** argv) {
     srand(time(NULL));
     
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
-    Net* policy = init_net(5, layers, sgd);
+    Net* policy = init_net(5, layers, adamw);
     if(!policy) return 1;
-    policy->lr = 2e-2;
+    policy->lr = 1e-4;
     
     Sim* sim = init_sim(false);
     
