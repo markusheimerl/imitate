@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 
     // Initialize policy network
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
-    Net* policy = load_weights(argv[1]);
+    Net* policy = load_weights(argv[1], adamw);
     if(!policy) {
         printf("Failed to load weights from %s\n", argv[1]);
         return 1;
