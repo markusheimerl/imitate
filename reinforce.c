@@ -118,7 +118,8 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
     
     double G = 0.0;
     for(int i = steps-1; i >= 0; i--) {
-        rewards[i] = G = rewards[i] + GAMMA * G;
+        G = rewards[i] + GAMMA * G;
+        rewards[i] = G;
     }
     
     return steps;
