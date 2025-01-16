@@ -129,8 +129,6 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
     for(int t = 0; t < steps; t++) {
         fwd(policy, states[t], act);
         
-        memset(grad[4], 0, policy->sz[4] * sizeof(double));
-        
         for(int i = 0; i < 4; i++) {
             double mean = act[4][i];
             double log_std = act[4][i + 4];
@@ -138,9 +136,6 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double raw_action = actions[t][i];
             double advantage = returns[t];
 
-            // Compute log prob of raw action
-            double log_prob = -0.5 * ((raw_action - mean)*(raw_action - mean)/(std*std) + 2*log_std + log(2*M_PI));
-            
             // Compute squashing derivative
             double tanh_deriv = 1.0 - tanh(raw_action) * tanh(raw_action);
             
