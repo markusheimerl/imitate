@@ -77,12 +77,15 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
             
             // 5. Sample actions from policy distribution
             for(int i = 0; i < 4; i++) {
-                // Get mean (constrained between 30 and 70)
-                double mean = 50.0 + 20.0 * tanh(act[4][i]);
+                // Get mean (constrained between 35 and 65)
+                double tanh_mean = tanh(act[4][i]);
+                double mean = 50.0 + 15.0 * tanh_mean;
                 
-                // Get standard deviation from log variance (using direct log variance with soft constraint)
-                double logvar = -5.0 * tanh(act[4][i + 4]);
-                double std = exp(0.5 * logvar);
+                // Get log variance (allowing near-deterministic to std=4.0)
+                double beta = act[4][i + 4];
+                double tanh_beta = tanh(beta);
+                double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));  // maps to [-4.6, 1.4]
+                double std = exp(0.5 * logvar);  // maps to [≈0.01, 4.0]
                 
                 // Sample from normal distribution using Box-Muller transform
                 double u1 = (double)rand()/RAND_MAX;
@@ -117,13 +120,16 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
         fwd(policy, states[t], act);
         
         for(int i = 0; i < 4; i++) {
-            // 1. Get mean of action distribution (constrained between 30 and 70)
+            // 1. Get mean of action distribution (constrained between 35 and 65)
             double tanh_mean = tanh(act[4][i]);
-            double mean = 50.0 + 20.0 * tanh_mean;
+            double mean = 50.0 + 15.0 * tanh_mean;
             
-            // 2. Get log variance of action distribution (using direct log variance with soft constraint)
-            double tanh_logvar = tanh(act[4][i + 4]);
-            double logvar = -5.0 * tanh_logvar;
+            // 2. Get log variance of action distribution
+            // Allows policy to become nearly deterministic (std ≈ 0.01)
+            // while capping maximum std at 4.0 for action space validity
+            double beta = act[4][i + 4];
+            double tanh_beta = tanh(beta);
+            double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));  // maps to [-4.6, 1.4]
             double std = exp(0.5 * logvar);
             
             // 3. Compute normalized action (z-score)
@@ -139,18 +145,17 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             
             // 6. Compute gradient for mean
             // ∂log_prob/∂mean = z/std
-            // ∂mean/∂θ = 20 * (1 - tanh²)
+            // ∂mean/∂θ = 15 * (1 - tanh²)
             double dmean = z / std;
             double dtanh_mean = 1.0 - tanh_mean * tanh_mean;
-            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * 20.0 * dtanh_mean;
+            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * 15.0 * dtanh_mean;
             
             // 7. Compute gradient for log variance
             // ∂log_prob/∂logvar = 0.5 * (z² - 1)
-            // ∂entropy/∂logvar = 0.5
-            // ∂logvar/∂θ = -5.0 * (1 - tanh²)
+            // ∂logvar/∂β = 3.0 * (1 - tanh²(β))
             double dlogvar = 0.5 * (z * z - 1.0);
-            double dtanh_logvar = 1.0 - tanh_logvar * tanh_logvar;
-            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * -5.0 * dtanh_logvar;
+            double dtanh_beta = 1.0 - tanh_beta * tanh_beta;
+            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * 6.0 * 0.5 * dtanh_beta;
         }
         
         // Backward pass to update policy parameters
@@ -164,7 +169,7 @@ int main(int argc, char** argv) {
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
     Net* policy = init_net(5, layers, sgd);
     if(!policy) return 1;
-    policy->lr = 1e-2;
+    policy->lr = 2e-2;
     
     Sim* sim = init_sim(false);
     
