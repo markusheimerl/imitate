@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
     if(!policy) return 1;
     policy->lr = 1e-4;
     
-    Sim* sim = init_sim(false);
+    Sim* sim = init_sim("", false);
     
     double** act = malloc(5 * sizeof(double*));
     double** grad = malloc(5 * sizeof(double*));

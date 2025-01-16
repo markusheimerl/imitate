@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
     }
 
     // Initialize simulation and visualization
-    Sim* sim = init_sim(true);
+    Sim* sim = init_sim("sim/", true);
     
     // Initialize network activations
     double** act = malloc(5 * sizeof(double*));
