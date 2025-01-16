@@ -79,7 +79,6 @@ bool is_terminated(Quad* q) {
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
-    // Initialize quadcopter at slightly random position near target
     reset_quad(sim->quad, 
         TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
         TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
@@ -90,49 +89,35 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
     int steps = 0;
     
     while(steps < MAX_STEPS && !is_terminated(sim->quad)) {
-        // 1. Update physics simulation
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
-        // 2. Control loop runs at lower frequency than physics
         if(t_control <= t_physics) {
-            // 3. Get current state observation
             get_state(sim->quad, states[steps]);
-            
-            // 4. Forward pass through policy network
             fwd(policy, states[steps], act);
             
-            // 5. Sample actions from policy distribution
             for(int i = 0; i < 4; i++) {
-                // Get mean (constrained between 35 and 65)
-                double tanh_mean = tanh(act[4][i]);
-                double mean = 50.0 + 15.0 * tanh_mean;
+                double mean = act[4][i];
+                double log_std = act[4][i + 4];
+                double std = exp(log_std);
+
+                double u1 = (double)rand() / RAND_MAX;
+                double u2 = (double)rand() / RAND_MAX;
+                double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+
+                double raw_action = mean + std * z;
+                actions[steps][i] = raw_action;
                 
-                // Get log variance (allowing near-deterministic to std=4.0)
-                double beta = act[4][i + 4];
-                double tanh_beta = tanh(beta);
-                double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));  // maps to [-4.6, 1.4]
-                double std = exp(0.5 * logvar);  // maps to [≈0.01, 4.0]
-                
-                // Sample from normal distribution using Box-Muller transform
-                double u1 = (double)rand()/RAND_MAX;
-                double u2 = (double)rand()/RAND_MAX;
-                double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                
-                // Store and apply sampled action
-                actions[steps][i] = mean + std * noise;
-                sim->quad->omega_next[i] = actions[steps][i];
+                // Apply squashing for environment
+                sim->quad->omega_next[i] = 50.0 + 20.0 * tanh(raw_action);
             }
             
-            // 6. Compute immediate reward
             rewards[steps] = compute_reward(sim->quad);
-            
             steps++;
             t_control += DT_CONTROL;
         }
     }
     
-    // 7. Compute discounted returns
     double G = 0.0;
     for(int i = steps-1; i >= 0; i--) {
         rewards[i] = G = rewards[i] + GAMMA * G;
@@ -143,49 +128,34 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
 
 void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, double** act, double** grad) {
     for(int t = 0; t < steps; t++) {
-        // Forward pass through policy network
         fwd(policy, states[t], act);
         
+        memset(grad[4], 0, policy->sz[4] * sizeof(double));
+        
         for(int i = 0; i < 4; i++) {
-            // 1. Get mean of action distribution (constrained between 35 and 65)
-            double tanh_mean = tanh(act[4][i]);
-            double mean = 50.0 + 15.0 * tanh_mean;
+            double mean = act[4][i];
+            double log_std = act[4][i + 4];
+            double std = exp(log_std);
+            double raw_action = actions[t][i];
+            double advantage = returns[t];
+
+            // Compute log prob of raw action
+            double log_prob = -0.5 * ((raw_action - mean)*(raw_action - mean)/(std*std) + 2*log_std + log(2*M_PI));
             
-            // 2. Get log variance of action distribution
-            // Allows policy to become nearly deterministic (std ≈ 0.01)
-            // while capping maximum std at 4.0 for action space validity
-            double beta = act[4][i + 4];
-            double tanh_beta = tanh(beta);
-            double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));  // maps to [-4.6, 1.4]
-            double std = exp(0.5 * logvar);
+            // Compute squashing derivative
+            double tanh_deriv = 1.0 - tanh(raw_action) * tanh(raw_action);
             
-            // 3. Compute normalized action (z-score)
-            double z = (actions[t][i] - mean) / std;
+            // Scale factor from squashing
+            double scale = 20.0;  // from 50.0 + 20.0 * tanh
             
-            // 4. Compute log probability of the action
-            // log(p(x)) = -0.5 * (log(2π) + logvar + z²)
-            double log_prob = -0.5 * (1.8378770664093453 + logvar + z * z);
-            
-            // 5. Compute entropy of the Gaussian distribution
-            // H = 0.5 * (log(2πe) + logvar)
-            double entropy = 0.5 * (2.837877066 + logvar);
-            
-            // 6. Compute gradient for mean
-            // ∂log_prob/∂mean = z/std
-            // ∂mean/∂θ = 15 * (1 - tanh²)
-            double dmean = z / std;
-            double dtanh_mean = 1.0 - tanh_mean * tanh_mean;
-            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * 15.0 * dtanh_mean;
-            
-            // 7. Compute gradient for log variance
-            // ∂log_prob/∂logvar = 0.5 * (z² - 1)
-            // ∂logvar/∂β = 3.0 * (1 - tanh²(β))
-            double dlogvar = 0.5 * (z * z - 1.0);
-            double dtanh_beta = 1.0 - tanh_beta * tanh_beta;
-            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * 6.0 * 0.5 * dtanh_beta;
+            // Gradient through the squashing
+            double d_logp_d_mean = ((raw_action - mean) / (std * std)) * tanh_deriv * scale;
+            double d_logp_d_log_std = (((raw_action - mean)*(raw_action - mean))/(std*std) - 1) * tanh_deriv * scale;
+
+            grad[4][i] = advantage * d_logp_d_mean;
+            grad[4][i + 4] = advantage * d_logp_d_log_std;
         }
         
-        // Backward pass to update policy parameters
         bwd(policy, act, grad);
     }
 }
@@ -196,7 +166,7 @@ int main(int argc, char** argv) {
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
     Net* policy = init_net(5, layers, adamw);
     if(!policy) return 1;
-    policy->lr = 1e-4;
+    policy->lr = 1e-3;
     
     Sim* sim = init_sim(false);
     
