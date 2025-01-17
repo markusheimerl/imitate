@@ -20,6 +20,9 @@
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
+#define MAX_STD 4.0 
+#define MIN_STD 0.001
+
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
 void get_state(Quad* q, double* state) {
@@ -104,19 +107,23 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
             
             // 5. Sample actions from policy distribution
             for(int i = 0; i < 4; i++) {
-                // Get mean using squash function:
-                // μ = ((max + min)/2) + ((max - min)/2) * tanh(x)
-                // This smoothly constrains output to [OMEGA_MIN, OMEGA_MAX]
-                double mean = squash(act[4][i], OMEGA_MIN, OMEGA_MAX);
+                // Get standard deviation first using squash:
+                // σ = ((max + min)/2) + ((max - min)/2) * tanh(x)
+                // MAX_STD ensures ±4σ stays within action range
+                // MIN_STD allows for precise control when needed
+                double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
                 
-                // Get log variance (allowing near-deterministic to std=4.0)
-                // β = tanh(x)
-                // logvar = -4.6 + 6.0 * (0.5 * (β + 1))
-                // This maps to [-4.6, 1.4], giving std range of [≈0.01, 4.0]
-                double beta = act[4][i + 4];
-                double tanh_beta = tanh(beta);
-                double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));
-                double std = exp(0.5 * logvar);
+                // Compute dynamic bounds for mean based on current std
+                // To ensure x = μ ± 4σ stays within [OMEGA_MIN, OMEGA_MAX]:
+                // OMEGA_MIN ≤ μ - 4σ and μ + 4σ ≤ OMEGA_MAX
+                // Therefore: OMEGA_MIN + 4σ ≤ μ ≤ OMEGA_MAX - 4σ
+                double safe_margin = 4.0 * std;
+                double mean_min = OMEGA_MIN + safe_margin;
+                double mean_max = OMEGA_MAX - safe_margin;
+                
+                // Get mean using squash with dynamic bounds:
+                // μ = ((max + min)/2) + ((max - min)/2) * tanh(x)
+                double mean = squash(act[4][i], mean_min, mean_max);
                 
                 // Sample from N(μ, σ²) using Box-Muller transform:
                 // If U₁,U₂ ~ Uniform(0,1)
@@ -127,6 +134,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
                 // Store and apply sampled action
+                // Guaranteed to be within [OMEGA_MIN, OMEGA_MAX] by construction
                 actions[steps][i] = mean + std * noise;
                 sim->quad->omega_next[i] = actions[steps][i];
             }
@@ -155,44 +163,45 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
         fwd(policy, states[t], act);
         
         for(int i = 0; i < 4; i++) {
-            // 1. Get mean of action distribution
-            // μ = squash(x) = ((max + min)/2) + ((max - min)/2) * tanh(x)
-            double mean = squash(act[4][i], OMEGA_MIN, OMEGA_MAX);
+            // 1. Get std and compute dynamic mean bounds
+            // std range: [MIN_STD, MAX_STD]
+            // - At MIN_STD: allows precise control (±0.004 range)
+            // - At MAX_STD: allows full exploration (±20 range)
+            double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+            double safe_margin = 4.0 * std;
+            double mean_min = OMEGA_MIN + safe_margin;
+            double mean_max = OMEGA_MAX - safe_margin;
+            double mean = squash(act[4][i], mean_min, mean_max);
             
-            // 2. Get log variance of action distribution
-            // β = tanh(x)
-            // logvar = -4.6 + 6.0 * (0.5 * (β + 1))
-            double beta = act[4][i + 4];
-            double tanh_beta = tanh(beta);
-            double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));
-            double std = exp(0.5 * logvar);
-            
-            // 3. Compute normalized action (z-score)
+            // 2. Compute normalized action (z-score)
             // z = (x - μ)/σ
             double z = (actions[t][i] - mean) / std;
             
-            // 4. Compute log probability of the action
-            // log(p(x)) = -0.5 * (log(2π) + logvar + z²)
-            double log_prob = -0.5 * (1.8378770664093453 + logvar + z * z);
+            // 3. Compute log probability of the action
+            // log(p(x)) = -0.5 * (log(2π) + 2log(σ) + z²)
+            double log_prob = -0.5 * (1.8378770664093453 + 2.0 * log(std) + z * z);
             
-            // 5. Compute entropy of the Gaussian distribution
-            // H = 0.5 * (log(2πe) + logvar)
-            double entropy = 0.5 * (2.837877066 + logvar);
+            // 4. Compute entropy of the Gaussian distribution
+            // H = 0.5 * (log(2πe) + 2log(σ))
+            double entropy = 0.5 * (2.837877066 + 2.0 * log(std));
             
-            // 6. Compute gradient for mean
-            // ∂log_prob/∂μ = z/σ
-            // ∂μ/∂x = ((max - min)/2) * (1 - tanh²(x))
-            // Chain rule: ∂log_prob/∂x = (∂log_prob/∂μ)(∂μ/∂x)
+            // 5. Compute gradient for mean
+            // Direct effect: ∂log_prob/∂μ = z/σ
+            // Through squash: ∂μ/∂x = dsquash(x, mean_min, mean_max)
             double dmean = z / std;
-            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * dsquash(act[4][i], OMEGA_MIN, OMEGA_MAX);
+            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * dsquash(act[4][i], mean_min, mean_max);
             
-            // 7. Compute gradient for log variance
-            // ∂log_prob/∂logvar = 0.5 * (z² - 1)
-            // ∂logvar/∂β = 3.0 * (1 - tanh²(β))
-            // Chain rule: ∂log_prob/∂x = (∂log_prob/∂logvar)(∂logvar/∂β)(∂β/∂x)
-            double dlogvar = 0.5 * (z * z - 1.0);
-            double dtanh_beta = 1.0 - tanh_beta * tanh_beta;
-            grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * 6.0 * 0.5 * dtanh_beta;
+            // 6. Compute gradient for std
+            // Direct effect on log_prob: ∂log_prob/∂σ = (z² - 1)/σ
+            // Effect through mean bounds:
+            // ∂mean/∂σ = -4.0 * dsquash(x, mean_min, mean_max)
+            // Total: ∂log_prob/∂σ = (z² - 1)/σ + (z/σ) * (-4.0 * dsquash)
+            double dstd_direct = (z * z - 1.0) / std;
+            double dmean_dstd = -4.0 * dsquash(act[4][i], mean_min, mean_max);
+            double dstd = dstd_direct + (z / std) * dmean_dstd;
+            
+            // Effect through entropy and squash function
+            grad[4][i + 4] = (returns[t] * log_prob * dstd + ALPHA * (1.0 / std)) * dsquash(act[4][i + 4], MIN_STD, MAX_STD);
         }
         
         // Backward pass to update policy parameters
