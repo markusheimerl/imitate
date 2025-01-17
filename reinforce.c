@@ -104,17 +104,24 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
             
             // 5. Sample actions from policy distribution
             for(int i = 0; i < 4; i++) {
-                // Get mean (constrained between 35 and 65)
-                double tanh_mean = tanh(act[4][i]);
-                double mean = 50.0 + 15.0 * tanh_mean;
+                // Get mean using squash function:
+                // μ = ((max + min)/2) + ((max - min)/2) * tanh(x)
+                // This smoothly constrains output to [OMEGA_MIN, OMEGA_MAX]
+                double mean = squash(act[4][i], OMEGA_MIN, OMEGA_MAX);
                 
                 // Get log variance (allowing near-deterministic to std=4.0)
+                // β = tanh(x)
+                // logvar = -4.6 + 6.0 * (0.5 * (β + 1))
+                // This maps to [-4.6, 1.4], giving std range of [≈0.01, 4.0]
                 double beta = act[4][i + 4];
                 double tanh_beta = tanh(beta);
-                double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));  // maps to [-4.6, 1.4]
-                double std = exp(0.5 * logvar);  // maps to [≈0.01, 4.0]
+                double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));
+                double std = exp(0.5 * logvar);
                 
-                // Sample from normal distribution using Box-Muller transform
+                // Sample from N(μ, σ²) using Box-Muller transform:
+                // If U₁,U₂ ~ Uniform(0,1)
+                // Then √(-2ln(U₁))cos(2πU₂) ~ N(0,1)
+                // And μ + σ√(-2ln(U₁))cos(2πU₂) ~ N(μ,σ²)
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
@@ -133,6 +140,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
     }
     
     // 7. Compute discounted returns
+    // G_t = r_t + γr_{t+1} + γ²r_{t+2} + ...
     double G = 0.0;
     for(int i = steps-1; i >= 0; i--) {
         rewards[i] = G = rewards[i] + GAMMA * G;
@@ -147,19 +155,20 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
         fwd(policy, states[t], act);
         
         for(int i = 0; i < 4; i++) {
-            // 1. Get mean of action distribution (constrained between 35 and 65)
-            double tanh_mean = tanh(act[4][i]);
-            double mean = 50.0 + 15.0 * tanh_mean;
+            // 1. Get mean of action distribution
+            // μ = squash(x) = ((max + min)/2) + ((max - min)/2) * tanh(x)
+            double mean = squash(act[4][i], OMEGA_MIN, OMEGA_MAX);
             
             // 2. Get log variance of action distribution
-            // Allows policy to become nearly deterministic (std ≈ 0.01)
-            // while capping maximum std at 4.0 for action space validity
+            // β = tanh(x)
+            // logvar = -4.6 + 6.0 * (0.5 * (β + 1))
             double beta = act[4][i + 4];
             double tanh_beta = tanh(beta);
-            double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));  // maps to [-4.6, 1.4]
+            double logvar = -4.6 + 6.0 * (0.5 * (tanh_beta + 1.0));
             double std = exp(0.5 * logvar);
             
             // 3. Compute normalized action (z-score)
+            // z = (x - μ)/σ
             double z = (actions[t][i] - mean) / std;
             
             // 4. Compute log probability of the action
@@ -171,15 +180,16 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double entropy = 0.5 * (2.837877066 + logvar);
             
             // 6. Compute gradient for mean
-            // ∂log_prob/∂mean = z/std
-            // ∂mean/∂θ = 15 * (1 - tanh²)
+            // ∂log_prob/∂μ = z/σ
+            // ∂μ/∂x = ((max - min)/2) * (1 - tanh²(x))
+            // Chain rule: ∂log_prob/∂x = (∂log_prob/∂μ)(∂μ/∂x)
             double dmean = z / std;
-            double dtanh_mean = 1.0 - tanh_mean * tanh_mean;
-            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * 15.0 * dtanh_mean;
+            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * dsquash(act[4][i], OMEGA_MIN, OMEGA_MAX);
             
             // 7. Compute gradient for log variance
             // ∂log_prob/∂logvar = 0.5 * (z² - 1)
             // ∂logvar/∂β = 3.0 * (1 - tanh²(β))
+            // Chain rule: ∂log_prob/∂x = (∂log_prob/∂logvar)(∂logvar/∂β)(∂β/∂x)
             double dlogvar = 0.5 * (z * z - 1.0);
             double dtanh_beta = 1.0 - tanh_beta * tanh_beta;
             grad[4][i + 4] = (returns[t] * log_prob * dlogvar + ALPHA * 0.5) * 6.0 * 0.5 * dtanh_beta;
