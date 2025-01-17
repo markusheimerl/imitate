@@ -165,8 +165,6 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
         for(int i = 0; i < 4; i++) {
             // 1. Get std and compute dynamic mean bounds
             // std range: [MIN_STD, MAX_STD]
-            // - At MIN_STD: allows precise control (±0.004 range)
-            // - At MAX_STD: allows full exploration (±20 range)
             double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
             double safe_margin = 4.0 * std;
             double mean_min = OMEGA_MIN + safe_margin;
