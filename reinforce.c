@@ -26,12 +26,6 @@
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
-unsigned int get_unique_seed() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (unsigned int)(tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid();
-}
-
 void get_state(Quad* q, double* state) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
     memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
@@ -215,7 +209,7 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
 }
 
 int main(int argc, char** argv) {
-    srand(get_unique_seed());
+    srand(time(NULL) ^ getpid());
     
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
     Net* policy = init_net(5, layers, adamw);
