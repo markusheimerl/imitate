@@ -6,21 +6,23 @@
 #include "grad/grad.h"
 #include "sim/sim.h"
 
-#define STATE_DIM 12
-#define ACTION_DIM 8
-#define HIDDEN_DIM 64
-#define MAX_STEPS 1000
-#define NUM_ROLLOUTS 50
-#define NUM_ITERATIONS 10
-#define GAMMA 0.99
-#define ALPHA 0.01
-
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
 #define MAX_DISTANCE 2.0
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
+#define STATE_DIM 12
+#define HIDDEN_DIM 64
+#define ACTION_DIM 8
+
+#define MAX_STEPS 1000
+#define NUM_ROLLOUTS 50
+#define NUM_ITERATIONS 10
+
+// Hyperparameters
+#define GAMMA 0.99
+#define ALPHA 0.01
 #define MAX_STD 4.0 
 #define MIN_STD 0.001
 
