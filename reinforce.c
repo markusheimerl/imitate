@@ -21,10 +21,10 @@
 #define NUM_ITERATIONS 10
 
 // Hyperparameters
-#define GAMMA 0.99
-#define ALPHA 0.01
-#define MAX_STD 4.0 
-#define MIN_STD 0.001
+#define GAMMA 0.999
+#define ALPHA 0.001
+#define MAX_STD 3.0
+#define MIN_STD 0.0001
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
