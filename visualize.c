@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
     for(int i = 0; i < 5; i++) {
         free(act[i]);
     }
+    save_sim(sim);
     free(act);
     free_net(policy);
     free_sim(sim);

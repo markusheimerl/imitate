@@ -11,7 +11,7 @@
 #define HIDDEN_DIM 64
 #define MAX_STEPS 500
 #define NUM_ROLLOUTS 50
-#define NUM_ITERATIONS 5
+#define NUM_ITERATIONS 10
 #define GAMMA 0.99
 #define ALPHA 0.01
 
