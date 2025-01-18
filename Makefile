@@ -1,12 +1,15 @@
 CC = clang
 CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
-LDFLAGS = -flto -lm
+LDFLAGS = -lm -flto
 
-TARGETS = reinforce.out orchestrate.out
+TARGETS = reinforce.out orchestrate.out visualize.out
 
 .PHONY: clean run
 
 all: $(TARGETS)
+
+visualize.out: visualize.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 reinforce.out: reinforce.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
