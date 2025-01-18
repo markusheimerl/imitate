@@ -117,7 +117,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
                 // To ensure x = μ ± 4σ stays within [OMEGA_MIN, OMEGA_MAX]:
                 // OMEGA_MIN ≤ μ - 4σ and μ + 4σ ≤ OMEGA_MAX
                 // Therefore: OMEGA_MIN + 4σ ≤ μ ≤ OMEGA_MAX - 4σ
-                double safe_margin = 4.0 * std;
+                double safe_margin = 4.0 * std; // 99.994% within ±4σ
                 double mean_min = OMEGA_MIN + safe_margin;
                 double mean_max = OMEGA_MAX - safe_margin;
                 
@@ -166,7 +166,7 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             // 1. Get std and compute dynamic mean bounds
             // std range: [MIN_STD, MAX_STD]
             double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
-            double safe_margin = 4.0 * std;
+            double safe_margin = 4.0 * std; // 99.994% within ±4σ
             double mean_min = OMEGA_MIN + safe_margin;
             double mean_max = OMEGA_MAX - safe_margin;
             double mean = squash(act[4][i], mean_min, mean_max);
