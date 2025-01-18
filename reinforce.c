@@ -2,15 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
 #include "grad/grad.h"
 #include "sim/sim.h"
 
 #define STATE_DIM 12
 #define ACTION_DIM 8
 #define HIDDEN_DIM 64
-#define MAX_STEPS 1000
-#define NUM_ROLLOUTS 100
-#define NUM_ITERATIONS 2000
+#define MAX_STEPS 500
+#define NUM_ROLLOUTS 50
+#define NUM_ITERATIONS 5
 #define GAMMA 0.99
 #define ALPHA 0.01
 
@@ -24,6 +25,12 @@
 #define MIN_STD 0.001
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
+
+unsigned int get_unique_seed() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (unsigned int)(tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid();
+}
 
 void get_state(Quad* q, double* state) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
@@ -208,11 +215,18 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
 }
 
 int main(int argc, char** argv) {
-    srand(time(NULL));
+    srand(get_unique_seed());
     
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
     Net* policy = init_net(5, layers, adamw);
     if(!policy) return 1;
+    if(argc > 1) {
+        Net* loaded = load_weights(argv[1], adamw);
+        if(loaded) {
+            free_net(policy);
+            policy = loaded;
+        }
+    }
     policy->lr = 1e-4;
     
     Sim* sim = init_sim("", false);
@@ -263,9 +277,14 @@ int main(int argc, char** argv) {
                min_return, max_return);
     }
     
-    char filename[64];
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
-    save_weights(filename, policy);
+    if(argc > 1) {
+        save_weights(argv[1], policy);  // Save back to the same file
+    } else {
+        char filename[64];
+        strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", 
+                localtime(&(time_t){time(NULL)}));
+        save_weights(filename, policy);
+    }
     
     for(int r = 0; r < NUM_ROLLOUTS; r++) {
         for(int i = 0; i < MAX_STEPS; i++) {
