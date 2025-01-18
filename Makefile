@@ -1,6 +1,6 @@
 CC = clang
 CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
-LDFLAGS = -lm -flto
+LDFLAGS = -static -lm -flto
 
 TARGETS = reinforce.out orchestrate.out visualize.out
 
