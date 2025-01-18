@@ -21,4 +21,4 @@ run: orchestrate.out reinforce.out
 	./orchestrate.out
 
 clean:
-	rm -f *.out *.bin *.gif *.txt
+	rm -f *.out *.bin *.gif
