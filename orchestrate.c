@@ -9,7 +9,6 @@
 #include "grad/grad.h"
 
 #define NUM_PROCESSES 8
-#define GENERATIONS 10
 #define MUTATION_STRENGTH 0.01
 #define ELITE_COUNT 2
 
@@ -37,10 +36,11 @@ void mutate_weights(Net* net) {
 }
 
 int compare_results(const void* a, const void* b) {
-    return ((ProcessResult*)b)->mean_return - ((ProcessResult*)a)->mean_return;
+    double diff = ((ProcessResult*)b)->mean_return - ((ProcessResult*)a)->mean_return;
+    return diff > 0 ? 1 : (diff < 0 ? -1 : 0);
 }
 
-int main() {
+int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
     ProcessResult* results = mmap(NULL, NUM_PROCESSES * sizeof(ProcessResult),
@@ -55,8 +55,9 @@ int main() {
              localtime(&(time_t){time(NULL)}));
     save_weights(final_weights, base_net);
     
-    for(int gen = 0; gen < GENERATIONS; gen++) {
-        printf("\nGeneration %d/%d\n", gen + 1, GENERATIONS);
+    int generations = atoi(argv[1]);
+    for(int gen = 0; gen < generations; gen++) {
+        printf("\nGeneration %d/%d\n", gen + 1, generations);
         
         int pipes[NUM_PROCESSES][2];
         

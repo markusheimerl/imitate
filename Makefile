@@ -18,7 +18,7 @@ orchestrate.out: orchestrate.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 run: orchestrate.out reinforce.out
-	./orchestrate.out
+	./orchestrate.out 10
 
 clean:
 	rm -f *.out *.bin *.gif
