@@ -12,6 +12,9 @@
 #define DT_RENDER (1.0/30.0)
 #define DURATION 5.0
 
+#define MAX_STD 3.0
+#define MIN_STD 0.0001
+
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
 void get_state(Quad* q, double* state) {
@@ -51,13 +54,15 @@ int main(int argc, char** argv) {
 
     // Reset quadcopter to slightly offset initial position
     reset_quad(sim->quad, 
-              TARGET_POS[0], 
-              TARGET_POS[1], 
-              TARGET_POS[2]);
+              TARGET_POS[0] + 0.2,  // Small offset to make it more interesting
+              TARGET_POS[1] - 0.2, 
+              TARGET_POS[2] + 0.1);
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     
     printf("Generating visualization...\n");
+    printf("Target position: (%.2f, %.2f, %.2f)\n", 
+           TARGET_POS[0], TARGET_POS[1], TARGET_POS[2]);
     
     while(t_physics < DURATION) {
         update_quad(sim->quad, DT_PHYSICS);
@@ -70,16 +75,32 @@ int main(int argc, char** argv) {
             // Forward pass through policy network
             fwd(policy, state, act);
             
-            // Apply actions
+            // Apply actions using the same squash function as in training
+            // but only using the mean (no sampling during visualization)
             for(int i = 0; i < 4; i++) {
-                double mean = 50.0 + 20.0 * tanh(act[4][i]);
+                // Get standard deviation (needed for mean bounds)
+                double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+                
+                // Compute dynamic bounds for mean based on current std
+                double safe_margin = 4.0 * std;
+                double mean_min = OMEGA_MIN + safe_margin;
+                double mean_max = OMEGA_MAX - safe_margin;
+                
+                // Get mean using squash with dynamic bounds
+                double mean = squash(act[4][i], mean_min, mean_max);
+                
+                // Apply the mean action (no sampling)
                 sim->quad->omega_next[i] = mean;
             }
             
             t_control += DT_CONTROL;
             
-            // Print progress
-            printf("\rTime: %.2f/%.2f seconds", t_physics, DURATION);
+            // Print progress and current position
+            printf("\rTime: %.2f/%.2f seconds | Pos: (%.2f, %.2f, %.2f)", 
+                   t_physics, DURATION,
+                   sim->quad->linear_position_W[0],
+                   sim->quad->linear_position_W[1],
+                   sim->quad->linear_position_W[2]);
             fflush(stdout);
         }
         
@@ -90,6 +111,10 @@ int main(int argc, char** argv) {
     }
 
     printf("\nVisualization complete!\n");
+    printf("Final position: (%.2f, %.2f, %.2f)\n",
+           sim->quad->linear_position_W[0],
+           sim->quad->linear_position_W[1],
+           sim->quad->linear_position_W[2]);
 
     // Cleanup
     for(int i = 0; i < 5; i++) {
