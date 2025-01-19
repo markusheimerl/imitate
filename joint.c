@@ -303,11 +303,12 @@ int run_reinforce(int argc, char** argv) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) 
             update_policy(policy, states[r], actions[r], rewards[r], steps[r], act, grad);
         
-        printf("Iteration %d/%d [n=%d]: %.2f ± %.2f (min: %.2f, max: %.2f)\n", 
-               iter, NUM_ITERATIONS, NUM_ROLLOUTS, 
-               sum_returns / NUM_ROLLOUTS,
-               sqrt(sum_squared/NUM_ROLLOUTS - pow(sum_returns/NUM_ROLLOUTS, 2)),
-               min_return, max_return);
+        if(iter == NUM_ITERATIONS){
+            double* mean_return = (double*)argv[2];
+            *mean_return = sum_returns / NUM_ROLLOUTS;
+            double* std_return = (double*)argv[3];
+            *std_return = sqrt(sum_squared/NUM_ROLLOUTS - pow(sum_returns/NUM_ROLLOUTS, 2));
+        }
     }
     
     if(argc > 1) {
@@ -376,19 +377,8 @@ int main(int argc, char** argv) {
     for(int gen = 0; gen < generations; gen++) {
         printf("\nGeneration %d/%d\n", gen + 1, generations);
         
-        int pipes[NUM_PROCESSES][2];
-        
         for(int i = 0; i < NUM_PROCESSES; i++) {
-            if(pipe(pipes[i]) == -1) {
-                perror("pipe creation failed");
-                exit(1);
-            }
-            
             if(fork() == 0) {
-                close(pipes[i][0]);
-                dup2(pipes[i][1], STDOUT_FILENO);
-                close(pipes[i][1]);
-                
                 Net* net;
                 if(gen == 0) {
                     // First generation: everyone starts from initial weights
@@ -411,26 +401,12 @@ int main(int argc, char** argv) {
                 save_weights(results[i].weights_file, net);
                 free_net(net);
                 
-                char* reinforce_args[] = {"reinforce", results[i].weights_file, NULL};
-                exit(run_reinforce(2, reinforce_args));
+                char* reinforce_args[] = {"reinforce", results[i].weights_file, (char*)&results[i].mean_return, (char*)&results[i].std_return, NULL};
+                exit(run_reinforce(4, reinforce_args));
             }
-            
-            close(pipes[i][1]);
         }
-        
-        char buf[256], last_iteration[256] = {0};
-        for(int i = 0; i < NUM_PROCESSES; i++) {
-            FILE* fp = fdopen(pipes[i][0], "r");
-            while(fgets(buf, sizeof(buf), fp)) {
-                if(strstr(buf, "Iteration")) {
-                    strcpy(last_iteration, buf);
-                }
-            }
-            if(last_iteration[0]) {
-                sscanf(last_iteration, "Iteration %*d/%*d [n=%*d]: %lf ± %lf",
-                       &results[i].mean_return, &results[i].std_return);
-            }
-            fclose(fp);
+
+        for(int i = 0; i < NUM_PROCESSES; i++){
             wait(NULL);
         }
         
