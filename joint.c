@@ -320,20 +320,20 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    initial_net->lr = 1e-4;
     net_to_shared(initial_net, &shared_nets[NUM_PROCESSES]);
     free_net(initial_net);
     
     double best_return = -INFINITY;
     SharedNet best_net;
-    
+
+    double current_lr = 1e-4;
     int generations = atoi(argv[1]);
     for(int gen = 0; gen < generations; gen++) {
-        printf("\nGeneration %d/%d\n", gen + 1, generations);
+        printf("\nGeneration %d/%d (lr: %.2e)\n", gen + 1, generations, current_lr);
         
         for(int i = 0; i < NUM_PROCESSES; i++) {
             if(fork() == 0) {
-                srand(time(NULL) ^ getpid());  // Ensure different random seeds
+                srand(time(NULL) ^ getpid());
                 
                 Net* net;
                 if(gen == 0) {
@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 
-                net->lr = 1e-4;
+                net->lr = current_lr;
                 
                 Sim* sim = init_sim("", false);
                 double** act = malloc(5 * sizeof(double*));
@@ -386,6 +386,8 @@ int main(int argc, char** argv) {
                     
                     for(int r = 0; r < NUM_ROLLOUTS; r++) 
                         update_policy(net, states[r], actions[r], rewards[r], steps[r], act, grad);
+
+                    net->lr *= 0.99;
                 }
                 
                 results[i].mean_return = sum_returns / NUM_ROLLOUTS;
@@ -435,6 +437,19 @@ int main(int argc, char** argv) {
                    results[i].mean_return, results[i].std_return,
                    i == best_idx ? " *" : "");
         }
+
+        // Adjust learning rate based on performance
+        if (results[best_idx].mean_return < 50) {
+            current_lr = 1e-4;
+        } else if (results[best_idx].mean_return < 80) {
+            current_lr = 1e-4 * pow(0.5, (results[best_idx].mean_return - 50) / 15);
+        } else if (results[best_idx].mean_return < 150) {
+            current_lr = 1e-5 * pow(0.5, (results[best_idx].mean_return - 80) / 35);
+        } else if (results[best_idx].mean_return < 200) {
+            current_lr = 5e-6 * pow(0.5, (results[best_idx].mean_return - 150) / 25);
+        } else {
+            current_lr = 2e-6;
+        }
     }
     
     char final_weights[64];
@@ -443,6 +458,7 @@ int main(int argc, char** argv) {
     
     Net* final_net = shared_to_net(&best_net);
     save_weights(final_weights, final_net);
+    printf("\nFinal weights saved to: %s\n", final_weights);
     free_net(final_net);
     
     munmap(results, NUM_PROCESSES * sizeof(ProcessResult));
