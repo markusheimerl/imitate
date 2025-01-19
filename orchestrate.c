@@ -99,12 +99,6 @@ int main(int argc, char** argv) {
                         fprintf(stderr, "Failed to load weights from %s\n", final_weights);
                         exit(1);
                     }
-                    if(i >= ELITE_COUNT) {
-                        // Non-elites get some variation
-                        Net* fresh = init_net(5, (int[]){12, 64, 64, 64, 8}, adamw);
-                        interpolate_weights(net, fresh, 0.9);  // Keep 90% of initial weights
-                        free_net(fresh);
-                    }
                 } else {
                     // Everyone loads their previous weights
                     net = load_weights(results[i].weights_file, adamw);
