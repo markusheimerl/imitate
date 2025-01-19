@@ -89,7 +89,8 @@ int main(int argc, char** argv) {
                 // Get mean using squash with dynamic bounds
                 double mean = squash(act[4][i], mean_min, mean_max);
                 
-                // Apply the mean action (no sampling)
+                // Apply the mean action
+                // (no sampling, i.e. use "maximum a posteriori" (MAP) policy)
                 sim->quad->omega_next[i] = mean;
             }
             
