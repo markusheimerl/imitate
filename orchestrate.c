@@ -36,6 +36,11 @@ int compare_results(const void* a, const void* b) {
 }
 
 int main(int argc, char** argv) {
+    if(argc != 2 && argc != 3) {
+        printf("Usage: %s <num_generations> [initial_weights.bin]\n", argv[0]);
+        return 1;
+    }
+    
     srand(time(NULL) ^ getpid());
     
     ProcessResult* results = mmap(NULL, NUM_PROCESSES * sizeof(ProcessResult),
@@ -49,6 +54,25 @@ int main(int argc, char** argv) {
     char final_weights[64];
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
              localtime(&(time_t){time(NULL)}));
+    
+    if(argc == 3) {
+        // If initial weights provided, copy them to our new file
+        char command[256];
+        sprintf(command, "cp %s %s", argv[2], final_weights);
+        if(system(command) != 0) {
+            fprintf(stderr, "Failed to copy initial weights from %s\n", argv[2]);
+            return 1;
+        }
+        printf("Starting from weights in %s\n", argv[2]);
+        printf("Will save results to %s\n", final_weights);
+    } else {
+        // Create fresh initial weights
+        Net* initial_net = init_net(5, (int[]){12, 64, 64, 64, 8}, adamw);
+        if(!initial_net) return 1;
+        save_weights(final_weights, initial_net);
+        free_net(initial_net);
+        printf("Starting fresh, will save results to %s\n", final_weights);
+    }
     
     int generations = atoi(argv[1]);
     for(int gen = 0; gen < generations; gen++) {
@@ -69,8 +93,18 @@ int main(int argc, char** argv) {
                 
                 Net* net;
                 if(gen == 0) {
-                    // First generation: everyone gets a fresh network
-                    net = init_net(5, (int[]){12, 64, 64, 64, 8}, adamw);
+                    // First generation: everyone starts from initial weights
+                    net = load_weights(final_weights, adamw);
+                    if(!net) {
+                        fprintf(stderr, "Failed to load weights from %s\n", final_weights);
+                        exit(1);
+                    }
+                    if(i >= ELITE_COUNT) {
+                        // Non-elites get some variation
+                        Net* fresh = init_net(5, (int[]){12, 64, 64, 64, 8}, adamw);
+                        interpolate_weights(net, fresh, 0.9);  // Keep 90% of initial weights
+                        free_net(fresh);
+                    }
                 } else {
                     // Everyone loads their previous weights
                     net = load_weights(results[i].weights_file, adamw);
