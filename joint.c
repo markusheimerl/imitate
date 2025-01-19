@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
     net_to_shared(initial_net, &shared_nets[NUM_PROCESSES]);
     free_net(initial_net);
     
-    double best_return = -INFINITY;
+    double best_return = -1e30;
     SharedNet best_net;
 
     double current_lr = 1e-4;
