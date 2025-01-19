@@ -30,6 +30,8 @@
 #define MAX_STD 3.0
 #define MIN_STD 0.0001
 
+#define SHARED_NET_SIZE (sizeof(SharedNet))
+
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
 typedef struct {
@@ -42,12 +44,15 @@ typedef struct {
     int layer_sizes[10];
     double learning_rate;
     int step;
-    double weights[1000000];
-    double biases[10000];
+    double weights[100000];        // Reduced from 1000000
+    double biases[1000];          // Reduced from 10000
+    double optimizer_data[100000]; // Reduced from 1000000
     int weight_offsets[10];
     int bias_offsets[10];
+    int optim_offsets[10];
     int total_weights;
     int total_biases;
+    int total_optim_data;
 } SharedNet;
 
 void get_state(Quad* q, double* state) {
@@ -103,35 +108,82 @@ bool is_terminated(Quad* q) {
 
 void net_to_shared(Net* net, SharedNet* shared) {
     shared->n_layers = net->n + 1;
+    if(shared->n_layers > 10) {
+        fprintf(stderr, "Too many layers\n");
+        exit(1);
+    }
+    
     memcpy(shared->layer_sizes, net->sz, shared->n_layers * sizeof(int));
     shared->learning_rate = net->lr;
     shared->step = net->step;
     
-    int w_offset = 0, b_offset = 0;
+    int w_offset = 0, b_offset = 0, o_offset = 0;
     for(int i = 0; i < net->n; i++) {
         int in = net->sz[i], out = net->sz[i+1];
+        
+        // Add size checks
+        if(w_offset + in * out > 100000 || 
+           b_offset + out > 1000 || 
+           o_offset + (in * out + out) * net->optimizer.aux_doubles_per_param > 100000) {
+            fprintf(stderr, "Network too large for shared memory\n");
+            exit(1);
+        }
+        
         shared->weight_offsets[i] = w_offset;
         shared->bias_offsets[i] = b_offset;
+        shared->optim_offsets[i] = o_offset;
         
         memcpy(&shared->weights[w_offset], net->w[i], in * out * sizeof(double));
         memcpy(&shared->biases[b_offset], net->b[i], out * sizeof(double));
         
+        int optim_size = (in * out + out) * net->optimizer.aux_doubles_per_param;
+        if(optim_size > 0) {
+            memcpy(&shared->optimizer_data[o_offset], net->o_data[i], 
+                   optim_size * sizeof(double));
+        }
+        
         w_offset += in * out;
         b_offset += out;
+        o_offset += optim_size;
     }
     shared->total_weights = w_offset;
     shared->total_biases = b_offset;
+    shared->total_optim_data = o_offset;
 }
 
 Net* shared_to_net(SharedNet* shared) {
+    if(shared->n_layers > 10) {
+        fprintf(stderr, "Too many layers\n");
+        return NULL;
+    }
+    
     Net* net = init_net(shared->n_layers, shared->layer_sizes, adamw);
+    if(!net) return NULL;
+    
     net->lr = shared->learning_rate;
     net->step = shared->step;
     
     for(int i = 0; i < net->n; i++) {
         int in = net->sz[i], out = net->sz[i+1];
-        memcpy(net->w[i], &shared->weights[shared->weight_offsets[i]], in * out * sizeof(double));
-        memcpy(net->b[i], &shared->biases[shared->bias_offsets[i]], out * sizeof(double));
+        
+        if(shared->weight_offsets[i] + in * out > 100000 || 
+           shared->bias_offsets[i] + out > 1000 || 
+           shared->optim_offsets[i] + (in * out + out) * net->optimizer.aux_doubles_per_param > 100000) {
+            fprintf(stderr, "Network too large for shared memory\n");
+            free_net(net);
+            return NULL;
+        }
+        
+        memcpy(net->w[i], &shared->weights[shared->weight_offsets[i]], 
+               in * out * sizeof(double));
+        memcpy(net->b[i], &shared->biases[shared->bias_offsets[i]], 
+               out * sizeof(double));
+        
+        int optim_size = (in * out + out) * net->optimizer.aux_doubles_per_param;
+        if(optim_size > 0) {
+            memcpy(net->o_data[i], &shared->optimizer_data[shared->optim_offsets[i]], 
+                   optim_size * sizeof(double));
+        }
     }
     return net;
 }
@@ -244,9 +296,15 @@ int main(int argc, char** argv) {
                                 PROT_READ | PROT_WRITE,
                                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     
-    SharedNet* shared_nets = mmap(NULL, (NUM_PROCESSES + 1) * sizeof(SharedNet),
+    SharedNet* shared_nets = mmap(NULL, (NUM_PROCESSES + 1) * SHARED_NET_SIZE,
                                 PROT_READ | PROT_WRITE,
                                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+
+    if(shared_nets == MAP_FAILED) {
+        perror("mmap failed");
+        munmap(results, NUM_PROCESSES * sizeof(ProcessResult));
+        return 1;
+    }
     
     Net* initial_net;
     if(argc == 3) {
