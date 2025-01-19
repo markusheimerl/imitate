@@ -338,6 +338,19 @@ int main(int argc, char** argv) {
     for(int gen = 0; gen < generations; gen++) {
         printf("\nGeneration %d/%d (lr: %.2e)\n", gen + 1, generations, current_lr);
         
+        ProcessResult sorted_results[NUM_PROCESSES];
+        memcpy(sorted_results, results, NUM_PROCESSES * sizeof(ProcessResult));
+        qsort(sorted_results, NUM_PROCESSES, sizeof(ProcessResult), compare_results);
+        
+        int best_idx = 0;
+        if(gen > 0) {
+            for(int i = 1; i < NUM_PROCESSES; i++) {
+                if(results[i].mean_return > results[best_idx].mean_return) {
+                    best_idx = i;
+                }
+            }
+        }
+        
         for(int i = 0; i < NUM_PROCESSES; i++) {
             if(fork() == 0) {
                 srand(time(NULL) ^ getpid());
@@ -346,11 +359,11 @@ int main(int argc, char** argv) {
                 if(gen == 0) {
                     net = shared_to_net(&shared_nets[NUM_PROCESSES]);
                 } else {
-                    if(i < ELITE_COUNT) {
+                    if(results[i].mean_return >= sorted_results[1].mean_return) {
                         net = shared_to_net(&shared_nets[i]);
                     } else {
                         net = shared_to_net(&shared_nets[NUM_PROCESSES]);
-                        Net* mutation = shared_to_net(&shared_nets[i % ELITE_COUNT]);
+                        Net* mutation = shared_to_net(&shared_nets[best_idx]);
                         interpolate_weights(net, mutation, 0.9);
                         free_net(mutation);
                     }
@@ -423,7 +436,6 @@ int main(int argc, char** argv) {
             wait(NULL);
         }
         
-        int best_idx = 0;
         for(int i = 1; i < NUM_PROCESSES; i++) {
             if(results[i].mean_return > results[best_idx].mean_return) {
                 best_idx = i;
