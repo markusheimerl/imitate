@@ -21,7 +21,7 @@ jobs:
     
     - name: Setup and Train
       run: |
-        make all
+        make joint.out visualize.out
         ./joint.out ${{ github.event.inputs.generations }}
         WEIGHTS_FILE=$(ls -t *_policy.bin | head -n1)
         ./visualize.out $WEIGHTS_FILE
