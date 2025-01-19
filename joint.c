@@ -20,8 +20,8 @@
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 50
-#define NUM_ITERATIONS 10
+#define NUM_ROLLOUTS 40
+#define NUM_ITERATIONS 8
 #define NUM_PROCESSES 8
 #define ELITE_COUNT 2
 
