@@ -44,9 +44,9 @@ typedef struct {
     int layer_sizes[10];
     double learning_rate;
     int step;
-    double weights[100000];        // Reduced from 1000000
-    double biases[1000];          // Reduced from 10000
-    double optimizer_data[100000]; // Reduced from 1000000
+    double weights[100000];
+    double biases[1000];
+    double optimizer_data[100000];
     int weight_offsets[10];
     int bias_offsets[10];
     int optim_offsets[10];
