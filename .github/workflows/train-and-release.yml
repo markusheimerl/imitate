@@ -22,14 +22,16 @@ jobs:
     - name: Setup and Train
       run: |
         make joint.out visualize.out
-        ./joint.out ${{ github.event.inputs.generations }}
+        ./joint.out ${{ github.event.inputs.generations }} | tee training.log
         WEIGHTS_FILE=$(ls -t *_policy.bin | head -n1)
         ./visualize.out $WEIGHTS_FILE
         GIF_FILE=$(ls -t *_flight.gif | head -n1)
+        BEST_SCORE=$(grep "Best Ever:" training.log | tail -n1 | sed 's/Best Ever: //')
         
         echo "WEIGHTS_FILE=${WEIGHTS_FILE}" >> $GITHUB_ENV
         echo "GIF_FILE=${GIF_FILE}" >> $GITHUB_ENV
         echo "TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_ENV
+        echo "BEST_SCORE=${BEST_SCORE}" >> $GITHUB_ENV
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -40,6 +42,7 @@ jobs:
           ## ✨ Training Details
           
           - 🔄 Generations: ${{ github.event.inputs.generations }}
+          - 🎯 Best Score: ${{ env.BEST_SCORE }}
           - ⏰ Completed: ${{ env.TIMESTAMP }}
         files: |
           ${{ env.WEIGHTS_FILE }}
