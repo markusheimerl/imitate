@@ -191,13 +191,20 @@ Net* shared_to_net(SharedNet* shared) {
 void interpolate_weights(Net* net, Net* elite, double alpha) {
     for(int i = 0; i < net->n; i++) {
         int in = net->sz[i], out = net->sz[i+1];
+        int optim_size = (in * out + out) * net->optimizer.aux_doubles_per_param;
+    
         for(int j = 0; j < in*out; j++) {
             net->w[i][j] = alpha * net->w[i][j] + (1.0 - alpha) * elite->w[i][j];
         }
         for(int j = 0; j < out; j++) {
             net->b[i][j] = alpha * net->b[i][j] + (1.0 - alpha) * elite->b[i][j];
         }
+        
+        if(optim_size > 0) {
+            memset(net->o_data[i], 0, optim_size * sizeof(double));
+        }
     }
+    net->step = 1;
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
@@ -344,7 +351,7 @@ int main(int argc, char** argv) {
                     } else {
                         net = shared_to_net(&shared_nets[NUM_PROCESSES]);
                         Net* mutation = shared_to_net(&shared_nets[i % ELITE_COUNT]);
-                        interpolate_weights(net, mutation, 0.5);
+                        interpolate_weights(net, mutation, 0.9);
                         free_net(mutation);
                     }
                 }
@@ -439,14 +446,17 @@ int main(int argc, char** argv) {
         }
 
         // Adjust learning rate based on performance
-        if (results[best_idx].mean_return < 50) {
+        int offset = 20;
+        int denom_offset = offset * 0.25;  // 25% of the threshold offset
+
+        if (results[best_idx].mean_return < (50 + offset)) {
             current_lr = 1e-4;
-        } else if (results[best_idx].mean_return < 80) {
-            current_lr = 1e-4 * pow(0.5, (results[best_idx].mean_return - 50) / 15);
-        } else if (results[best_idx].mean_return < 150) {
-            current_lr = 1e-5 * pow(0.5, (results[best_idx].mean_return - 80) / 35);
-        } else if (results[best_idx].mean_return < 200) {
-            current_lr = 5e-6 * pow(0.5, (results[best_idx].mean_return - 150) / 25);
+        } else if (results[best_idx].mean_return < (80 + offset)) {
+            current_lr = 1e-4 * pow(0.5, (results[best_idx].mean_return - (50 + offset)) / (15 + denom_offset));
+        } else if (results[best_idx].mean_return < (150 + offset)) {
+            current_lr = 1e-5 * pow(0.5, (results[best_idx].mean_return - (80 + offset)) / (35 + denom_offset));
+        } else if (results[best_idx].mean_return < (200 + offset)) {
+            current_lr = 5e-6 * pow(0.5, (results[best_idx].mean_return - (150 + offset)) / (25 + denom_offset));
         } else {
             current_lr = 2e-6;
         }
