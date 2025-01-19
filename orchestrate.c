@@ -9,7 +9,6 @@
 #include "grad/grad.h"
 
 #define NUM_PROCESSES 8
-#define MUTATION_STRENGTH 0.01
 #define ELITE_COUNT 2
 
 typedef struct {
@@ -19,18 +18,14 @@ typedef struct {
     char weights_file[64];
 } ProcessResult;
 
-void mutate_weights(Net* net) {
+void interpolate_weights(Net* net, Net* elite, double alpha) {
     for(int i = 0; i < net->n; i++) {
         int in = net->sz[i], out = net->sz[i+1];
         for(int j = 0; j < in*out; j++) {
-            if(rand() < RAND_MAX/3) {
-                net->w[i][j] *= (1.0 + MUTATION_STRENGTH * ((2.0*rand()/RAND_MAX) - 1.0));
-            }
+            net->w[i][j] = alpha * net->w[i][j] + (1.0 - alpha) * elite->w[i][j];
         }
         for(int j = 0; j < out; j++) {
-            if(rand() < RAND_MAX/3) {
-                net->b[i][j] *= (1.0 + MUTATION_STRENGTH * ((2.0*rand()/RAND_MAX) - 1.0));
-            }
+            net->b[i][j] = alpha * net->b[i][j] + (1.0 - alpha) * elite->b[i][j];
         }
     }
 }
@@ -47,13 +42,13 @@ int main(int argc, char** argv) {
                                 PROT_READ | PROT_WRITE,
                                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     
-    Net* base_net = init_net(5, (int[]){12, 64, 64, 64, 8}, adamw);
-    if(!base_net) return 1;
+    for(int i = 0; i < NUM_PROCESSES; i++) {
+        sprintf(results[i].weights_file, "weights_%d.bin", i);
+    }
     
     char final_weights[64];
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
              localtime(&(time_t){time(NULL)}));
-    save_weights(final_weights, base_net);
     
     int generations = atoi(argv[1]);
     for(int gen = 0; gen < generations; gen++) {
@@ -72,10 +67,21 @@ int main(int argc, char** argv) {
                 dup2(pipes[i][1], STDOUT_FILENO);
                 close(pipes[i][1]);
                 
-                Net* net = load_weights(final_weights, adamw);
-                if(i >= ELITE_COUNT) mutate_weights(net);
+                Net* net;
+                if(gen == 0) {
+                    // First generation: everyone gets a fresh network
+                    net = init_net(5, (int[]){12, 64, 64, 64, 8}, adamw);
+                } else {
+                    // Everyone loads their previous weights
+                    net = load_weights(results[i].weights_file, adamw);
+                    if(i >= ELITE_COUNT) {
+                        // Non-elites interpolate with the best
+                        Net* elite = load_weights(final_weights, adamw);
+                        interpolate_weights(net, elite, 0.5);  // Keep 50% of own weights
+                        free_net(elite);
+                    }
+                }
                 
-                sprintf(results[i].weights_file, "weights_%d.bin", i);
                 save_weights(results[i].weights_file, net);
                 free_net(net);
                 
@@ -110,13 +116,15 @@ int main(int argc, char** argv) {
                    results[i].mean_return, results[i].std_return);
         }
         
-        rename(results[0].weights_file, final_weights);
-        for(int i = 1; i < NUM_PROCESSES; i++) {
-            remove(results[i].weights_file);
-        }
+        char command[256];
+        sprintf(command, "cp %s %s", results[0].weights_file, final_weights);
+        system(command);
+    }
+    
+    for(int i = 0; i < NUM_PROCESSES; i++) {
+        remove(results[i].weights_file);
     }
     
     munmap(results, NUM_PROCESSES * sizeof(ProcessResult));
-    free_net(base_net);
     return 0;
 }
