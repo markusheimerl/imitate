@@ -22,7 +22,7 @@ jobs:
     - name: Setup and Train
       run: |
         make all
-        ./orchestrate.out ${{ github.event.inputs.generations }}
+        ./joint.out ${{ github.event.inputs.generations }}
         WEIGHTS_FILE=$(ls -t *_policy.bin | head -n1)
         ./visualize.out $WEIGHTS_FILE
         GIF_FILE=$(ls -t *_flight.gif | head -n1)
