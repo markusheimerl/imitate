@@ -363,8 +363,8 @@ int main(int argc, char** argv) {
                         net = shared_to_net(&shared_nets[i]);
                     } else {
                         net = shared_to_net(&shared_nets[NUM_PROCESSES]);
-                        Net* mutation = shared_to_net(&shared_nets[best_idx]);
-                        interpolate_weights(net, mutation, 0.9);
+                        Net* mutation = shared_to_net(&best_net);
+                        interpolate_weights(net, mutation, 0.5);
                         free_net(mutation);
                     }
                 }
