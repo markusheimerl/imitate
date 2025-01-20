@@ -29,6 +29,8 @@
 #define ALPHA 0.001
 #define MAX_STD 3.0
 #define MIN_STD 0.0001
+#define STARTING_LEARNING_RATE 1e-4
+#define MINIMUM_LEARNING_RATE 1e-8
 
 #define SHARED_NET_SIZE (sizeof(SharedNet))
 
@@ -331,9 +333,14 @@ int main(int argc, char** argv) {
     free_net(initial_net);
     
     double best_return = -1e30;
+    double initial_best = -1e30;
     SharedNet best_net;
+    
+    struct timeval start_time, end_time;
+    gettimeofday(&start_time, NULL);
+    double theoretical_max = (1.0 - pow(GAMMA, MAX_STEPS))/(1.0 - GAMMA);
 
-    double current_lr = 1e-4;
+    double current_lr = STARTING_LEARNING_RATE;
     int generations = atoi(argv[1]);
     for(int gen = 0; gen < generations; gen++) {
         printf("\nGeneration %d/%d (lr: %.2e)\n", gen + 1, generations, current_lr);
@@ -413,7 +420,6 @@ int main(int argc, char** argv) {
                                           pow(sum_returns/NUM_ROLLOUTS, 2));
                 net_to_shared(net, &shared_nets[i]);
                 
-                // Cleanup
                 for(int r = 0; r < NUM_ROLLOUTS; r++) {
                     for(int i = 0; i < MAX_STEPS; i++) {
                         free(states[r][i]);
@@ -445,19 +451,42 @@ int main(int argc, char** argv) {
             memcpy(&best_net, &shared_nets[best_idx], sizeof(SharedNet));
         }
         
+        if(gen == 0) {
+            initial_best = best_return;
+        }
+        
         memcpy(&shared_nets[NUM_PROCESSES], &shared_nets[best_idx], sizeof(SharedNet));
         
         printf("\nGeneration Results:\n");
-        double theoretical_max = (1.0 - pow(GAMMA, MAX_STEPS))/(1.0 - GAMMA);
         double performance_ratio = best_return/theoretical_max;
-        current_lr = 1e-3 * (1.0 - performance_ratio) + 1e-5;
-        printf("Best Ever: %.2f / %.2f (%.1f%%)\n", best_return, theoretical_max, performance_ratio * 100.0);
+        current_lr = STARTING_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
+        printf("Best Ever: %.2f / %.2f (%.1f%%)\n", 
+               best_return, theoretical_max, performance_ratio * 100.0);
         for(int i = 0; i < NUM_PROCESSES; i++) {
             printf("Agent %d: %.2f ± %.2f%s\n", i, 
                    results[i].mean_return, results[i].std_return,
                    i == best_idx ? " *" : "");
         }
     }
+    
+    gettimeofday(&end_time, NULL);
+    double seconds_elapsed = (end_time.tv_sec - start_time.tv_sec) + 
+                           (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+
+    double nominal_improvement = best_return - initial_best;
+    double nominal_rate = nominal_improvement / seconds_elapsed;
+
+    double initial_percentage = (initial_best / theoretical_max) * 100.0;
+    double final_percentage = (best_return / theoretical_max) * 100.0;
+    double percentage_improvement = final_percentage - initial_percentage;
+    double percentage_rate = percentage_improvement / seconds_elapsed;
+
+    printf("\nTraining Summary:\n");
+    printf("Total time: %.1f seconds\n", seconds_elapsed);
+    printf("Improvement rate: %.3f score/second\n", nominal_rate);
+    printf("Progress towards theoretical maximum: %.2f%% -> %.2f%%\n", 
+           initial_percentage, final_percentage);
+    printf("Rate of progress: %.3f percentage points/second\n", percentage_rate);
     
     char final_weights[64];
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
