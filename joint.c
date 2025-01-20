@@ -83,7 +83,7 @@ double compute_reward(Quad* q) {
     }
     ang_vel_magnitude = sqrt(ang_vel_magnitude);
     
-    double orientation_error = 1.0 - q->R_W_B[4];
+    double orientation_error = fabs(1.0 - q->R_W_B[4]);
     
     double total_error = (pos_error * 2.0) +
                         (vel_magnitude * 1.0) +
