@@ -27,11 +27,15 @@ jobs:
         ./visualize.out $WEIGHTS_FILE
         GIF_FILE=$(ls -t *_flight.gif | head -n1)
         BEST_SCORE=$(grep "Best Ever:" training.log | tail -n1 | sed 's/Best Ever: //')
+        TOTAL_TIME=$(grep "Total training time:" training.log | sed 's/Total training time: //' | sed 's/ seconds//')
+        PERCENTAGE_RATE=$(grep "Best Ever:" training.log | tail -n1 | sed 's/.*-> //' | sed 's/ %\/s//')
         
         echo "WEIGHTS_FILE=${WEIGHTS_FILE}" >> $GITHUB_ENV
         echo "GIF_FILE=${GIF_FILE}" >> $GITHUB_ENV
         echo "TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_ENV
         echo "BEST_SCORE=${BEST_SCORE}" >> $GITHUB_ENV
+        echo "TOTAL_TIME=${TOTAL_TIME}" >> $GITHUB_ENV
+        echo "PERCENTAGE_RATE=${PERCENTAGE_RATE}" >> $GITHUB_ENV
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -43,6 +47,8 @@ jobs:
           
           - 🔄 Generations: ${{ github.event.inputs.generations }}
           - 🎯 Best Score: ${{ env.BEST_SCORE }}
+          - ⏱️ Total Time: ${{ env.TOTAL_TIME }} seconds
+          - 📈 Final Improvement Rate: ${{ env.PERCENTAGE_RATE }} %/s
           - ⏰ Completed: ${{ env.TIMESTAMP }}
         files: |
           ${{ env.WEIGHTS_FILE }}
