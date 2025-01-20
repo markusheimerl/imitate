@@ -15,7 +15,7 @@
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
-#define STATE_DIM 12
+#define INPUT_DIM 15
 #define HIDDEN_DIM 64
 #define ACTION_DIM 8
 
@@ -26,14 +26,13 @@
 #define ELITE_COUNT 2
 
 #define GAMMA 0.999
-#define ALPHA 0.000
+#define ALPHA 1e-9
 #define INITIAL_MAX_STD 1.5
-#define FINAL_MAX_STD 0.00001
-#define MIN_STD 0.000001
+#define FINAL_MAX_STD 1e-5
+#define MIN_STD 1e-6
 #define MAXIMUM_LEARNING_RATE 1e-4
 #define MINIMUM_LEARNING_RATE 1e-8
-
-#define SHARED_NET_SIZE (sizeof(SharedNet))
+#define TARGET_OFFSET 0.02
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
@@ -58,19 +57,20 @@ typedef struct {
     int total_optim_data;
 } SharedNet;
 
-void get_state(Quad* q, double* state) {
+void get_state(Quad* q, double* state, const double* target) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
     memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
     memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
     state[9] = q->R_W_B[0];
     state[10] = q->R_W_B[4];
     state[11] = q->R_W_B[8];
+    memcpy(state + 12, target, 3 * sizeof(double));
 }
 
-double compute_reward(Quad* q) {
+double compute_reward(Quad* q, const double* target) {
     double pos_error = 0.0;
     for(int i = 0; i < 3; i++) {
-        pos_error += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
+        pos_error += pow(q->linear_position_W[i] - target[i], 2);
     }
     pos_error = sqrt(pos_error);
     
@@ -96,10 +96,10 @@ double compute_reward(Quad* q) {
     return exp(-total_error);
 }
 
-bool is_terminated(Quad* q) {
+bool is_terminated(Quad* q, const double* target) {
     double dist = 0.0, vel = 0.0, ang_vel = 0.0;
     for(int i = 0; i < 3; i++) {
-        dist += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
+        dist += pow(q->linear_position_W[i] - target[i], 2);
         vel += pow(q->linear_velocity_W[i], 2);
         ang_vel += pow(q->angular_velocity_B[i], 2);
     }
@@ -124,7 +124,6 @@ void net_to_shared(Net* net, SharedNet* shared) {
     for(int i = 0; i < net->n; i++) {
         int in = net->sz[i], out = net->sz[i+1];
         
-        // Add size checks
         if(w_offset + in * out > 100000 || 
            b_offset + out > 1000 || 
            o_offset + (in * out + out) * net->optimizer.aux_doubles_per_param > 100000) {
@@ -211,21 +210,27 @@ void interpolate_weights(Net* net, Net* elite, double alpha) {
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards, double current_max_std) {
+    double target[3] = {
+        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * TARGET_OFFSET,
+        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * TARGET_OFFSET,
+        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * TARGET_OFFSET
+    };
+    
     reset_quad(sim->quad, 
-        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
-        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
-        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
+        target[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
+        target[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
+        target[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
     );
     
     double t_physics = 0.0, t_control = 0.0;
     int steps = 0;
     
-    while(steps < MAX_STEPS && !is_terminated(sim->quad)) {
+    while(steps < MAX_STEPS && !is_terminated(sim->quad, target)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, states[steps]);
+            get_state(sim->quad, states[steps], target);
             fwd(policy, states[steps], act);
             
             for(int i = 0; i < 4; i++) {
@@ -243,7 +248,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
                 sim->quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(sim->quad);
+            rewards[steps] = compute_reward(sim->quad, target);
             steps++;
             t_control += DT_CONTROL;
         }
@@ -320,7 +325,7 @@ int main(int argc, char** argv) {
     if(argc == 3) {
         initial_net = load_weights(argv[2], adamw);
     } else {
-        int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
+        int layers[] = {INPUT_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
         initial_net = init_net(5, layers, adamw);
     }
     
@@ -418,7 +423,7 @@ int main(int argc, char** argv) {
                     actions[r] = malloc(MAX_STEPS * sizeof(double*));
                     rewards[r] = malloc(MAX_STEPS * sizeof(double));
                     for(int i = 0; i < MAX_STEPS; i++) {
-                        states[r][i] = malloc(STATE_DIM * sizeof(double));
+                        states[r][i] = malloc(INPUT_DIM * sizeof(double));
                         actions[r][i] = malloc(4 * sizeof(double));
                     }
                 }
@@ -489,8 +494,8 @@ int main(int argc, char** argv) {
         double initial_percentage = (initial_best / theoretical_max) * 100.0;
         double current_percentage = (best_return_ever / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / seconds_elapsed;
-        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - results[best_idx].mean_return/theoretical_max) + MINIMUM_LEARNING_RATE;
-        current_max_std = INITIAL_MAX_STD * (1.0 - results[best_idx].mean_return/theoretical_max) + FINAL_MAX_STD;
+        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - (performance_ratio + results[best_idx].mean_return/theoretical_max)/2) + MINIMUM_LEARNING_RATE;
+        current_max_std = INITIAL_MAX_STD * (1.0 - (performance_ratio + results[best_idx].mean_return/theoretical_max)/2) + FINAL_MAX_STD;
 
         printf("\nGeneration Results:\n");
         printf("Best Ever: %.2f / %.2f (%.1f%%) -> %.3f %%/s (lr: %.2e, std: %.2f)\n", 

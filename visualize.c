@@ -4,7 +4,7 @@
 #include "grad/grad.h"
 #include "sim/sim.h"
 
-#define STATE_DIM 12
+#define INPUT_DIM 15
 #define ACTION_DIM 8
 #define HIDDEN_DIM 64
 #define DT_PHYSICS (1.0/1000.0)
@@ -14,16 +14,18 @@
 
 #define MAX_STD 0.5
 #define MIN_STD 0.000001
+#define TARGET_OFFSET 0.02
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
-void get_state(Quad* q, double* state) {
+void get_state(Quad* q, double* state, const double* target) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
     memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
     memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
     state[9] = q->R_W_B[0];
     state[10] = q->R_W_B[4];
     state[11] = q->R_W_B[8];
+    memcpy(state + 12, target, 3 * sizeof(double));
 }
 
 int main(int argc, char** argv) {
@@ -35,7 +37,7 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
 
     // Initialize policy network
-    int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
+    int layers[] = {INPUT_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
     Net* policy = load_weights(argv[1], null_opt);
     if(!policy) {
         printf("Failed to load weights from %s\n", argv[1]);
@@ -52,28 +54,35 @@ int main(int argc, char** argv) {
     }
 
     // Initialize state buffer
-    double state[STATE_DIM];
+    double state[INPUT_DIM];
+
+    // Generate random target position
+    double target[3] = {
+        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * TARGET_OFFSET,
+        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * TARGET_OFFSET,
+        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * TARGET_OFFSET
+    };
 
     // Reset quadcopter to slightly offset initial position
     reset_quad(sim->quad, 
-        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
-        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
-        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
+        target[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
+        target[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
+        target[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
     );
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     
     printf("Generating visualization...\n");
     printf("Target position: (%.2f, %.2f, %.2f)\n", 
-           TARGET_POS[0], TARGET_POS[1], TARGET_POS[2]);
+           target[0], target[1], target[2]);
     
     while(t_physics < DURATION) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            // Get current state
-            get_state(sim->quad, state);
+            // Get current state including target position
+            get_state(sim->quad, state, target);
             
             // Forward pass through policy network
             fwd(policy, state, act);
@@ -99,12 +108,19 @@ int main(int argc, char** argv) {
             
             t_control += DT_CONTROL;
             
-            // Print progress and current position
-            printf("\rTime: %.2f/%.2f seconds | Pos: (%.2f, %.2f, %.2f)", 
+            // Print progress, current position, and distance to target
+            double dist = sqrt(
+                pow(sim->quad->linear_position_W[0] - target[0], 2) +
+                pow(sim->quad->linear_position_W[1] - target[1], 2) +
+                pow(sim->quad->linear_position_W[2] - target[2], 2)
+            );
+            
+            printf("\rTime: %.2f/%.2f seconds | Pos: (%.2f, %.2f, %.2f) | Dist to target: %.3f", 
                    t_physics, DURATION,
                    sim->quad->linear_position_W[0],
                    sim->quad->linear_position_W[1],
-                   sim->quad->linear_position_W[2]);
+                   sim->quad->linear_position_W[2],
+                   dist);
             fflush(stdout);
         }
         
@@ -114,11 +130,21 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Calculate final distance to target
+    double final_dist = sqrt(
+        pow(sim->quad->linear_position_W[0] - target[0], 2) +
+        pow(sim->quad->linear_position_W[1] - target[1], 2) +
+        pow(sim->quad->linear_position_W[2] - target[2], 2)
+    );
+
     printf("\nVisualization complete!\n");
     printf("Final position: (%.2f, %.2f, %.2f)\n",
            sim->quad->linear_position_W[0],
            sim->quad->linear_position_W[1],
            sim->quad->linear_position_W[2]);
+    printf("Target position: (%.2f, %.2f, %.2f)\n",
+           target[0], target[1], target[2]);
+    printf("Final distance to target: %.3f\n", final_dist);
 
     // Cleanup
     for(int i = 0; i < 5; i++) {
