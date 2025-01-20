@@ -406,8 +406,6 @@ int main(int argc, char** argv) {
                     
                     for(int r = 0; r < NUM_ROLLOUTS; r++) 
                         update_policy(net, states[r], actions[r], rewards[r], steps[r], act, grad);
-
-                    net->lr *= 0.99;
                 }
                 
                 results[i].mean_return = sum_returns / NUM_ROLLOUTS;
@@ -455,22 +453,6 @@ int main(int argc, char** argv) {
             printf("Agent %d: %.2f ± %.2f%s\n", i, 
                    results[i].mean_return, results[i].std_return,
                    i == best_idx ? " *" : "");
-        }
-
-        // Adjust learning rate based on performance
-        int offset = 20;
-        int denom_offset = offset * 0.25;  // 25% of the threshold offset
-
-        if (results[best_idx].mean_return < (50 + offset)) {
-            current_lr = 1e-4;
-        } else if (results[best_idx].mean_return < (80 + offset)) {
-            current_lr = 1e-4 * pow(0.5, (results[best_idx].mean_return - (50 + offset)) / (15 + denom_offset));
-        } else if (results[best_idx].mean_return < (150 + offset)) {
-            current_lr = 1e-5 * pow(0.5, (results[best_idx].mean_return - (80 + offset)) / (35 + denom_offset));
-        } else if (results[best_idx].mean_return < (200 + offset)) {
-            current_lr = 5e-6 * pow(0.5, (results[best_idx].mean_return - (150 + offset)) / (25 + denom_offset));
-        } else {
-            current_lr = 2e-6;
         }
     }
     
