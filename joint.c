@@ -338,7 +338,7 @@ int main(int argc, char** argv) {
     
     struct timeval start_time, end_time;
     gettimeofday(&start_time, NULL);
-    double theoretical_max = (1.0 - pow(GAMMA, MAX_STEPS))/(1.0 - GAMMA);
+    double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
 
     double current_lr = STARTING_LEARNING_RATE;
     int generations = atoi(argv[1]);
