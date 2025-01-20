@@ -20,15 +20,16 @@
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 40
-#define NUM_ITERATIONS 8
+#define NUM_ROLLOUTS 3
+#define NUM_ITERATIONS 2
 #define NUM_PROCESSES 8
 #define ELITE_COUNT 2
 
-#define GAMMA 0.99
-#define ALPHA 0.0001
-#define MAX_STD 3.0
-#define MIN_STD 0.0001
+#define GAMMA 0.999
+#define ALPHA 0.000
+#define INITIAL_MAX_STD 1.5
+#define FINAL_MAX_STD 0.00001
+#define MIN_STD 0.000001
 #define MAXIMUM_LEARNING_RATE 1e-4
 #define MINIMUM_LEARNING_RATE 1e-8
 
@@ -209,7 +210,7 @@ void interpolate_weights(Net* net, Net* elite, double alpha) {
     net->step = 1;
 }
 
-int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
+int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards, double current_max_std) {
     reset_quad(sim->quad, 
         TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
         TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
@@ -228,7 +229,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
             fwd(policy, states[steps], act);
             
             for(int i = 0; i < 4; i++) {
-                double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+                double std = squash(act[4][i + 4], MIN_STD, current_max_std);
                 double safe_margin = 4.0 * std;
                 double mean_min = OMEGA_MIN + safe_margin;
                 double mean_max = OMEGA_MAX - safe_margin;
@@ -256,12 +257,12 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
     return steps;
 }
 
-void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, double** act, double** grad) {
+void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, double** act, double** grad, double current_max_std) {
     for(int t = 0; t < steps; t++) {
         fwd(policy, states[t], act);
         
         for(int i = 0; i < 4; i++) {
-            double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+            double std = squash(act[4][i + 4], MIN_STD, current_max_std);
             double safe_margin = 4.0 * std;
             double mean_min = OMEGA_MIN + safe_margin;
             double mean_max = OMEGA_MAX - safe_margin;
@@ -278,7 +279,7 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double dmean_dstd = -4.0 * dsquash(act[4][i], mean_min, mean_max);
             double dstd = dstd_direct + (z / std) * dmean_dstd;
             
-            grad[4][i + 4] = (returns[t] * log_prob * dstd + ALPHA * (1.0 / std)) * dsquash(act[4][i + 4], MIN_STD, MAX_STD);
+            grad[4][i + 4] = (returns[t] * log_prob * dstd + ALPHA * (1.0 / std)) * dsquash(act[4][i + 4], MIN_STD, current_max_std);
         }
         
         bwd(policy, act, grad);
@@ -341,9 +342,11 @@ int main(int argc, char** argv) {
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
 
     double current_lr = MINIMUM_LEARNING_RATE;
+    double current_max_std = INITIAL_MAX_STD;
     int generations = atoi(argv[1]);
     for(int gen = 0; gen < generations; gen++) {
-        printf("\nGeneration %d/%d (lr: %.2e)\n", gen + 1, generations, current_lr);
+        printf("\nGeneration %d/%d (lr: %.2e, std: %.2f)\n", 
+               gen + 1, generations, current_lr, current_max_std);
         
         ProcessResult sorted_results[NUM_PROCESSES];
         memcpy(sorted_results, results, NUM_PROCESSES * sizeof(ProcessResult));
@@ -404,7 +407,7 @@ int main(int argc, char** argv) {
                 double sum_returns = 0.0, sum_squared = 0.0;
                 for(int iter = 1; iter <= NUM_ITERATIONS; iter++) {
                     for(int r = 0; r < NUM_ROLLOUTS; r++) {
-                        steps[r] = collect_rollout(sim, net, act, states[r], actions[r], rewards[r]);
+                        steps[r] = collect_rollout(sim, net, act, states[r], actions[r], rewards[r], current_max_std);
                         if(iter == NUM_ITERATIONS) {
                             sum_returns += rewards[r][0];
                             sum_squared += rewards[r][0] * rewards[r][0];
@@ -412,7 +415,7 @@ int main(int argc, char** argv) {
                     }
                     
                     for(int r = 0; r < NUM_ROLLOUTS; r++) 
-                        update_policy(net, states[r], actions[r], rewards[r], steps[r], act, grad);
+                        update_policy(net, states[r], actions[r], rewards[r], steps[r], act, grad, current_max_std);
                 }
                 
                 results[i].mean_return = sum_returns / NUM_ROLLOUTS;
@@ -461,16 +464,18 @@ int main(int argc, char** argv) {
         double seconds_elapsed = (end_time.tv_sec - start_time.tv_sec) + 
                                (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
         
-        printf("\nGeneration Results:\n");
         double performance_ratio = best_return/theoretical_max;
-        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
-        
+
         double initial_percentage = (initial_best / theoretical_max) * 100.0;
         double current_percentage = (best_return / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / seconds_elapsed;
-        
-        printf("Best Ever: %.2f / %.2f (%.1f%%) -> %.3f %%/s\n", 
-               best_return, theoretical_max, performance_ratio * 100.0, percentage_rate);
+        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
+        current_max_std = INITIAL_MAX_STD * (1.0 - performance_ratio) + FINAL_MAX_STD;
+
+        printf("\nGeneration Results:\n");
+        printf("Best Ever: %.2f / %.2f (%.1f%%) -> %.3f %%/s (lr: %.2e, std: %.2f)\n", 
+               best_return, theoretical_max, performance_ratio * 100.0, percentage_rate,
+               current_lr, current_max_std);
         
         for(int i = 0; i < NUM_PROCESSES; i++) {
             printf("Agent %d: %.2f ± %.2f%s\n", i, 

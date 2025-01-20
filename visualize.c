@@ -12,8 +12,8 @@
 #define DT_RENDER (1.0/30.0)
 #define DURATION 5.0
 
-#define MAX_STD 3.0
-#define MIN_STD 0.0001
+#define MAX_STD 0.5
+#define MIN_STD 0.000001
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
@@ -31,6 +31,8 @@ int main(int argc, char** argv) {
         printf("Usage: %s <policy_weights.bin>\n", argv[0]);
         return 1;
     }
+
+    srand(time(NULL) ^ getpid());
 
     // Initialize policy network
     int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
@@ -54,9 +56,10 @@ int main(int argc, char** argv) {
 
     // Reset quadcopter to slightly offset initial position
     reset_quad(sim->quad, 
-              TARGET_POS[0] + 0.2,  // Small offset to make it more interesting
-              TARGET_POS[1] - 0.2, 
-              TARGET_POS[2] + 0.1);
+        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
+        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
+        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
+    );
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     
