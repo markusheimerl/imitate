@@ -26,9 +26,9 @@
 #define ELITE_COUNT 2
 
 #define GAMMA 0.999
-#define ALPHA 0.001
-#define MAX_STD 3.0
-#define MIN_STD 0.0001
+#define ALPHA 0.01
+#define MAX_STD 4.0
+#define MIN_STD 0.01
 #define MAXIMUM_LEARNING_RATE 1e-4
 #define MINIMUM_LEARNING_RATE 1e-8
 
