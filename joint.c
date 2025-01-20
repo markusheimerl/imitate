@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
     if(argc == 3) {
         initial_net = load_weights(argv[2], adamw);
     } else {
-        int layers[] = {12, 64, 64, 64, 8};
+        int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
         initial_net = init_net(5, layers, adamw);
     }
     
@@ -457,11 +457,21 @@ int main(int argc, char** argv) {
         
         memcpy(&shared_nets[NUM_PROCESSES], &shared_nets[best_idx], sizeof(SharedNet));
         
+        gettimeofday(&end_time, NULL);
+        double seconds_elapsed = (end_time.tv_sec - start_time.tv_sec) + 
+                               (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        
         printf("\nGeneration Results:\n");
         double performance_ratio = best_return/theoretical_max;
         current_lr = MAXIMUM_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
-        printf("Best Ever: %.2f / %.2f (%.1f%%)\n", 
-               best_return, theoretical_max, performance_ratio * 100.0);
+        
+        double initial_percentage = (initial_best / theoretical_max) * 100.0;
+        double current_percentage = (best_return / theoretical_max) * 100.0;
+        double percentage_rate = (current_percentage - initial_percentage) / seconds_elapsed;
+        
+        printf("Best Ever: %.2f / %.2f (%.1f%%) -> %.3f %%/s\n", 
+               best_return, theoretical_max, performance_ratio * 100.0, percentage_rate);
+        
         for(int i = 0; i < NUM_PROCESSES; i++) {
             printf("Agent %d: %.2f ± %.2f%s\n", i, 
                    results[i].mean_return, results[i].std_return,
@@ -469,34 +479,20 @@ int main(int argc, char** argv) {
         }
     }
     
-    gettimeofday(&end_time, NULL);
-    double seconds_elapsed = (end_time.tv_sec - start_time.tv_sec) + 
-                           (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
-
-    double nominal_improvement = best_return - initial_best;
-    double nominal_rate = nominal_improvement / seconds_elapsed;
-
-    double initial_percentage = (initial_best / theoretical_max) * 100.0;
-    double final_percentage = (best_return / theoretical_max) * 100.0;
-    double percentage_improvement = final_percentage - initial_percentage;
-    double percentage_rate = percentage_improvement / seconds_elapsed;
-
-    printf("\nTraining Summary:\n");
-    printf("Total time: %.1f seconds\n", seconds_elapsed);
-    printf("Improvement rate: %.3f score/second\n", nominal_rate);
-    printf("Progress towards theoretical maximum: %.2f%% -> %.2f%%\n", 
-           initial_percentage, final_percentage);
-    printf("Rate of progress: %.3f percentage points/second\n", percentage_rate);
-    
     char final_weights[64];
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
              localtime(&(time_t){time(NULL)}));
     
     Net* final_net = shared_to_net(&best_net);
     save_weights(final_weights, final_net);
-    printf("\nFinal weights saved to: %s\n", final_weights);
-    free_net(final_net);
     
+    gettimeofday(&end_time, NULL);
+    double total_seconds = (end_time.tv_sec - start_time.tv_sec) + 
+                          (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+    printf("\nTotal training time: %.1f seconds\n", total_seconds);
+    printf("Final weights saved to: %s\n", final_weights);
+    
+    free_net(final_net);
     munmap(results, NUM_PROCESSES * sizeof(ProcessResult));
     munmap(shared_nets, (NUM_PROCESSES + 1) * sizeof(SharedNet));
     return 0;
