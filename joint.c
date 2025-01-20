@@ -449,7 +449,9 @@ int main(int argc, char** argv) {
         
         printf("\nGeneration Results:\n");
         double theoretical_max = (1.0 - pow(GAMMA, MAX_STEPS))/(1.0 - GAMMA);
-        printf("Best Ever: %.2f / %.2f (%.1f%%)\n", best_return, theoretical_max, (best_return/theoretical_max) * 100.0);
+        double performance_ratio = best_return/theoretical_max;
+        current_lr = 1e-3 * (1.0 - performance_ratio) + 1e-5;
+        printf("Best Ever: %.2f / %.2f (%.1f%%)\n", best_return, theoretical_max, performance_ratio * 100.0);
         for(int i = 0; i < NUM_PROCESSES; i++) {
             printf("Agent %d: %.2f ± %.2f%s\n", i, 
                    results[i].mean_return, results[i].std_return,
