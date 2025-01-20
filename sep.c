@@ -15,15 +15,15 @@
 #define MAX_ANGULAR_VELOCITY 5.0
 
 #define INPUT_DIM 15
-#define HIDDEN_DIM 64
+#define HIDDEN_DIM 128
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 64
+#define NUM_ROLLOUTS 8
 #define GAMMA 0.999
-#define ALPHA 1e-9
+#define ALPHA 1e-5
 
-#define INITIAL_MAX_STD 3.0
+#define INITIAL_MAX_STD 4.0
 #define FINAL_MAX_STD 1e-5
 #define MIN_STD 1e-6
 #define MAXIMUM_LEARNING_RATE 1e-4
