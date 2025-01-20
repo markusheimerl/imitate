@@ -16,7 +16,7 @@
 #define MIN_STD 0.000001
 #define TARGET_OFFSET 0.02
 
-const double TARGET_POS[3] = {0.0, 1.0, 0.0};
+const double TARGET_POS[3] = {1.0, 1.0, 1.0};
 
 void get_state(Quad* q, double* state, const double* target) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));

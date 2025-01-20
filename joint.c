@@ -28,7 +28,7 @@
 #define GAMMA 0.999
 #define ALPHA 1e-9
 #define INITIAL_MAX_STD 1.5
-#define FINAL_MAX_STD 1e-5
+#define FINAL_MAX_STD 1e-6
 #define MIN_STD 1e-6
 #define MAXIMUM_LEARNING_RATE 1e-4
 #define MINIMUM_LEARNING_RATE 1e-8
