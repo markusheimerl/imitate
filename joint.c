@@ -306,7 +306,7 @@ int main(int argc, char** argv) {
                                 PROT_READ | PROT_WRITE,
                                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     
-    SharedNet* shared_nets = mmap(NULL, (NUM_PROCESSES + 1) * SHARED_NET_SIZE,
+    SharedNet* shared_nets = mmap(NULL, NUM_PROCESSES * sizeof(SharedNet),
                                 PROT_READ | PROT_WRITE,
                                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
@@ -326,16 +326,19 @@ int main(int argc, char** argv) {
     
     if(!initial_net) {
         munmap(results, NUM_PROCESSES * sizeof(ProcessResult));
-        munmap(shared_nets, (NUM_PROCESSES + 1) * sizeof(SharedNet));
+        munmap(shared_nets, NUM_PROCESSES * sizeof(SharedNet));
         return 1;
     }
     
-    net_to_shared(initial_net, &shared_nets[NUM_PROCESSES]);
+    // Initialize all networks with the same weights
+    for(int i = 0; i < NUM_PROCESSES; i++) {
+        net_to_shared(initial_net, &shared_nets[i]);
+    }
     free_net(initial_net);
     
-    double best_return = -1e30;
+    double best_return_ever = -1e30;
     double initial_best = -1e30;
-    SharedNet best_net;
+    SharedNet archive_net;  // Archive of best-ever solution
     
     struct timeval start_time, end_time;
     gettimeofday(&start_time, NULL);
@@ -344,19 +347,24 @@ int main(int argc, char** argv) {
     double current_lr = MINIMUM_LEARNING_RATE;
     double current_max_std = INITIAL_MAX_STD;
     int generations = atoi(argv[1]);
+    
     for(int gen = 0; gen < generations; gen++) {
         printf("\nGeneration %d/%d (lr: %.2e, std: %.2f)\n", 
                gen + 1, generations, current_lr, current_max_std);
         
+        // Sort results to identify µ elite networks
         ProcessResult sorted_results[NUM_PROCESSES];
         memcpy(sorted_results, results, NUM_PROCESSES * sizeof(ProcessResult));
         qsort(sorted_results, NUM_PROCESSES, sizeof(ProcessResult), compare_results);
         
-        int best_idx = 0;
+        // Find indices of µ elite networks
+        int elite_indices[ELITE_COUNT] = {-1, -1};
         if(gen > 0) {
             for(int i = 0; i < NUM_PROCESSES; i++) {
-                if(results[i].mean_return > results[best_idx].mean_return) {
-                    best_idx = i;
+                if(results[i].mean_return >= sorted_results[0].mean_return) {
+                    elite_indices[0] = i;
+                } else if(results[i].mean_return >= sorted_results[1].mean_return) {
+                    elite_indices[1] = i;
                 }
             }
         }
@@ -367,15 +375,26 @@ int main(int argc, char** argv) {
                 
                 Net* net;
                 if(gen == 0) {
-                    net = shared_to_net(&shared_nets[NUM_PROCESSES]);
+                    net = shared_to_net(&shared_nets[i]);
                 } else {
-                    if(results[i].mean_return >= sorted_results[1].mean_return) {
+                    // Check if current network is in µ elite set
+                    bool is_elite = false;
+                    for(int e = 0; e < ELITE_COUNT; e++) {
+                        if(i == elite_indices[e]) {
+                            is_elite = true;
+                            break;
+                        }
+                    }
+                    
+                    if(is_elite) {
+                        // Elite solutions preserved unchanged
                         net = shared_to_net(&shared_nets[i]);
                     } else {
-                        net = shared_to_net(&shared_nets[NUM_PROCESSES]);
-                        Net* mutation = shared_to_net(&best_net);
-                        interpolate_weights(net, mutation, 0.5);
-                        free_net(mutation);
+                        // λ offspring: Maintain local trajectory with archive interpolation
+                        net = shared_to_net(&shared_nets[i]);
+                        Net* archive = shared_to_net(&archive_net);
+                        interpolate_weights(net, archive, 0.5);
+                        free_net(archive);
                     }
                 }
                 
@@ -443,44 +462,46 @@ int main(int argc, char** argv) {
             wait(NULL);
         }
         
+        // Find best network of this generation
+        int best_idx = 0;
         for(int i = 0; i < NUM_PROCESSES; i++) {
             if(results[i].mean_return > results[best_idx].mean_return) {
                 best_idx = i;
             }
         }
         
-        if(results[best_idx].mean_return > best_return) {
-            best_return = results[best_idx].mean_return;
-            memcpy(&best_net, &shared_nets[best_idx], sizeof(SharedNet));
+        // Update archive if we found a better solution
+        if(results[best_idx].mean_return > best_return_ever) {
+            best_return_ever = results[best_idx].mean_return;
+            memcpy(&archive_net, &shared_nets[best_idx], sizeof(SharedNet));
         }
         
         if(gen == 0) {
-            initial_best = best_return;
+            initial_best = best_return_ever;
         }
-        
-        memcpy(&shared_nets[NUM_PROCESSES], &shared_nets[best_idx], sizeof(SharedNet));
         
         gettimeofday(&end_time, NULL);
         double seconds_elapsed = (end_time.tv_sec - start_time.tv_sec) + 
                                (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
         
-        double performance_ratio = best_return/theoretical_max;
+        double performance_ratio = best_return_ever/theoretical_max;
 
         double initial_percentage = (initial_best / theoretical_max) * 100.0;
-        double current_percentage = (best_return / theoretical_max) * 100.0;
+        double current_percentage = (best_return_ever / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / seconds_elapsed;
         current_lr = MAXIMUM_LEARNING_RATE * (1.0 - results[best_idx].mean_return/theoretical_max) + MINIMUM_LEARNING_RATE;
         current_max_std = INITIAL_MAX_STD * (1.0 - results[best_idx].mean_return/theoretical_max) + FINAL_MAX_STD;
 
         printf("\nGeneration Results:\n");
         printf("Best Ever: %.2f / %.2f (%.1f%%) -> %.3f %%/s (lr: %.2e, std: %.2f)\n", 
-               best_return, theoretical_max, performance_ratio * 100.0, percentage_rate,
+               best_return_ever, theoretical_max, performance_ratio * 100.0, percentage_rate,
                current_lr, current_max_std);
         
         for(int i = 0; i < NUM_PROCESSES; i++) {
-            printf("Agent %d: %.2f ± %.2f%s\n", i, 
+            printf("Agent %d: %.2f ± %.2f%s%s\n", i, 
                    results[i].mean_return, results[i].std_return,
-                   i == best_idx ? " *" : "");
+                   i == best_idx ? " *" : "",
+                   (i == elite_indices[0] || i == elite_indices[1]) ? " (µ)" : "");
         }
     }
     
@@ -488,7 +509,7 @@ int main(int argc, char** argv) {
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
              localtime(&(time_t){time(NULL)}));
     
-    Net* final_net = shared_to_net(&best_net);
+    Net* final_net = shared_to_net(&archive_net);
     save_weights(final_weights, final_net);
     
     gettimeofday(&end_time, NULL);
@@ -499,6 +520,6 @@ int main(int argc, char** argv) {
     
     free_net(final_net);
     munmap(results, NUM_PROCESSES * sizeof(ProcessResult));
-    munmap(shared_nets, (NUM_PROCESSES + 1) * sizeof(SharedNet));
+    munmap(shared_nets, NUM_PROCESSES * sizeof(SharedNet));
     return 0;
 }
