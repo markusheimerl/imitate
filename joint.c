@@ -26,7 +26,6 @@
 #define ELITE_COUNT 2
 
 #define GAMMA 0.999
-#define ALPHA 0.001
 #define MAX_STD 3.0
 #define MIN_STD 0.0001
 
@@ -267,16 +266,15 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             
             double z = (actions[t][i] - mean) / std;
             double log_prob = -0.5 * (1.8378770664093453 + 2.0 * log(std) + z * z);
-            double entropy = 0.5 * (2.837877066 + 2.0 * log(std));
             
             double dmean = z / std;
-            grad[4][i] = (returns[t] * log_prob + ALPHA * entropy) * dmean * dsquash(act[4][i], mean_min, mean_max);
+            grad[4][i] = (returns[t] * log_prob) * dmean * dsquash(act[4][i], mean_min, mean_max);
             
             double dstd_direct = (z * z - 1.0) / std;
             double dmean_dstd = -4.0 * dsquash(act[4][i], mean_min, mean_max);
             double dstd = dstd_direct + (z / std) * dmean_dstd;
             
-            grad[4][i + 4] = (returns[t] * log_prob * dstd + ALPHA * (1.0 / std)) * dsquash(act[4][i + 4], MIN_STD, MAX_STD);
+            grad[4][i + 4] = (returns[t] * log_prob * dstd) * dsquash(act[4][i + 4], MIN_STD, MAX_STD);
         }
         
         bwd(policy, act, grad);
@@ -344,7 +342,7 @@ int main(int argc, char** argv) {
         
         int best_idx = 0;
         if(gen > 0) {
-            for(int i = 1; i < NUM_PROCESSES; i++) {
+            for(int i = 0; i < NUM_PROCESSES; i++) {
                 if(results[i].mean_return > results[best_idx].mean_return) {
                     best_idx = i;
                 }
@@ -406,8 +404,6 @@ int main(int argc, char** argv) {
                     
                     for(int r = 0; r < NUM_ROLLOUTS; r++) 
                         update_policy(net, states[r], actions[r], rewards[r], steps[r], act, grad);
-
-                    net->lr *= 0.99;
                 }
                 
                 results[i].mean_return = sum_returns / NUM_ROLLOUTS;
@@ -415,7 +411,6 @@ int main(int argc, char** argv) {
                                           pow(sum_returns/NUM_ROLLOUTS, 2));
                 net_to_shared(net, &shared_nets[i]);
                 
-                // Cleanup
                 for(int r = 0; r < NUM_ROLLOUTS; r++) {
                     for(int i = 0; i < MAX_STEPS; i++) {
                         free(states[r][i]);
@@ -436,7 +431,7 @@ int main(int argc, char** argv) {
             wait(NULL);
         }
         
-        for(int i = 1; i < NUM_PROCESSES; i++) {
+        for(int i = 0; i < NUM_PROCESSES; i++) {
             if(results[i].mean_return > results[best_idx].mean_return) {
                 best_idx = i;
             }
