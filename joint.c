@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
         
         int best_idx = 0;
         if(gen > 0) {
-            for(int i = 1; i < NUM_PROCESSES; i++) {
+            for(int i = 0; i < NUM_PROCESSES; i++) {
                 if(results[i].mean_return > results[best_idx].mean_return) {
                     best_idx = i;
                 }
@@ -443,7 +443,7 @@ int main(int argc, char** argv) {
             wait(NULL);
         }
         
-        for(int i = 1; i < NUM_PROCESSES; i++) {
+        for(int i = 0; i < NUM_PROCESSES; i++) {
             if(results[i].mean_return > results[best_idx].mean_return) {
                 best_idx = i;
             }
