@@ -469,8 +469,8 @@ int main(int argc, char** argv) {
         double initial_percentage = (initial_best / theoretical_max) * 100.0;
         double current_percentage = (best_return / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / seconds_elapsed;
-        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
-        current_max_std = INITIAL_MAX_STD * (1.0 - performance_ratio) + FINAL_MAX_STD;
+        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - results[best_idx].mean_return/theoretical_max) + MINIMUM_LEARNING_RATE;
+        current_max_std = INITIAL_MAX_STD * (1.0 - results[best_idx].mean_return/theoretical_max) + FINAL_MAX_STD;
 
         printf("\nGeneration Results:\n");
         printf("Best Ever: %.2f / %.2f (%.1f%%) -> %.3f %%/s (lr: %.2e, std: %.2f)\n", 
