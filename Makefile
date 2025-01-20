@@ -18,6 +18,9 @@ orchestrate.out: orchestrate.c
 joint.out: joint.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
+sep.out: sep.c
+	$(CC) $(CFLAGS) -fopenmp $^ -lm -o $@
+
 run: orchestrate.out reinforce.out
 	./orchestrate.out 10
 
