@@ -25,7 +25,7 @@
 #define NUM_PROCESSES 8
 #define ELITE_COUNT 2
 
-#define GAMMA 0.999
+#define GAMMA 0.99
 #define ALPHA 0.01
 #define MAX_STD 4.0
 #define MIN_STD 0.01
