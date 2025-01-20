@@ -29,7 +29,7 @@
 #define ALPHA 0.001
 #define MAX_STD 3.0
 #define MIN_STD 0.0001
-#define STARTING_LEARNING_RATE 1e-4
+#define MAXIMUM_LEARNING_RATE 1e-4
 #define MINIMUM_LEARNING_RATE 1e-8
 
 #define SHARED_NET_SIZE (sizeof(SharedNet))
@@ -340,7 +340,7 @@ int main(int argc, char** argv) {
     gettimeofday(&start_time, NULL);
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
 
-    double current_lr = STARTING_LEARNING_RATE;
+    double current_lr = MINIMUM_LEARNING_RATE;
     int generations = atoi(argv[1]);
     for(int gen = 0; gen < generations; gen++) {
         printf("\nGeneration %d/%d (lr: %.2e)\n", gen + 1, generations, current_lr);
@@ -459,7 +459,7 @@ int main(int argc, char** argv) {
         
         printf("\nGeneration Results:\n");
         double performance_ratio = best_return/theoretical_max;
-        current_lr = STARTING_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
+        current_lr = MAXIMUM_LEARNING_RATE * (1.0 - performance_ratio) + MINIMUM_LEARNING_RATE;
         printf("Best Ever: %.2f / %.2f (%.1f%%)\n", 
                best_return, theoretical_max, performance_ratio * 100.0);
         for(int i = 0; i < NUM_PROCESSES; i++) {
