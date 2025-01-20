@@ -448,7 +448,8 @@ int main(int argc, char** argv) {
         memcpy(&shared_nets[NUM_PROCESSES], &shared_nets[best_idx], sizeof(SharedNet));
         
         printf("\nGeneration Results:\n");
-        printf("Best Ever: %.2f\n", best_return);
+        double theoretical_max = (1.0 - pow(GAMMA, MAX_STEPS))/(1.0 - GAMMA);
+        printf("Best Ever: %.2f / %.2f (%.1f%%)\n", best_return, theoretical_max, (best_return/theoretical_max) * 100.0);
         for(int i = 0; i < NUM_PROCESSES; i++) {
             printf("Agent %d: %.2f ± %.2f%s\n", i, 
                    results[i].mean_return, results[i].std_return,
