@@ -15,13 +15,13 @@
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
-#define STATE_DIM 12
+#define STATE_DIM 15  // Changed from 12 to 15 to include target position
 #define HIDDEN_DIM 64
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 40
-#define NUM_ITERATIONS 8
+#define NUM_ROLLOUTS 5
+#define NUM_ITERATIONS 3
 #define NUM_PROCESSES 8
 #define ELITE_COUNT 2
 
@@ -32,7 +32,8 @@
 
 #define SHARED_NET_SIZE (sizeof(SharedNet))
 
-const double TARGET_POS[3] = {0.0, 1.0, 0.0};
+#define TARGET_RANGE 2.0  // Maximum distance from origin for random targets
+#define MIN_HEIGHT 0.5    // Minimum height for targets
 
 typedef struct {
     double mean_return;
@@ -55,19 +56,21 @@ typedef struct {
     int total_optim_data;
 } SharedNet;
 
-void get_state(Quad* q, double* state) {
+void get_state(Quad* q, double* state, const double* target) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
     memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
     memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
     state[9] = q->R_W_B[0];
     state[10] = q->R_W_B[4];
     state[11] = q->R_W_B[8];
+    // Add target position to state
+    memcpy(state + 12, target, 3 * sizeof(double));
 }
 
-double compute_reward(Quad* q) {
+double compute_reward(Quad* q, const double* target) {
     double pos_error = 0.0;
     for(int i = 0; i < 3; i++) {
-        pos_error += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
+        pos_error += pow(q->linear_position_W[i] - target[i], 2);
     }
     pos_error = sqrt(pos_error);
     
@@ -93,10 +96,10 @@ double compute_reward(Quad* q) {
     return exp(-total_error);
 }
 
-bool is_terminated(Quad* q) {
+bool is_terminated(Quad* q, const double* target) {
     double dist = 0.0, vel = 0.0, ang_vel = 0.0;
     for(int i = 0; i < 3; i++) {
-        dist += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
+        dist += pow(q->linear_position_W[i] - target[i], 2);
         vel += pow(q->linear_velocity_W[i], 2);
         ang_vel += pow(q->angular_velocity_B[i], 2);
     }
@@ -106,123 +109,29 @@ bool is_terminated(Quad* q) {
            q->R_W_B[4] < 0.0;
 }
 
-void net_to_shared(Net* net, SharedNet* shared) {
-    shared->n_layers = net->n + 1;
-    if(shared->n_layers > 10) {
-        fprintf(stderr, "Too many layers\n");
-        exit(1);
-    }
-    
-    memcpy(shared->layer_sizes, net->sz, shared->n_layers * sizeof(int));
-    shared->learning_rate = net->lr;
-    shared->step = net->step;
-    
-    int w_offset = 0, b_offset = 0, o_offset = 0;
-    for(int i = 0; i < net->n; i++) {
-        int in = net->sz[i], out = net->sz[i+1];
-        
-        // Add size checks
-        if(w_offset + in * out > 100000 || 
-           b_offset + out > 1000 || 
-           o_offset + (in * out + out) * net->optimizer.aux_doubles_per_param > 100000) {
-            fprintf(stderr, "Network too large for shared memory\n");
-            exit(1);
-        }
-        
-        shared->weight_offsets[i] = w_offset;
-        shared->bias_offsets[i] = b_offset;
-        shared->optim_offsets[i] = o_offset;
-        
-        memcpy(&shared->weights[w_offset], net->w[i], in * out * sizeof(double));
-        memcpy(&shared->biases[b_offset], net->b[i], out * sizeof(double));
-        
-        int optim_size = (in * out + out) * net->optimizer.aux_doubles_per_param;
-        if(optim_size > 0) {
-            memcpy(&shared->optimizer_data[o_offset], net->o_data[i], 
-                   optim_size * sizeof(double));
-        }
-        
-        w_offset += in * out;
-        b_offset += out;
-        o_offset += optim_size;
-    }
-    shared->total_weights = w_offset;
-    shared->total_biases = b_offset;
-    shared->total_optim_data = o_offset;
-}
-
-Net* shared_to_net(SharedNet* shared) {
-    if(shared->n_layers > 10) {
-        fprintf(stderr, "Too many layers\n");
-        return NULL;
-    }
-    
-    Net* net = init_net(shared->n_layers, shared->layer_sizes, adamw);
-    if(!net) return NULL;
-    
-    net->lr = shared->learning_rate;
-    net->step = shared->step;
-    
-    for(int i = 0; i < net->n; i++) {
-        int in = net->sz[i], out = net->sz[i+1];
-        
-        if(shared->weight_offsets[i] + in * out > 100000 || 
-           shared->bias_offsets[i] + out > 1000 || 
-           shared->optim_offsets[i] + (in * out + out) * net->optimizer.aux_doubles_per_param > 100000) {
-            fprintf(stderr, "Network too large for shared memory\n");
-            free_net(net);
-            return NULL;
-        }
-        
-        memcpy(net->w[i], &shared->weights[shared->weight_offsets[i]], 
-               in * out * sizeof(double));
-        memcpy(net->b[i], &shared->biases[shared->bias_offsets[i]], 
-               out * sizeof(double));
-        
-        int optim_size = (in * out + out) * net->optimizer.aux_doubles_per_param;
-        if(optim_size > 0) {
-            memcpy(net->o_data[i], &shared->optimizer_data[shared->optim_offsets[i]], 
-                   optim_size * sizeof(double));
-        }
-    }
-    return net;
-}
-
-void interpolate_weights(Net* net, Net* elite, double alpha) {
-    for(int i = 0; i < net->n; i++) {
-        int in = net->sz[i], out = net->sz[i+1];
-        int optim_size = (in * out + out) * net->optimizer.aux_doubles_per_param;
-    
-        for(int j = 0; j < in*out; j++) {
-            net->w[i][j] = alpha * net->w[i][j] + (1.0 - alpha) * elite->w[i][j];
-        }
-        for(int j = 0; j < out; j++) {
-            net->b[i][j] = alpha * net->b[i][j] + (1.0 - alpha) * elite->b[i][j];
-        }
-        
-        if(optim_size > 0) {
-            memset(net->o_data[i], 0, optim_size * sizeof(double));
-        }
-    }
-    net->step = 1;
-}
-
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
+    // Generate random target
+    double target[3] = {
+        ((double)rand()/RAND_MAX - 0.5) * 2.0 * TARGET_RANGE,
+        MIN_HEIGHT + (double)rand()/RAND_MAX * (TARGET_RANGE - MIN_HEIGHT),
+        ((double)rand()/RAND_MAX - 0.5) * 2.0 * TARGET_RANGE
+    };
+    
     reset_quad(sim->quad, 
-        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
-        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
-        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
+        ((double)rand()/RAND_MAX - 0.5) * 0.4,
+        ((double)rand()/RAND_MAX - 0.5) * 0.4 + 0.5, 
+        ((double)rand()/RAND_MAX - 0.5) * 0.4
     );
     
     double t_physics = 0.0, t_control = 0.0;
     int steps = 0;
     
-    while(steps < MAX_STEPS && !is_terminated(sim->quad)) {
+    while(steps < MAX_STEPS && !is_terminated(sim->quad, target)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, states[steps]);
+            get_state(sim->quad, states[steps], target);
             fwd(policy, states[steps], act);
             
             for(int i = 0; i < 4; i++) {
@@ -240,7 +149,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
                 sim->quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(sim->quad);
+            rewards[steps] = compute_reward(sim->quad, target);
             steps++;
             t_control += DT_CONTROL;
         }
@@ -291,6 +200,84 @@ int compare_results(const void* a, const void* b) {
     return 0;
 }
 
+void net_to_shared(Net* net, SharedNet* shared) {
+    shared->n_layers = net->n + 1;
+    memcpy(shared->layer_sizes, net->sz, (net->n + 1) * sizeof(int));
+    shared->learning_rate = net->lr;
+    shared->step = net->step;
+    
+    int w_offset = 0, b_offset = 0, o_offset = 0;
+    for(int i = 0; i < net->n; i++) {
+        int n_weights = net->sz[i] * net->sz[i+1];
+        int n_biases = net->sz[i+1];
+        int n_optim = (n_weights + n_biases) * net->optimizer.aux_doubles_per_param;
+        
+        shared->weight_offsets[i] = w_offset;
+        shared->bias_offsets[i] = b_offset;
+        shared->optim_offsets[i] = o_offset;
+        
+        memcpy(&shared->weights[w_offset], net->w[i], n_weights * sizeof(double));
+        memcpy(&shared->biases[b_offset], net->b[i], n_biases * sizeof(double));
+        if(n_optim > 0) {
+            memcpy(&shared->optimizer_data[o_offset], net->o_data[i], 
+                   n_optim * sizeof(double));
+        }
+        
+        w_offset += n_weights;
+        b_offset += n_biases;
+        o_offset += n_optim;
+    }
+    
+    shared->total_weights = w_offset;
+    shared->total_biases = b_offset;
+    shared->total_optim_data = o_offset;
+}
+
+Net* shared_to_net(SharedNet* shared) {
+    Net* net = init_net(shared->n_layers, shared->layer_sizes, adamw);
+    if(!net) return NULL;
+    
+    net->lr = shared->learning_rate;
+    net->step = shared->step;
+    
+    for(int i = 0; i < net->n; i++) {
+        int n_weights = net->sz[i] * net->sz[i+1];
+        int n_biases = net->sz[i+1];
+        int n_optim = (n_weights + n_biases) * net->optimizer.aux_doubles_per_param;
+        
+        memcpy(net->w[i], &shared->weights[shared->weight_offsets[i]], 
+               n_weights * sizeof(double));
+        memcpy(net->b[i], &shared->biases[shared->bias_offsets[i]], 
+               n_biases * sizeof(double));
+        if(n_optim > 0) {
+            memcpy(net->o_data[i], &shared->optimizer_data[shared->optim_offsets[i]], 
+                   n_optim * sizeof(double));
+        }
+    }
+    return net;
+}
+
+void interpolate_weights(Net* net, Net* elite, double alpha) {
+    for(int i = 0; i < net->n; i++) {
+        int n_weights = net->sz[i] * net->sz[i+1];
+        int n_biases = net->sz[i+1];
+        
+        for(int j = 0; j < n_weights; j++) {
+            net->w[i][j] = alpha * net->w[i][j] + (1.0 - alpha) * elite->w[i][j];
+        }
+        for(int j = 0; j < n_biases; j++) {
+            net->b[i][j] = alpha * net->b[i][j] + (1.0 - alpha) * elite->b[i][j];
+        }
+        
+        // Reset optimizer state
+        int n_optim = (n_weights + n_biases) * net->optimizer.aux_doubles_per_param;
+        if(n_optim > 0) {
+            memset(net->o_data[i], 0, n_optim * sizeof(double));
+        }
+    }
+    net->step = 1;
+}
+
 int main(int argc, char** argv) {
     if(argc != 2 && argc != 3) {
         printf("Usage: %s <num_generations> [initial_weights.bin]\n", argv[0]);
@@ -317,7 +304,7 @@ int main(int argc, char** argv) {
     if(argc == 3) {
         initial_net = load_weights(argv[2], adamw);
     } else {
-        int layers[] = {12, 64, 64, 64, 8};
+        int layers[] = {15, 128, 128, 64, 8};  // Changed input layer size from 12 to 15
         initial_net = init_net(5, layers, adamw);
     }
     
@@ -457,20 +444,17 @@ int main(int argc, char** argv) {
                    i == best_idx ? " *" : "");
         }
 
-        // Adjust learning rate based on performance
-        int offset = 20;
-        int denom_offset = offset * 0.25;  // 25% of the threshold offset
-
-        if (results[best_idx].mean_return < (50 + offset)) {
+        // Adaptive learning rate schedule
+        if (results[best_idx].mean_return < 70) {
             current_lr = 1e-4;
-        } else if (results[best_idx].mean_return < (80 + offset)) {
-            current_lr = 1e-4 * pow(0.5, (results[best_idx].mean_return - (50 + offset)) / (15 + denom_offset));
-        } else if (results[best_idx].mean_return < (150 + offset)) {
-            current_lr = 1e-5 * pow(0.5, (results[best_idx].mean_return - (80 + offset)) / (35 + denom_offset));
-        } else if (results[best_idx].mean_return < (200 + offset)) {
-            current_lr = 5e-6 * pow(0.5, (results[best_idx].mean_return - (150 + offset)) / (25 + denom_offset));
+        } else if (results[best_idx].mean_return < 100) {
+            current_lr = 5e-5;
+        } else if (results[best_idx].mean_return < 150) {
+            current_lr = 2e-5;
+        } else if (results[best_idx].mean_return < 200) {
+            current_lr = 1e-5;
         } else {
-            current_lr = 2e-6;
+            current_lr = 5e-6;
         }
     }
     
