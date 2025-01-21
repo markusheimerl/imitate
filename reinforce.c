@@ -210,87 +210,108 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
 }
 
 int main(int argc, char** argv) {
-    srand(time(NULL) ^ getpid());
-    
-    int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
-    Net* policy = init_net(5, layers, adamw);
-    if(!policy) return 1;
-    if(argc > 1) {
-        Net* loaded = load_weights(argv[1], adamw);
-        if(loaded) {
-            free_net(policy);
-            policy = loaded;
-        }
-    }
-    policy->lr = 1e-4;
-    
-    Sim* sim = init_sim("", false);
-    
-    double** act = malloc(5 * sizeof(double*));
-    double** grad = malloc(5 * sizeof(double*));
-    double*** states = malloc(NUM_ROLLOUTS * sizeof(double**));
-    double*** actions = malloc(NUM_ROLLOUTS * sizeof(double**));
-    double** rewards = malloc(NUM_ROLLOUTS * sizeof(double*));
-    int* steps = malloc(NUM_ROLLOUTS * sizeof(int));
-    
-    for(int i = 0; i < 5; i++) {
-        act[i] = malloc(policy->sz[i] * sizeof(double));
-        grad[i] = calloc(policy->sz[i], sizeof(double));
-    }
-    
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        states[r] = malloc(MAX_STEPS * sizeof(double*));
-        actions[r] = malloc(MAX_STEPS * sizeof(double*));
-        rewards[r] = malloc(MAX_STEPS * sizeof(double));
-        for(int i = 0; i < MAX_STEPS; i++) {
-            states[r][i] = malloc(STATE_DIM * sizeof(double));
-            actions[r][i] = malloc(4 * sizeof(double));
-        }
+    if(argc != 2 && argc != 3) {
+        printf("Usage: %s <num_iterations> [initial_weights.bin]\n", argv[0]);
+        return 1;
     }
 
-    for(int iter = 1; iter <= NUM_ITERATIONS; iter++) {
-        double sum_returns = 0.0, sum_squared = 0.0;
-        double min_return = 1e9, max_return = -1e9;
-        
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            steps[r] = collect_rollout(sim, policy, act, states[r], actions[r], rewards[r]);
-            double ret = rewards[r][0];
-            
-            sum_returns += ret;
-            sum_squared += ret * ret;
-            min_return = fmin(min_return, ret);
-            max_return = fmax(max_return, ret);
-        }
-        
-        for(int r = 0; r < NUM_ROLLOUTS; r++) 
-            update_policy(policy, states[r], actions[r], rewards[r], steps[r], act, grad);
-        
-        printf("Iteration %d/%d [n=%d]: %.2f ± %.2f (min: %.2f, max: %.2f)\n", 
-               iter, NUM_ITERATIONS, NUM_ROLLOUTS, 
-               sum_returns / NUM_ROLLOUTS,
-               sqrt(sum_squared/NUM_ROLLOUTS - pow(sum_returns/NUM_ROLLOUTS, 2)),
-               min_return, max_return);
-    }
+    srand(time(NULL));
     
-    if(argc > 1) {
-        save_weights(argv[1], policy);  // Save back to the same file
+    Net* net;
+    if(argc == 3) {
+        net = load_weights(argv[2], adamw);
     } else {
-        char filename[64];
-        strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", 
-                localtime(&(time_t){time(NULL)}));
-        save_weights(filename, policy);
+        int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
+        net = init_net(5, layers, adamw);
     }
+    net->lr = 1e-4;
     
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        for(int i = 0; i < MAX_STEPS; i++) {
-            free(states[r][i]);
-            free(actions[r][i]);
+    Sim* sim = init_sim("", false);
+    double** act = malloc(5 * sizeof(double*));
+    double** grad = malloc(5 * sizeof(double*));
+    
+    for(int i = 0; i < 5; i++) {
+        act[i] = malloc(net->sz[i] * sizeof(double));
+        grad[i] = calloc(net->sz[i], sizeof(double));
+    }
+
+    int iterations = atoi(argv[1]);
+    double best_return = -1e30;
+    double initial_best = -1e30;
+    struct timeval start_time, current_time;
+    gettimeofday(&start_time, NULL);
+    
+    // Calculate theoretical maximum return
+    double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
+    
+    for(int iter = 0; iter < iterations; iter++) {
+        double sum_returns = 0.0;
+        int total_steps = 0;
+
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            double* states[MAX_STEPS];
+            double* actions[MAX_STEPS];
+            double rewards[MAX_STEPS];
+            
+            for(int i = 0; i < MAX_STEPS; i++) {
+                states[i] = malloc(STATE_DIM * sizeof(double));
+                actions[i] = malloc(4 * sizeof(double));
+            }
+
+            int steps = collect_rollout(sim, net, act, states, actions, rewards);
+            sum_returns += rewards[0];
+            total_steps += steps;
+
+            update_policy(net, states, actions, rewards, steps, act, grad);
+
+            for(int i = 0; i < MAX_STEPS; i++) {
+                free(states[i]);
+                free(actions[i]);
+            }
         }
-        free(states[r]); free(actions[r]); free(rewards[r]);
+
+        double mean_return = sum_returns / NUM_ROLLOUTS;
+        if(mean_return > best_return) {
+            best_return = mean_return;
+            save_weights("best_policy.bin", net);
+        }
+
+        if(iter == 0) {
+            initial_best = best_return;
+        }
+
+        gettimeofday(&current_time, NULL);
+        double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
+                        (current_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        
+        double performance_ratio = best_return/theoretical_max;
+        double initial_percentage = (initial_best / theoretical_max) * 100.0;
+        double current_percentage = (best_return / theoretical_max) * 100.0;
+        double percentage_rate = (current_percentage - initial_percentage) / elapsed;
+
+        printf("\rIter %d/%d | Return: %.2f / %.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s | lr: %.2e", 
+               iter+1, iterations, mean_return, theoretical_max, 
+               (mean_return/theoretical_max) * 100.0, best_return, percentage_rate,
+               net->lr);
+        fflush(stdout);
     }
-    
-    for(int i = 0; i < 5; i++) free(act[i]), free(grad[i]);
-    free(states); free(actions); free(rewards); free(steps);
-    free(act); free(grad); free_net(policy); free_sim(sim);
+    printf("\n");
+
+    char final_weights[64];
+    strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
+             localtime(&(time_t){time(NULL)}));
+    save_weights(final_weights, net);
+    printf("Final weights saved to: %s\n", final_weights);
+
+    // Cleanup
+    for(int i = 0; i < 5; i++) {
+        free(act[i]);
+        free(grad[i]);
+    }
+    free(act);
+    free(grad);
+    free_net(net);
+    free_sim(sim);
+
     return 0;
 }
