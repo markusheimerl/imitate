@@ -271,10 +271,6 @@ int main(int argc, char** argv) {
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
-        if(mean_return > best_return) {
-            best_return = mean_return;
-            save_weights("best_policy.bin", net);
-        }
 
         if(iter == 0) {
             initial_best = best_return;
