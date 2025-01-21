@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    srand(time(NULL));
+    srand(time(NULL) ^ getpid());
     
     Net* net;
     if(argc == 3) {
