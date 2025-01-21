@@ -122,7 +122,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
     return steps;
 }
 
-// ∇J(θ) = E[∇log π_θ(a|s) * R] - REINFORCE algorithm
+// ∇J(θ) = E[∇log π_θ(a|s) * R] ≈ (1/N) Σᵢ[∇log π_θ(aᵢ|sᵢ) * Rᵢ] - REINFORCE algorithm
 // where π_θ(a|s) is a Gaussian policy with state-dependent mean μ(s) and std σ(s)
 void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, 
                   double** act, double** grad) {
