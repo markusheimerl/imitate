@@ -22,7 +22,7 @@
 
 // Training parameters
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 50
+#define NUM_ROLLOUTS 64
 
 // RL and policy parameters
 #define GAMMA 0.999              // Discount factor for future rewards
@@ -31,7 +31,6 @@
 #define MIN_STD 1e-5            // Minimum policy standard deviation
 #define TARGET_KL 1e-3          // Target KL divergence between old and new policy
 #define KL_PENALTY_COEFFICIENT 1e-5  // Coefficient for KL penalty when exceeding target
-#define MAX_LR 2e-3            // Maximum learning rate
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};  // Target hover position
 
@@ -228,10 +227,7 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double entropy = 0.5 * (2.837877066 + 2.0 * log(std));
             
             // Add KL penalty if divergence exceeds target
-            double kl_penalty = KL_PENALTY_COEFFICIENT * fmax(0.0, (step_kl - TARGET_KL) / TARGET_KL);
-            if (step_kl < 1e-6) {  // Add small push when KL is too low
-                kl_penalty = -KL_PENALTY_COEFFICIENT * 0.1;  // Negative penalty to encourage exploration
-            }
+            double kl_penalty = KL_PENALTY_COEFFICIENT * (step_kl - TARGET_KL) / TARGET_KL;
             
             // Policy gradient with entropy bonus and KL penalty
             // ∇_θ J = E[∇_θ log π_θ(a|s) * (R - b)]
@@ -274,7 +270,7 @@ int main(int argc, char** argv) {
         int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
         net = init_net(5, layers, adamw);
     }
-    net->lr = 5e-4;
+    net->lr = 1e-4;
     
     Sim* sim = init_sim("", false);
     double** act = malloc(5 * sizeof(double*));
@@ -333,14 +329,6 @@ int main(int argc, char** argv) {
             iter_max_kl = fmax(iter_max_kl, rollout_max_kl);
         }
         iter_mean_kl /= NUM_ROLLOUTS;
-
-        // Adapt learning rate based on mean KL across all rollouts
-        if(iter_mean_kl > 2.0 * TARGET_KL) {
-            net->lr *= 0.95;
-        } else if(iter_mean_kl < 0.5 * TARGET_KL) {
-            net->lr *= 1.02;
-        }
-        net->lr = fmax(1e-6, fmin(MAX_LR, net->lr));
 
         // Cleanup rollout data
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
