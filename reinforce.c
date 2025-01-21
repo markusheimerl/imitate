@@ -29,8 +29,9 @@
 #define ALPHA 1e-9              // Entropy bonus coefficient
 #define MAX_STD 3.0             // Maximum policy standard deviation
 #define MIN_STD 1e-5            // Minimum policy standard deviation
-#define TARGET_KL 0.01          // Target KL divergence between old and new policy
-#define KL_PENALTY_COEFFICIENT 1.0  // Coefficient for KL penalty when exceeding target
+#define TARGET_KL 1e-3          // Target KL divergence between old and new policy
+#define KL_PENALTY_COEFFICIENT 1e-5  // Coefficient for KL penalty when exceeding target
+#define MAX_LR 2e-3            // Maximum learning rate
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};  // Target hover position
 
@@ -101,11 +102,15 @@ bool is_terminated(Quad* q) {
 // KL(p||q) = log(σ_q/σ_p) + (σ_p² + (μ_p - μ_q)²)/(2σ_q²) - 1/2
 // This measures how different the new policy is from the old policy
 double compute_kl_divergence(double old_mean, double old_std, double new_mean, double new_std) {
-    double var_old = old_std * old_std;
-    double var_new = new_std * new_std;
-    return log(new_std/old_std) + 
-           (var_old + (old_mean - new_mean) * (old_mean - new_mean)) / (2.0 * var_new) - 
-           0.5;
+    const double eps = 1e-9;
+    const double max_kl = 10.0;  // Clip KL to reasonable range
+    
+    double var_old = old_std * old_std + eps;
+    double var_new = new_std * new_std + eps;
+    double kl = log(new_std/old_std) + 
+                (var_old + (old_mean - new_mean) * (old_mean - new_mean)) / (2.0 * var_new) - 
+                0.5;
+    return fmin(max_kl, fmax(-max_kl, kl));
 }
 
 // Collect a single rollout using the current policy
@@ -223,7 +228,10 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double entropy = 0.5 * (2.837877066 + 2.0 * log(std));
             
             // Add KL penalty if divergence exceeds target
-            double kl_penalty = (step_kl > TARGET_KL) ? KL_PENALTY_COEFFICIENT : 0.0;
+            double kl_penalty = KL_PENALTY_COEFFICIENT * fmax(0.0, (step_kl - TARGET_KL) / TARGET_KL);
+            if (step_kl < 1e-6) {  // Add small push when KL is too low
+                kl_penalty = -KL_PENALTY_COEFFICIENT * 0.1;  // Negative penalty to encourage exploration
+            }
             
             // Policy gradient with entropy bonus and KL penalty
             // ∇_θ J = E[∇_θ log π_θ(a|s) * (R - b)]
@@ -328,11 +336,11 @@ int main(int argc, char** argv) {
 
         // Adapt learning rate based on mean KL across all rollouts
         if(iter_mean_kl > 2.0 * TARGET_KL) {
-            net->lr *= 0.99;
+            net->lr *= 0.95;
         } else if(iter_mean_kl < 0.5 * TARGET_KL) {
-            net->lr *= 1.01;
+            net->lr *= 1.02;
         }
-        net->lr = fmax(1e-6, fmin(1e-3, net->lr));
+        net->lr = fmax(1e-6, fmin(MAX_LR, net->lr));
 
         // Cleanup rollout data
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
@@ -362,11 +370,10 @@ int main(int argc, char** argv) {
         double percentage_rate = (current_percentage - initial_percentage) / elapsed;
 
         // Display progress
-        printf("\rIter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | KL: %.4f/%.4f | Rate: %.3f %%/s | lr: %.2e", 
+        printf("Iter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | KL: %.4f/%.4f | Rate: %.3f %%/s | lr: %.2e\n", 
                iter+1, iterations, mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
                iter_mean_kl, iter_max_kl, percentage_rate, net->lr);
-        fflush(stdout);
     }
     printf("\n");
 
