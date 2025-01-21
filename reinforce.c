@@ -20,11 +20,10 @@
 #define NUM_ROLLOUTS 50
 #define NUM_ITERATIONS 10
 
-// Hyperparameters
 #define GAMMA 0.999
-#define ALPHA 0.001
+#define ALPHA 1e-9
 #define MAX_STD 3.0
-#define MIN_STD 0.0001
+#define MIN_STD 1e-5
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
