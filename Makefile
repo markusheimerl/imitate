@@ -12,17 +12,8 @@ visualize.out: visualize.c
 reinforce.out: reinforce.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-orchestrate.out: orchestrate.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-joint.out: joint.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-sep.out: sep.c
-	$(CC) $(CFLAGS) -fopenmp $^ -lm -flto -o $@
-
-run: orchestrate.out reinforce.out
-	./orchestrate.out 10
+run: reinforce.out
+	./reinforce.out 1000
 
 clean:
 	rm -f *.out *.bin *.gif
