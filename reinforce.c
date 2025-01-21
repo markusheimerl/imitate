@@ -92,8 +92,8 @@ bool is_terminated(Quad* q, double* target_pos) {
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
-    double start_pos[3] = {0, 1, 0};
-    double target_pos[3] = {0, 1, 0};
+    double start_pos[3];
+    double target_pos[3];
 
     get_random_position(start_pos, (double[3]){0, 1, 0}, TASK_RADIUS);
     get_random_position(target_pos, start_pos, TASK_RADIUS);
