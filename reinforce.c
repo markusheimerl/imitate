@@ -13,7 +13,7 @@
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
-#define STATE_DIM 12
+#define STATE_DIM 15
 #define HIDDEN_DIM 64
 #define ACTION_DIM 8
 
@@ -24,21 +24,37 @@
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-const double TARGET_POS[3] = {0.0, 1.0, 0.0};
+#define TASK_RADIUS 1.0
+#define MIN_HEIGHT 0.5
+#define MAX_HEIGHT 1.5
 
-void get_state(Quad* q, double* state) {
+void get_random_position(double pos[3], double center[3], double radius) {
+    double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
+    double phi = acos(2.0 * ((double)rand()/RAND_MAX) - 1.0);
+    double r = radius * ((double)rand()/RAND_MAX);
+
+    pos[0] = center[0] + r * sin(phi) * cos(theta);
+    pos[1] = center[1] + r * sin(phi) * sin(theta);
+    pos[2] = center[2] + r * cos(phi);
+
+    pos[1] = fmax(pos[1], MIN_HEIGHT);
+    pos[1] = fmin(pos[1], MAX_HEIGHT);
+}
+
+void get_state(Quad* q, double* state, double* target_pos) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));
     memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
     memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
     state[9] = q->R_W_B[0];
     state[10] = q->R_W_B[4];
     state[11] = q->R_W_B[8];
+    memcpy(state + 12, target_pos, 3 * sizeof(double));
 }
 
-double compute_reward(Quad* q) {
+double compute_reward(Quad* q, double* target_pos) {
     double pos_error = 0.0;
     for(int i = 0; i < 3; i++) {
-        pos_error += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
+        pos_error += pow(q->linear_position_W[i] - target_pos[i], 2);
     }
     pos_error = sqrt(pos_error);
     
@@ -64,10 +80,10 @@ double compute_reward(Quad* q) {
     return exp(-total_error);
 }
 
-bool is_terminated(Quad* q) {
+bool is_terminated(Quad* q, double* target_pos) {
     double dist = 0.0, vel = 0.0, ang_vel = 0.0;
     for(int i = 0; i < 3; i++) {
-        dist += pow(q->linear_position_W[i] - TARGET_POS[i], 2);
+        dist += pow(q->linear_position_W[i] - target_pos[i], 2);
         vel += pow(q->linear_velocity_W[i], 2);
         ang_vel += pow(q->angular_velocity_B[i], 2);
     }
@@ -76,21 +92,23 @@ bool is_terminated(Quad* q) {
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
-    reset_quad(sim->quad, 
-        TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
-        TARGET_POS[1] + ((double)rand()/RAND_MAX - 0.5) * 0.2, 
-        TARGET_POS[2] + ((double)rand()/RAND_MAX - 0.5) * 0.2
-    );
+    double start_pos[3] = {0, 1, 0};
+    double target_pos[3] = {0, 1, 0};
+
+    get_random_position(start_pos, (double[3]){0, 1, 0}, TASK_RADIUS);
+    get_random_position(target_pos, start_pos, TASK_RADIUS);
+    
+    reset_quad(sim->quad, start_pos[0], start_pos[1], start_pos[2]);
     
     double t_physics = 0.0, t_control = 0.0;
     int steps = 0;
     
-    while(steps < MAX_STEPS && !is_terminated(sim->quad)) {
+    while(steps < MAX_STEPS && !is_terminated(sim->quad, target_pos)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, states[steps]);
+            get_state(sim->quad, states[steps], target_pos);
             fwd(policy, states[steps], act);
             
             for(int i = 0; i < 4; i++) {
@@ -108,7 +126,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
                 sim->quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(sim->quad);
+            rewards[steps] = compute_reward(sim->quad, target_pos);
             steps++;
             t_control += DT_CONTROL;
         }
