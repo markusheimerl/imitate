@@ -23,7 +23,6 @@
 #define GAMMA 0.999
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
-#define KL_BETA 1.0
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
@@ -76,14 +75,6 @@ bool is_terminated(Quad* q) {
            sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0;
 }
 
-double compute_kl_divergence(double old_mean, double old_std, double new_mean, double new_std) {
-    double var_old = old_std * old_std + 1e-9;
-    double var_new = new_std * new_std + 1e-9;
-    return log(new_std/old_std) + 
-                (var_old + (old_mean - new_mean) * (old_mean - new_mean)) / (2.0 * var_new) - 
-                0.5;
-}
-
 int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
     reset_quad(sim->quad, 
         TARGET_POS[0] + ((double)rand()/RAND_MAX - 0.5) * 0.2,
@@ -131,61 +122,58 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
     return steps;
 }
 
-// ∇J(θ) = E[∇log π_θ(a|s) * R] - β * ∇KL(π_old || π_θ) - REINFORCE with KL
+// ∇J(θ) = E[∇log π_θ(a|s) * R] - REINFORCE algorithm
+// where π_θ(a|s) is a Gaussian policy with state-dependent mean μ(s) and std σ(s)
 void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, 
-                  double** act, double** grad, double* mean_kl, double* max_kl) {
-    double old_means[steps][4];
-    double old_stds[steps][4];
-    double total_kl = 0.0;
-    *max_kl = 0.0;
-    
+                  double** act, double** grad) {
     for(int t = 0; t < steps; t++) {
-        fwd(policy, states[t], act);
-        for(int i = 0; i < 4; i++) {
-            old_stds[t][i] = squash(act[4][i + 4], MIN_STD, MAX_STD);
-            double safe_margin = 4.0 * old_stds[t][i];
-            double mean_min = OMEGA_MIN + safe_margin;
-            double mean_max = OMEGA_MAX - safe_margin;
-            old_means[t][i] = squash(act[4][i], mean_min, mean_max);
-        }
-    }
-
-    for(int t = 0; t < steps; t++) {
+        // Forward pass to get μ(s) and σ(s) from policy network
         fwd(policy, states[t], act);
         
-        double step_kl = 0.0;
         for(int i = 0; i < 4; i++) {
+            // 1. Transform network outputs to valid std and mean ranges
+            // σ ∈ [MIN_STD, MAX_STD] via squashing function
             double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+            
+            // Ensure actions stay within bounds with high probability (4σ = 99.994%)
+            // μ ∈ [OMEGA_MIN + 4σ, OMEGA_MAX - 4σ]
             double safe_margin = 4.0 * std;
             double mean_min = OMEGA_MIN + safe_margin;
             double mean_max = OMEGA_MAX - safe_margin;
             double mean = squash(act[4][i], mean_min, mean_max);
             
-            double kl = compute_kl_divergence(old_means[t][i], old_stds[t][i], mean, std);
-            step_kl += kl;
-
+            // 2. Normalize action to compute probability
+            // z = (a - μ)/σ where a is the actual action taken
             double z = (actions[t][i] - mean) / std;
-            double log_prob = -0.5 * (1.8378770664093453 + 2.0 * log(std) + z * z);
-            double dkl_dmean = (mean - old_means[t][i]) / (std * std);
-            double dkl_dstd = (std - old_stds[t][i] * old_stds[t][i] / std) / std;
-
-            double dmean = z / std;
-            grad[4][i] = (returns[t] * log_prob * dmean - KL_BETA * dkl_dmean) * 
-                        dsquash(act[4][i], mean_min, mean_max);
             
+            // 3. Log probability of Gaussian distribution
+            // log π(a|s) = -1/2(log(2π) + 2log(σ) + ((a-μ)/σ)²)
+            //            = -1/2(1.838... + 2log(σ) + z²)
+            double log_prob = -0.5 * (1.8378770664093453 + 2.0 * log(std) + z * z);
+
+            // 4. Gradient for mean parameter
+            // ∂log π/∂μ = (a-μ)/σ² = z/σ
+            // Chain rule through squashing: ∂log π/∂θμ = (∂log π/∂μ)(∂μ/∂θμ)
+            // where ∂μ/∂θμ = dsquash(θμ, mean_min, mean_max)
+            double dmean = z / std;
+            grad[4][i] = returns[t] * log_prob * dmean * dsquash(act[4][i], mean_min, mean_max);
+            
+            // 5. Gradient for standard deviation parameter
+            // Direct effect: ∂log π/∂σ = (z² - 1)/σ
+            // Indirect effect through mean bounds: ∂μ/∂σ = -4.0 * dsquash
+            // Total effect: ∂log π/∂σ = (z² - 1)/σ + (z/σ) * (-4.0 * dsquash)
             double dstd_direct = (z * z - 1.0) / std;
-            grad[4][i + 4] = (returns[t] * log_prob * dstd_direct - 
-                             KL_BETA * dkl_dstd) * 
-                            dsquash(act[4][i + 4], MIN_STD, MAX_STD);
+            double dmean_dstd = -4.0 * dsquash(act[4][i], mean_min, mean_max);
+            double dstd = dstd_direct + (z / std) * dmean_dstd;
+            
+            // Chain rule through squashing: ∂log π/∂θσ = (∂log π/∂σ)(∂σ/∂θσ)
+            // where ∂σ/∂θσ = dsquash(θσ, MIN_STD, MAX_STD)
+            grad[4][i + 4] = returns[t] * log_prob * dstd * dsquash(act[4][i + 4], MIN_STD, MAX_STD);
         }
 
-        total_kl += step_kl;
-        *max_kl = fmax(*max_kl, step_kl);
-
+        // Backward pass to update policy parameters via gradient ascent
         bwd(policy, act, grad);
     }
-    
-    *mean_kl = total_kl / steps;
 }
 
 int main(int argc, char** argv) {
@@ -224,8 +212,6 @@ int main(int argc, char** argv) {
     
     for(int iter = 0; iter < iterations; iter++) {
         double sum_returns = 0.0;
-        double iter_mean_kl = 0.0;
-        double iter_max_kl = 0.0;
 
         double* all_states[NUM_ROLLOUTS][MAX_STEPS];
         double* all_actions[NUM_ROLLOUTS][MAX_STEPS];
@@ -248,15 +234,9 @@ int main(int argc, char** argv) {
         }
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            double rollout_mean_kl = 0.0;
-            double rollout_max_kl = 0.0;
             update_policy(net, all_states[r], all_actions[r], 
-                         all_rewards[r], rollout_steps[r], act, grad,
-                         &rollout_mean_kl, &rollout_max_kl);
-            iter_mean_kl += rollout_mean_kl;
-            iter_max_kl = fmax(iter_max_kl, rollout_max_kl);
+                         all_rewards[r], rollout_steps[r], act, grad);
         }
-        iter_mean_kl /= NUM_ROLLOUTS;
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             for(int i = 0; i < MAX_STEPS; i++) {
@@ -282,10 +262,10 @@ int main(int argc, char** argv) {
         double current_percentage = (best_return / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / elapsed;
 
-        printf("Iter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | KL: %.4f/%.4f | Rate: %.3f %%/s | lr: %.2e\n", 
+        printf("Iter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s | lr: %.2e\n", 
                iter+1, iterations, mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
-               iter_mean_kl, iter_max_kl, percentage_rate, net->lr);
+               percentage_rate, net->lr);
     }
     printf("\n");
 
