@@ -12,11 +12,11 @@
 #define DT_RENDER (1.0/30.0)
 #define DURATION 5.0
 
-#define MAX_STD 0.5
-#define MIN_STD 0.000001
-#define TARGET_OFFSET 0.02
+#define MAX_STD 2.0
+#define MIN_STD 1e-5
+#define TARGET_OFFSET 0.2
 
-const double TARGET_POS[3] = {1.0, 1.0, 1.0};
+const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
 void get_state(Quad* q, double* state, const double* target) {
     memcpy(state, q->linear_position_W, 3 * sizeof(double));

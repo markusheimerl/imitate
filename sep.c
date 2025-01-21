@@ -19,16 +19,16 @@
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 128
+#define NUM_ROLLOUTS 64
 #define GAMMA 0.999
-#define ALPHA 1e-5
-
-#define INITIAL_MAX_STD 4.0
-#define FINAL_MAX_STD 1e-5
-#define MIN_STD 1e-6
+#define ALPHA 1e-9
+// acumulate gradients across rollouts?
+#define INITIAL_MAX_STD 3.0
+#define FINAL_MAX_STD 1e-4
+#define MIN_STD 1e-5
 #define MAXIMUM_LEARNING_RATE 1e-4
 #define MINIMUM_LEARNING_RATE 1e-8
-#define TARGET_OFFSET 0.02
+#define TARGET_OFFSET 0.0
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
