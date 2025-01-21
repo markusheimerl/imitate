@@ -18,7 +18,6 @@
 
 #define MAX_STEPS 1000
 #define NUM_ROLLOUTS 50
-#define NUM_ITERATIONS 10
 
 #define GAMMA 0.999
 #define ALPHA 1e-9
