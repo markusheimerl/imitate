@@ -227,21 +227,27 @@ int main(int argc, char** argv) {
     gettimeofday(&start_time, NULL);
     
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
+
+    // Heap allocations for large arrays
+    double*** all_states = malloc(NUM_ROLLOUTS * sizeof(double**));
+    double*** all_actions = malloc(NUM_ROLLOUTS * sizeof(double**));
+    double** all_rewards = malloc(NUM_ROLLOUTS * sizeof(double*));
+    int* rollout_steps = malloc(NUM_ROLLOUTS * sizeof(int));
+
+    // Allocate memory for each rollout
+    for(int r = 0; r < NUM_ROLLOUTS; r++) {
+        all_states[r] = malloc(MAX_STEPS * sizeof(double*));
+        all_actions[r] = malloc(MAX_STEPS * sizeof(double*));
+        all_rewards[r] = malloc(MAX_STEPS * sizeof(double));
+        
+        for(int i = 0; i < MAX_STEPS; i++) {
+            all_states[r][i] = malloc(STATE_DIM * sizeof(double));
+            all_actions[r][i] = malloc(4 * sizeof(double));
+        }
+    }
     
     for(int iter = 0; iter < iterations; iter++) {
         double sum_returns = 0.0;
-
-        double* all_states[NUM_ROLLOUTS][MAX_STEPS];
-        double* all_actions[NUM_ROLLOUTS][MAX_STEPS];
-        double all_rewards[NUM_ROLLOUTS][MAX_STEPS];
-        int rollout_steps[NUM_ROLLOUTS];
-
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            for(int i = 0; i < MAX_STEPS; i++) {
-                all_states[r][i] = malloc(STATE_DIM * sizeof(double));
-                all_actions[r][i] = malloc(4 * sizeof(double));
-            }
-        }
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             rollout_steps[r] = collect_rollout(sim, net, act, 
@@ -254,13 +260,6 @@ int main(int argc, char** argv) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             update_policy(net, all_states[r], all_actions[r], 
                          all_rewards[r], rollout_steps[r], act, grad);
-        }
-
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            for(int i = 0; i < MAX_STEPS; i++) {
-                free(all_states[r][i]);
-                free(all_actions[r][i]);
-            }
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
@@ -292,6 +291,21 @@ int main(int argc, char** argv) {
              localtime(&(time_t){time(NULL)}));
     save_weights(final_weights, net);
     printf("Final weights saved to: %s\n", final_weights);
+
+    // Free all allocated memory
+    for(int r = 0; r < NUM_ROLLOUTS; r++) {
+        for(int i = 0; i < MAX_STEPS; i++) {
+            free(all_states[r][i]);
+            free(all_actions[r][i]);
+        }
+        free(all_states[r]);
+        free(all_actions[r]);
+        free(all_rewards[r]);
+    }
+    free(all_states);
+    free(all_actions);
+    free(all_rewards);
+    free(rollout_steps);
 
     for(int i = 0; i < 5; i++) {
         free(act[i]);
