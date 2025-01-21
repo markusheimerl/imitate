@@ -60,7 +60,7 @@ double compute_reward(Quad* q) {
     ang_vel_magnitude = sqrt(ang_vel_magnitude);
     
     // Calculate orientation error (should be upright, so R_W_B[4] should be 1.0)
-    double orientation_error = 1.0 - q->R_W_B[4];  // Will be 0 when perfectly upright
+    double orientation_error = fabs(1.0 - q->R_W_B[4]);  // Will be 0 when perfectly upright
     
     // Combine all errors with appropriate scaling
     double total_error = (pos_error * 2.0) +          // Position has highest weight
