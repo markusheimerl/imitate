@@ -166,7 +166,6 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
 
             double z = (actions[t][i] - mean) / std;
             double log_prob = -0.5 * (1.8378770664093453 + 2.0 * log(std) + z * z);
-            double entropy = 0.5 * (2.837877066 + 2.0 * log(std));
             double dkl_dmean = (mean - old_means[t][i]) / (std * std);
             double dkl_dstd = (std - old_stds[t][i] * old_stds[t][i] / std) / std;
 
