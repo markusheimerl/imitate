@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,6 +195,15 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
     }
 }
 
+int compare_returns_with_context(const void* a, const void* b, void* context) {
+    const int idx_a = *(const int*)a;
+    const int idx_b = *(const int*)b;
+    const double* returns = (const double*)context;
+    if(returns[idx_b] > returns[idx_a]) return 1;
+    if(returns[idx_b] < returns[idx_a]) return -1;
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if(argc != 2 && argc != 3) {
         printf("Usage: %s <num_iterations> [initial_weights.bin]\n", argv[0]);
@@ -220,6 +230,9 @@ int main(int argc, char** argv) {
         grad[i] = calloc(net->sz[i], sizeof(double));
     }
 
+    int* rollout_indices = malloc(NUM_ROLLOUTS * sizeof(int));
+    double* rollout_returns = malloc(NUM_ROLLOUTS * sizeof(double));
+
     int iterations = atoi(argv[1]);
     double best_return = -1e30;
     double initial_best = -1e30;
@@ -243,15 +256,26 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Collect all rollouts and store their returns
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             rollout_steps[r] = collect_rollout(sim, net, act, 
                                              all_states[r], 
                                              all_actions[r], 
                                              all_rewards[r]);
-            sum_returns += all_rewards[r][0];
+            
+            rollout_indices[r] = r;
+            rollout_returns[r] = all_rewards[r][0];
+            sum_returns += rollout_returns[r];
         }
 
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+        // Sort indices
+        qsort_r(rollout_indices, NUM_ROLLOUTS, sizeof(int), 
+                compare_returns_with_context, rollout_returns);
+
+        // Only update policy using top 20% of rollouts
+        int num_top_rollouts = NUM_ROLLOUTS / 5;  // 20%
+        for(int i = 0; i < num_top_rollouts; i++) {
+            int r = rollout_indices[i];
             update_policy(net, all_states[r], all_actions[r], 
                          all_rewards[r], rollout_steps[r], act, grad);
         }
@@ -280,10 +304,10 @@ int main(int argc, char** argv) {
         double current_percentage = (best_return / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / elapsed;
 
-        printf("Iter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s | lr: %.2e\n", 
+        printf("Iter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Top Return: %.2f | Rate: %.3f %%/s | lr: %.2e\n", 
                iter+1, iterations, mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
-               percentage_rate, net->lr);
+               rollout_returns[rollout_indices[0]], percentage_rate, net->lr);
     }
     printf("\n");
 
@@ -293,6 +317,9 @@ int main(int argc, char** argv) {
     save_weights(final_weights, net);
     printf("Final weights saved to: %s\n", final_weights);
 
+    // Cleanup
+    free(rollout_indices);
+    free(rollout_returns);
     for(int i = 0; i < 5; i++) {
         free(act[i]);
         free(grad[i]);
