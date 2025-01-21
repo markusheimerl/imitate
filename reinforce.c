@@ -227,7 +227,7 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double entropy = 0.5 * (2.837877066 + 2.0 * log(std));
             
             // Add KL penalty if divergence exceeds target
-            double kl_penalty = KL_PENALTY_COEFFICIENT * (step_kl - TARGET_KL) / TARGET_KL;
+            double kl_penalty = KL_PENALTY_COEFFICIENT * (kl - TARGET_KL) / TARGET_KL;
             
             // Policy gradient with entropy bonus and KL penalty
             // ∇_θ J = E[∇_θ log π_θ(a|s) * (R - b)]
