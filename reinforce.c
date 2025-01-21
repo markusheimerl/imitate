@@ -328,9 +328,9 @@ int main(int argc, char** argv) {
 
         // Adapt learning rate based on mean KL across all rollouts
         if(iter_mean_kl > 2.0 * TARGET_KL) {
-            net->lr *= 0.5;
+            net->lr *= 0.99;
         } else if(iter_mean_kl < 0.5 * TARGET_KL) {
-            net->lr *= 1.5;
+            net->lr *= 1.01;
         }
         net->lr = fmax(1e-6, fmin(1e-3, net->lr));
 
