@@ -23,7 +23,7 @@
 #define GAMMA 0.999
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
-#define KL_TRADEOFF 1.0
+#define KL_BETA 1.0
 
 const double TARGET_POS[3] = {0.0, 1.0, 0.0};
 
@@ -171,12 +171,12 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             double dkl_dstd = (std - old_stds[t][i] * old_stds[t][i] / std) / std;
 
             double dmean = z / std;
-            grad[4][i] = (returns[t] * log_prob * dmean - KL_TRADEOFF * dkl_dmean) * 
+            grad[4][i] = (returns[t] * log_prob * dmean - KL_BETA * dkl_dmean) * 
                         dsquash(act[4][i], mean_min, mean_max);
             
             double dstd_direct = (z * z - 1.0) / std;
             grad[4][i + 4] = (returns[t] * log_prob * dstd_direct - 
-                             KL_TRADEOFF * dkl_dstd) * 
+                             KL_BETA * dkl_dstd) * 
                             dsquash(act[4][i + 4], MIN_STD, MAX_STD);
         }
 
