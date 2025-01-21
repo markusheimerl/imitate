@@ -178,7 +178,6 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             grad[4][i + 4] = (returns[t] * log_prob * dstd_direct - 
                              KL_TRADEOFF * dkl_dstd) * 
                             dsquash(act[4][i + 4], MIN_STD, MAX_STD);
-            }
         }
 
         total_kl += step_kl;
