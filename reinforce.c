@@ -177,29 +177,31 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             
             // 3. Log probability of Gaussian distribution
             // log π(a|s) = -1/2(log(2π) + 2log(σ) + ((a-μ)/σ)²)
-            //            = -1/2(1.838... + 2log(σ) + z²)
-            double log_prob = -0.5 * (1.8378770664093453 + 2.0 * log(std) + z * z);
+            double log_2pi = log(2.0 * M_PI);
+            double log_var = 2.0 * log(std);
+            double squared_error = z * z;
+            double log_prob = -0.5 * (log_2pi + log_var + squared_error);
 
             // 4. Gradient for mean parameter
             // ∂log π/∂μ = (a-μ)/σ² = z/σ
             // Chain rule through squashing: ∂log π/∂θμ = (∂log π/∂μ)(∂μ/∂θμ)
             // where ∂μ/∂θμ = dsquash(θμ, mean_min, mean_max)
             double dmean = z / std;
-            output_gradient[i] = returns[t] * log_prob * dmean * 
-                               dsquash(output->x[i], mean_min, mean_max);
+            double dmean_dtheta = dsquash(output->x[i], mean_min, mean_max);
+            output_gradient[i] = returns[t] * log_prob * dmean * dmean_dtheta;
             
             // 5. Gradient for standard deviation parameter
             // Direct effect: ∂log π/∂σ = (z² - 1)/σ
             // Indirect effect through mean bounds: ∂μ/∂σ = -4.0 * dsquash
             // Total effect: ∂log π/∂σ = (z² - 1)/σ + (z/σ) * (-4.0 * dsquash)
-            double dstd_direct = (z * z - 1.0) / std;
+            double dstd_direct = (squared_error - 1.0) / std;
             double dmean_dstd = -4.0 * dsquash(output->x[i], mean_min, mean_max);
             double dstd = dstd_direct + (z / std) * dmean_dstd;
             
             // Chain rule through squashing: ∂log π/∂θσ = (∂log π/∂σ)(∂σ/∂θσ)
             // where ∂σ/∂θσ = dsquash(θσ, MIN_STD, MAX_STD)
-            output_gradient[i + 4] = returns[t] * log_prob * dstd * 
-                                   dsquash(output->x[i + 4], MIN_STD, MAX_STD);
+            double dstd_dtheta = dsquash(output->x[i + 4], MIN_STD, MAX_STD);
+            output_gradient[i + 4] = returns[t] * log_prob * dstd * dstd_dtheta;
         }
 
         bwd(policy, output_gradient, epoch, epochs);
