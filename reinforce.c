@@ -31,6 +31,26 @@
 double squash(double x, double min, double max) { return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); }
 double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); }
 
+double get_task_radius(int epoch, int total_epochs) {
+    const double INITIAL_TASK_RADIUS = 0.05;  // Start with easier tasks
+    const double FINAL_TASK_RADIUS = 0.2;     // End with harder tasks
+    const int CURRICULUM_WARMUP = 100;        // Initial warmup period
+    
+    if (epoch < CURRICULUM_WARMUP) {
+        return INITIAL_TASK_RADIUS;
+    }
+    
+    double progress = (double)(epoch - CURRICULUM_WARMUP) / 
+                     (total_epochs - CURRICULUM_WARMUP);
+    progress = fmin(1.0, fmax(0.0, progress));  // Clamp to [0,1]
+    
+    // Smooth transition using sigmoid function
+    double sigmoid = 1.0 / (1.0 + exp(-10 * (progress - 0.5)));
+    
+    return INITIAL_TASK_RADIUS + 
+           (FINAL_TASK_RADIUS - INITIAL_TASK_RADIUS) * sigmoid;
+}
+
 void get_random_position(double pos[3], double center[3], double radius) {
     double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
     double phi = acos(2.0 * ((double)rand()/RAND_MAX) - 1.0);
@@ -94,12 +114,15 @@ bool is_terminated(Quad* q, double* target_pos) {
            sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0;
 }
 
-int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, double* rewards) {
+int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, double* rewards, int epoch, int total_epochs) {
     double start_pos[3];
     double target_pos[3];
+    
+    // Get current task radius based on curriculum learning progress
+    double current_radius = get_task_radius(epoch, total_epochs);
 
-    get_random_position(start_pos, (double[3]){0, 1, 0}, TASK_RADIUS);
-    get_random_position(target_pos, start_pos, TASK_RADIUS);
+    get_random_position(start_pos, (double[3]){0, 1, 0}, current_radius);
+    get_random_position(target_pos, start_pos, current_radius);
     
     reset_quad(sim->quad, start_pos[0], start_pos[1], start_pos[2]);
     
@@ -253,12 +276,14 @@ int main(int argc, char** argv) {
     
     for(int epoch = 0; epoch < epochs; epoch++) {
         double sum_returns = 0.0;
+        double current_radius = get_task_radius(epoch, epochs);
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             rollout_steps[r] = collect_rollout(sim, net, 
                                              all_states[r], 
                                              all_actions[r], 
-                                             all_rewards[r]);
+                                             all_rewards[r],
+                                             epoch, epochs);
             sum_returns += all_rewards[r][0];
         }
 
@@ -284,10 +309,10 @@ int main(int argc, char** argv) {
         double current_percentage = (best_return / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / elapsed;
 
-        printf("epoch %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s | lr: %.2e\n", 
-               epoch+1, epochs, mean_return, theoretical_max, 
+        printf("epoch %d/%d | Radius: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
+               epoch+1, epochs, current_radius, mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
-               percentage_rate, net->lr);
+               percentage_rate);
     }
     printf("\n");
 
