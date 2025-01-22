@@ -25,7 +25,7 @@ jobs:
         ./reinforce.out ${{ github.event.inputs.epochs }} | tee training.log
         WEIGHTS_FILE=$(ls -t *_policy.bin | head -n1)
         ./visualize.out $WEIGHTS_FILE
-        GIF_FILE=$(ls -t sim_*.gif | head -n1)
+        GIF_FILE=$(ls -t *_flight.gif | head -n1)
         BEST_RETURN=$(grep "Best:" training.log | tail -n1 | sed 's/.*Best: //' | cut -d' ' -f1)
         TOTAL_TIME=$(grep "Total training time:" training.log | sed 's/Total training time: //' | sed 's/ seconds//')
         PERCENTAGE_RATE=$(grep "Rate:" training.log | tail -n1 | sed 's/.*Rate: //' | sed 's/ %\/s//')
