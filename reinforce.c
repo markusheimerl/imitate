@@ -28,6 +28,9 @@
 #define MIN_HEIGHT 0.5
 #define MAX_HEIGHT 1.5
 
+double squash(double x, double min, double max) { return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); }
+double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); }
+
 void get_random_position(double pos[3], double center[3], double radius) {
     double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
     double phi = acos(2.0 * ((double)rand()/RAND_MAX) - 1.0);
@@ -91,7 +94,7 @@ bool is_terminated(Quad* q, double* target_pos) {
            sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0;
 }
 
-int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double** actions, double* rewards) {
+int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, double* rewards) {
     double start_pos[3];
     double target_pos[3];
 
@@ -109,15 +112,21 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
         
         if(t_control <= t_physics) {
             get_state(sim->quad, states[steps], target_pos);
-            fwd(policy, states[steps], act);
+            forward(policy, states[steps]);
             
             for(int i = 0; i < 4; i++) {
-                double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+                // 1. Transform network outputs to valid std and mean ranges
+                // σ ∈ [MIN_STD, MAX_STD] via squashing function
+                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
+                
+                // Ensure actions stay within bounds with high probability (4σ = 99.994%)
+                // μ ∈ [OMEGA_MIN + 4σ, OMEGA_MAX - 4σ]
                 double safe_margin = 4.0 * std;
                 double mean_min = OMEGA_MIN + safe_margin;
                 double mean_max = OMEGA_MAX - safe_margin;
-                double mean = squash(act[4][i], mean_min, mean_max);
+                double mean = squash(policy->layers[policy->n_layers-1].x[i], mean_min, mean_max);
                 
+                // 2. Sample action from Gaussian distribution
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
@@ -132,6 +141,7 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
         }
     }
     
+    // Compute discounted returns: Gₜ = Σₖ₌₀ γᵏ rₜ₊ₖ₊₁
     double G = 0.0;
     for(int i = steps-1; i >= 0; i--) {
         rewards[i] = G = rewards[i] + GAMMA * G;
@@ -142,23 +152,24 @@ int collect_rollout(Sim* sim, Net* policy, double** act, double** states, double
 
 // ∇J(θ) = E[∇log π_θ(a|s) * R] ≈ (1/N) Σᵢ[∇log π_θ(aᵢ|sᵢ) * Rᵢ] - REINFORCE algorithm
 // where π_θ(a|s) is a Gaussian policy with state-dependent mean μ(s) and std σ(s)
-void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, 
-                  double** act, double** grad) {
+void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, int epoch, int epochs) {
+    double output_gradient[ACTION_DIM];
+    
     for(int t = 0; t < steps; t++) {
-        // Forward pass to get μ(s) and σ(s) from policy network
-        fwd(policy, states[t], act);
+        forward(policy, states[t]);
+        Layer *output = &policy->layers[policy->n_layers-1];
         
         for(int i = 0; i < 4; i++) {
             // 1. Transform network outputs to valid std and mean ranges
             // σ ∈ [MIN_STD, MAX_STD] via squashing function
-            double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+            double std = squash(output->x[i + 4], MIN_STD, MAX_STD);
             
             // Ensure actions stay within bounds with high probability (4σ = 99.994%)
             // μ ∈ [OMEGA_MIN + 4σ, OMEGA_MAX - 4σ]
             double safe_margin = 4.0 * std;
             double mean_min = OMEGA_MIN + safe_margin;
             double mean_max = OMEGA_MAX - safe_margin;
-            double mean = squash(act[4][i], mean_min, mean_max);
+            double mean = squash(output->x[i], mean_min, mean_max);
             
             // 2. Normalize action to compute probability
             // z = (a - μ)/σ where a is the actual action taken
@@ -174,29 +185,30 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             // Chain rule through squashing: ∂log π/∂θμ = (∂log π/∂μ)(∂μ/∂θμ)
             // where ∂μ/∂θμ = dsquash(θμ, mean_min, mean_max)
             double dmean = z / std;
-            grad[4][i] = returns[t] * log_prob * dmean * dsquash(act[4][i], mean_min, mean_max);
+            output_gradient[i] = returns[t] * log_prob * dmean * 
+                               dsquash(output->x[i], mean_min, mean_max);
             
             // 5. Gradient for standard deviation parameter
             // Direct effect: ∂log π/∂σ = (z² - 1)/σ
             // Indirect effect through mean bounds: ∂μ/∂σ = -4.0 * dsquash
             // Total effect: ∂log π/∂σ = (z² - 1)/σ + (z/σ) * (-4.0 * dsquash)
             double dstd_direct = (z * z - 1.0) / std;
-            double dmean_dstd = -4.0 * dsquash(act[4][i], mean_min, mean_max);
+            double dmean_dstd = -4.0 * dsquash(output->x[i], mean_min, mean_max);
             double dstd = dstd_direct + (z / std) * dmean_dstd;
             
             // Chain rule through squashing: ∂log π/∂θσ = (∂log π/∂σ)(∂σ/∂θσ)
             // where ∂σ/∂θσ = dsquash(θσ, MIN_STD, MAX_STD)
-            grad[4][i + 4] = returns[t] * log_prob * dstd * dsquash(act[4][i + 4], MIN_STD, MAX_STD);
+            output_gradient[i + 4] = returns[t] * log_prob * dstd * 
+                                   dsquash(output->x[i + 4], MIN_STD, MAX_STD);
         }
 
-        // Backward pass to update policy parameters via gradient ascent
-        bwd(policy, act, grad);
+        bwd(policy, output_gradient, epoch, epochs);
     }
 }
 
 int main(int argc, char** argv) {
     if(argc != 2 && argc != 3) {
-        printf("Usage: %s <num_iterations> [initial_weights.bin]\n", argv[0]);
+        printf("Usage: %s <num_epochs> [initial_weights.bin]\n", argv[0]);
         return 1;
     }
 
@@ -204,28 +216,13 @@ int main(int argc, char** argv) {
     
     Net* net;
     if(argc == 3) {
-        net = load_weights(argv[2], adamw);
+        net = load_net(argv[2]);
     } else {
-        int layers[] = {STATE_DIM, HIDDEN_DIM, HIDDEN_DIM, HIDDEN_DIM, ACTION_DIM};
-        net = init_net(5, layers, adamw);
+        int layers[] = {STATE_DIM, 256, 128, 64, ACTION_DIM};
+        net = init_net(5, layers, 1e-4);
     }
-    net->lr = 1e-4;
     
     Sim* sim = init_sim("", false);
-    double** act = malloc(5 * sizeof(double*));
-    double** grad = malloc(5 * sizeof(double*));
-    
-    for(int i = 0; i < 5; i++) {
-        act[i] = malloc(net->sz[i] * sizeof(double));
-        grad[i] = calloc(net->sz[i], sizeof(double));
-    }
-
-    int iterations = atoi(argv[1]);
-    double best_return = -1e30;
-    double initial_best = -1e30;
-    struct timeval start_time, current_time;
-    gettimeofday(&start_time, NULL);
-    
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
 
     // Heap allocations for large arrays
@@ -245,12 +242,18 @@ int main(int argc, char** argv) {
             all_actions[r][i] = malloc(4 * sizeof(double));
         }
     }
+
+    int epochs = atoi(argv[1]);
+    double best_return = -1e30;
+    double initial_best = -1e30;
+    struct timeval start_time, current_time;
+    gettimeofday(&start_time, NULL);
     
-    for(int iter = 0; iter < iterations; iter++) {
+    for(int epoch = 0; epoch < epochs; epoch++) {
         double sum_returns = 0.0;
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            rollout_steps[r] = collect_rollout(sim, net, act, 
+            rollout_steps[r] = collect_rollout(sim, net, 
                                              all_states[r], 
                                              all_actions[r], 
                                              all_rewards[r]);
@@ -259,7 +262,7 @@ int main(int argc, char** argv) {
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             update_policy(net, all_states[r], all_actions[r], 
-                         all_rewards[r], rollout_steps[r], act, grad);
+                         all_rewards[r], rollout_steps[r], epoch, epochs);
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
@@ -267,7 +270,7 @@ int main(int argc, char** argv) {
             best_return = mean_return;
         }
 
-        if(iter == 0) {
+        if(epoch == 0) {
             initial_best = best_return;
         }
 
@@ -279,8 +282,8 @@ int main(int argc, char** argv) {
         double current_percentage = (best_return / theoretical_max) * 100.0;
         double percentage_rate = (current_percentage - initial_percentage) / elapsed;
 
-        printf("Iter %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s | lr: %.2e\n", 
-               iter+1, iterations, mean_return, theoretical_max, 
+        printf("epoch %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s | lr: %.2e\n", 
+               epoch+1, epochs, mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
                percentage_rate, net->lr);
     }
@@ -289,7 +292,7 @@ int main(int argc, char** argv) {
     char final_weights[64];
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
              localtime(&(time_t){time(NULL)}));
-    save_weights(final_weights, net);
+    save_net(final_weights, net);
     printf("Final weights saved to: %s\n", final_weights);
 
     // Free all allocated memory
@@ -307,12 +310,6 @@ int main(int argc, char** argv) {
     free(all_rewards);
     free(rollout_steps);
 
-    for(int i = 0; i < 5; i++) {
-        free(act[i]);
-        free(grad[i]);
-    }
-    free(act);
-    free(grad);
     free_net(net);
     free_sim(sim);
 
