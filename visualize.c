@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "grad/grad.h"
 #include "sim/sim.h"
 
@@ -19,6 +20,10 @@
 #define MIN_HEIGHT 0.5
 #define MAX_HEIGHT 1.5
 #define SIMULATION_DURATION 10.0
+
+double squash(double x, double min, double max) { 
+    return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
+}
 
 void get_random_position(double pos[3], double center[3], double radius) {
     double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
@@ -52,7 +57,7 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
 
     // Initialize policy network
-    Net* policy = load_weights(argv[1], null_opt);
+    Net* policy = load_net(argv[1]);
     if(!policy) {
         printf("Failed to load weights from %s\n", argv[1]);
         return 1;
@@ -60,12 +65,6 @@ int main(int argc, char** argv) {
 
     // Initialize simulation
     Sim* sim = init_sim("sim/", true);
-    
-    // Initialize network activations
-    double** act = malloc(5 * sizeof(double*));
-    for(int i = 0; i < 5; i++) {
-        act[i] = malloc(policy->sz[i] * sizeof(double));
-    }
 
     // Generate start and target positions
     double start_pos[3], target_pos[3];
@@ -92,14 +91,14 @@ int main(int argc, char** argv) {
         
         if(t_control <= t_physics) {
             get_state(sim->quad, state, target_pos);
-            fwd(policy, state, act);
+            forward(policy, state);
             
             for(int i = 0; i < 4; i++) {
-                double std = squash(act[4][i + 4], MIN_STD, MAX_STD);
+                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
                 double safe_margin = 4.0 * std;
                 double mean_min = OMEGA_MIN + safe_margin;
                 double mean_max = OMEGA_MAX - safe_margin;
-                double mean = squash(act[4][i], mean_min, mean_max);
+                double mean = squash(policy->layers[policy->n_layers-1].x[i], mean_min, mean_max);
                 
                 sim->quad->omega_next[i] = mean;
             }
@@ -143,10 +142,6 @@ int main(int argc, char** argv) {
     printf("Final distance to target: %.3f\n", final_dist);
 
     // Cleanup
-    for(int i = 0; i < 5; i++) {
-        free(act[i]);
-    }
-    free(act);
     free_net(policy);
     save_sim(sim);
     free_sim(sim);

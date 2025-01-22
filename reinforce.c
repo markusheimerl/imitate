@@ -220,8 +220,8 @@ int main(int argc, char** argv) {
     if(argc == 3) {
         net = load_net(argv[2]);
     } else {
-        int layers[] = {STATE_DIM, 256, 128, 64, ACTION_DIM};
-        net = init_net(5, layers, 1e-4);
+        int layers[] = {STATE_DIM, 64, ACTION_DIM};
+        net = init_net(3, layers, 1e-4);
     }
     
     Sim* sim = init_sim("", false);
