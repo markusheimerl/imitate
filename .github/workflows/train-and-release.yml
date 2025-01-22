@@ -3,8 +3,8 @@ name: Train and Release
 on:
   workflow_dispatch:
     inputs:
-      generations:
-        description: 'Number of generations'
+      epochs:
+        description: 'Number of epochs'
         required: true
         default: '10'
         type: string
@@ -22,7 +22,7 @@ jobs:
     - name: Setup and Train
       run: |
         make reinforce.out visualize.out
-        ./reinforce.out ${{ github.event.inputs.generations }} | tee training.log
+        ./reinforce.out ${{ github.event.inputs.epochs }} | tee training.log
         WEIGHTS_FILE=$(ls -t *_policy.bin | head -n1)
         ./visualize.out $WEIGHTS_FILE
         GIF_FILE=$(ls -t sim_*.gif | head -n1)
@@ -45,7 +45,7 @@ jobs:
         body: |
           ## ✨ Training Details
           
-          - 🔄 Generations: ${{ github.event.inputs.generations }}
+          - 🔄 Epochs: ${{ github.event.inputs.epochs }}
           - 🎯 Best Return: ${{ env.BEST_RETURN }}
           - ⏱️ Total Time: ${{ env.TOTAL_TIME }} seconds
           - 📈 Final Improvement Rate: ${{ env.PERCENTAGE_RATE }} %/s
