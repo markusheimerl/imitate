@@ -243,6 +243,7 @@ int main(int argc, char** argv) {
     
     Sim* sim = init_sim("", false);
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
+    double elapsed = 0.0;
 
     // Heap allocations for large arrays
     double*** all_states = malloc(NUM_ROLLOUTS * sizeof(double**));
@@ -296,7 +297,7 @@ int main(int argc, char** argv) {
         }
 
         gettimeofday(&current_time, NULL);
-        double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
+        elapsed = (current_time.tv_sec - start_time.tv_sec) + 
                         (current_time.tv_usec - start_time.tv_usec) / 1000000.0;
         
         double initial_percentage = (initial_best / theoretical_max) * 100.0;
