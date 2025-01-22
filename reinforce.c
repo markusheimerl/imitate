@@ -14,41 +14,35 @@
 #define MAX_ANGULAR_VELOCITY 5.0
 
 #define STATE_DIM 15
-#define HIDDEN_DIM 64
 #define ACTION_DIM 8
 
-#define MAX_STEPS 1000
+#define MAX_STEPS 1000 // 1000 * 60Hz = 16.66s
 #define NUM_ROLLOUTS 64
 
 #define GAMMA 0.999
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-#define TASK_RADIUS 0.1
-#define MIN_HEIGHT 0.5
-#define MAX_HEIGHT 1.5
-
 double squash(double x, double min, double max) { return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); }
 double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); }
 
 double get_task_radius(int epoch, int total_epochs) {
-    const double INITIAL_TASK_RADIUS = 0.05;  // Start with easier tasks
-    const double FINAL_TASK_RADIUS = 0.2;     // End with harder tasks
+    const double INITIAL_TASK_RADIUS = 0.01;  // Start with easier tasks
+    const double FINAL_TASK_RADIUS = 5.0;     // End with harder tasks
     const int CURRICULUM_WARMUP = 100;        // Initial warmup period
     
     if (epoch < CURRICULUM_WARMUP) {
         return INITIAL_TASK_RADIUS;
     }
     
+    // Linear progress from 0 to 1 after warmup
     double progress = (double)(epoch - CURRICULUM_WARMUP) / 
-                     (total_epochs - CURRICULUM_WARMUP);
+                     (double)(total_epochs - CURRICULUM_WARMUP);
     progress = fmin(1.0, fmax(0.0, progress));  // Clamp to [0,1]
     
-    // Smooth transition using sigmoid function
-    double sigmoid = 1.0 / (1.0 + exp(-10 * (progress - 0.5)));
-    
+    // Simple linear interpolation between initial and final radius
     return INITIAL_TASK_RADIUS + 
-           (FINAL_TASK_RADIUS - INITIAL_TASK_RADIUS) * sigmoid;
+           (FINAL_TASK_RADIUS - INITIAL_TASK_RADIUS) * progress;
 }
 
 void get_random_position(double pos[3], double center[3], double radius) {
@@ -60,8 +54,8 @@ void get_random_position(double pos[3], double center[3], double radius) {
     pos[1] = center[1] + r * sin(phi) * sin(theta);
     pos[2] = center[2] + r * cos(phi);
 
-    pos[1] = fmax(pos[1], MIN_HEIGHT);
-    pos[1] = fmin(pos[1], MAX_HEIGHT);
+    pos[1] = fmax(pos[1], 0.5); // MIN_HEIGHT
+    pos[1] = fmin(pos[1], 1.5); // MAX_HEIGHT
 }
 
 void get_state(Quad* q, double* state, double* target_pos) {
@@ -321,6 +315,8 @@ int main(int argc, char** argv) {
              localtime(&(time_t){time(NULL)}));
     save_net(final_weights, net);
     printf("Final weights saved to: %s\n", final_weights);
+
+    printf("\nTotal training time: %.2f seconds\n", elapsed);
 
     // Free all allocated memory
     for(int r = 0; r < NUM_ROLLOUTS; r++) {

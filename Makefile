@@ -13,7 +13,7 @@ reinforce.out: reinforce.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 run: reinforce.out
-	./reinforce.out 1000
+	./reinforce.out 10000
 
 clean:
 	rm -f *.out *.bin *.gif

@@ -16,7 +16,7 @@
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-#define TASK_RADIUS 0.2
+#define TASK_RADIUS 3.0
 #define MIN_HEIGHT 0.5
 #define MAX_HEIGHT 1.5
 #define SIMULATION_DURATION 10.0
