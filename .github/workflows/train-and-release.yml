@@ -6,7 +6,7 @@ on:
       epochs:
         description: 'Number of epochs'
         required: true
-        default: '10'
+        default: '5000'
         type: string
 
 jobs:
