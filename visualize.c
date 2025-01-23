@@ -26,36 +26,16 @@ double squash(double x, double min, double max) {
 }
 
 void get_random_position(double pos[3], double center[3], double radius) {
-    // Define bounds that keep positions in front of camera at (-2, 2, -2)
-    // Camera looks towards (0,0,0), so keep positions in positive x and z quadrant
-    double x_min = -1.0;  // Allow some negative x for maneuverability
-    double x_max = 3.0;   // But bias towards positive x
-    double y_min = MIN_HEIGHT;
-    double y_max = MAX_HEIGHT;
-    double z_min = -1.0;  // Allow some negative z for maneuverability
-    double z_max = 3.0;   // But bias towards positive z
+    double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
+    double phi = acos(2.0 * ((double)rand()/RAND_MAX) - 1.0);
+    double r = radius * ((double)rand()/RAND_MAX);
 
-    // Generate random position within these bounds
-    pos[0] = x_min + (x_max - x_min) * ((double)rand()/RAND_MAX);
-    pos[1] = y_min + (y_max - y_min) * ((double)rand()/RAND_MAX);
-    pos[2] = z_min + (z_max - z_min) * ((double)rand()/RAND_MAX);
+    pos[0] = center[0] + r * sin(phi) * cos(theta);
+    pos[1] = center[1] + r * sin(phi) * sin(theta);
+    pos[2] = center[2] + r * cos(phi);
 
-    // Ensure position is within specified radius of center
-    double dx = pos[0] - center[0];
-    double dy = pos[1] - center[1];
-    double dz = pos[2] - center[2];
-    double distance = sqrt(dx*dx + dy*dy + dz*dz);
-    
-    if (distance > radius) {
-        // Scale back to be within radius while maintaining direction
-        double scale = radius / distance;
-        pos[0] = center[0] + dx * scale;
-        pos[1] = center[1] + dy * scale;
-        pos[2] = center[2] + dz * scale;
-    }
-
-    // Ensure height bounds are respected
-    pos[1] = fmax(MIN_HEIGHT, fmin(MAX_HEIGHT, pos[1]));
+    pos[1] = fmax(pos[1], MIN_HEIGHT);
+    pos[1] = fmin(pos[1], MAX_HEIGHT);
 }
 
 void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B, double* desired_yaw_rate) {
