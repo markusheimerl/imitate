@@ -9,14 +9,14 @@
 #define DT_CONTROL (1.0/60.0)
 #define DT_RENDER (1.0/30.0)
 
-#define STATE_DIM 15
+#define STATE_DIM 9  // 3 accel + 3 gyro + 3 desired vel
 #define HIDDEN_DIM 64
 #define ACTION_DIM 8
 
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-#define TASK_RADIUS 3.0
+#define TASK_RADIUS 5.0
 #define MIN_HEIGHT 0.5
 #define MAX_HEIGHT 1.5
 #define SIMULATION_DURATION 10.0
@@ -38,14 +38,30 @@ void get_random_position(double pos[3], double center[3], double radius) {
     pos[1] = fmin(pos[1], MAX_HEIGHT);
 }
 
-void get_state(Quad* q, double* state, double* target_pos) {
-    memcpy(state, q->linear_position_W, 3 * sizeof(double));
-    memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
-    memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
-    state[9] = q->R_W_B[0];
-    state[10] = q->R_W_B[4];
-    state[11] = q->R_W_B[8];
-    memcpy(state + 12, target_pos, 3 * sizeof(double));
+void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B) {
+    // 1. Calculate position error in world frame
+    double error_p[3];
+    subVec3f(q->linear_position_W, target_pos, error_p);
+    
+    // 2. Calculate desired velocity in world frame
+    double desired_vel_W[3];
+    multScalVec3f(-K_P, error_p, desired_vel_W);
+    
+    // 3. Transform to body frame
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    multMatVec3f(R_B_W, desired_vel_W, desired_vel_B);
+}
+
+void get_state(Quad* q, double* state, double* desired_vel_B) {
+    // Accelerometer readings (body frame)
+    memcpy(state, q->linear_acceleration_B_s, 3 * sizeof(double));
+    
+    // Gyroscope readings (body frame)
+    memcpy(state + 3, q->angular_velocity_B_s, 3 * sizeof(double));
+    
+    // Desired velocities (body frame)
+    memcpy(state + 6, desired_vel_B, 3 * sizeof(double));
 }
 
 int main(int argc, char** argv) {
@@ -76,8 +92,9 @@ int main(int argc, char** argv) {
     // Reset quadcopter to start position
     reset_quad(sim->quad, start_pos[0], start_pos[1], start_pos[2]);
 
-    // Initialize state buffer
+    // Initialize state buffer and desired velocities
     double state[STATE_DIM];
+    double desired_vel_B[3] = {0};
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     
@@ -90,9 +107,16 @@ int main(int argc, char** argv) {
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, state, target_pos);
+            // Get desired velocities from high-level controller
+            velocity_controller(sim->quad, target_pos, desired_vel_B);
+            
+            // Get state using sensor data
+            get_state(sim->quad, state, desired_vel_B);
+            
+            // Run policy network
             forward(policy, state);
             
+            // Generate motor commands
             for(int i = 0; i < 4; i++) {
                 double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
                 double safe_margin = 4.0 * std;
@@ -111,11 +135,14 @@ int main(int argc, char** argv) {
                 pow(sim->quad->linear_position_W[2] - target_pos[2], 2)
             );
             
-            printf("\rTime: %.2f/%.2f | Pos: (%.2f, %.2f, %.2f) | Dist: %.3f", 
+            printf("\rTime: %.2f/%.2f | Pos: (%.2f, %.2f, %.2f) | Vel_d: (%.2f, %.2f, %.2f) | Dist: %.3f", 
                    t_physics, SIMULATION_DURATION,
                    sim->quad->linear_position_W[0],
                    sim->quad->linear_position_W[1],
                    sim->quad->linear_position_W[2],
+                   desired_vel_B[0],
+                   desired_vel_B[1],
+                   desired_vel_B[2],
                    dist);
             fflush(stdout);
         }

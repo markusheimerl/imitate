@@ -13,7 +13,7 @@
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
-#define STATE_DIM 15
+#define STATE_DIM 9
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000 // 1000 * 60Hz = 16.66s
@@ -25,6 +25,21 @@
 
 double squash(double x, double min, double max) { return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); }
 double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); }
+
+void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B) {
+    // 1. Calculate position error in world frame
+    double error_p[3];
+    subVec3f(q->linear_position_W, target_pos, error_p);
+    
+    // 2. Calculate desired velocity in world frame
+    double desired_vel_W[3];
+    multScalVec3f(-K_P, error_p, desired_vel_W);
+    
+    // 3. Transform to body frame
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    multMatVec3f(R_B_W, desired_vel_W, desired_vel_B);
+}
 
 double get_task_radius(int epoch, int total_epochs) {
     const double INITIAL_TASK_RADIUS = 0.01;  // Start with easier tasks
@@ -58,39 +73,37 @@ void get_random_position(double pos[3], double center[3], double radius) {
     pos[1] = fmin(pos[1], 1.5); // MAX_HEIGHT
 }
 
-void get_state(Quad* q, double* state, double* target_pos) {
-    memcpy(state, q->linear_position_W, 3 * sizeof(double));
-    memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
-    memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
-    state[9] = q->R_W_B[0];
-    state[10] = q->R_W_B[4];
-    state[11] = q->R_W_B[8];
-    memcpy(state + 12, target_pos, 3 * sizeof(double));
+void get_state(Quad* q, double* state, double* desired_vel_B) {
+    // Accelerometer readings (body frame)
+    memcpy(state, q->linear_acceleration_B_s, 3 * sizeof(double));
+    
+    // Gyroscope readings (body frame)
+    memcpy(state + 3, q->angular_velocity_B_s, 3 * sizeof(double));
+    
+    // Desired velocities (body frame)
+    memcpy(state + 6, desired_vel_B, 3 * sizeof(double));
 }
 
-double compute_reward(Quad* q, double* target_pos) {
-    double pos_error = 0.0;
-    for(int i = 0; i < 3; i++) {
-        pos_error += pow(q->linear_position_W[i] - target_pos[i], 2);
-    }
-    pos_error = sqrt(pos_error);
+double compute_reward(Quad* q, double* desired_vel_B) {
+    // Calculate velocity error in body frame
+    double current_vel_B[3];
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    multMatVec3f(R_B_W, q->linear_velocity_W, current_vel_B);
     
-    double vel_magnitude = 0.0;
+    double vel_error = 0.0;
     for(int i = 0; i < 3; i++) {
-        vel_magnitude += pow(q->linear_velocity_W[i], 2);
+        vel_error += pow(current_vel_B[i] - desired_vel_B[i], 2);
     }
-    vel_magnitude = sqrt(vel_magnitude);
     
     double ang_vel_magnitude = 0.0;
     for(int i = 0; i < 3; i++) {
         ang_vel_magnitude += pow(q->angular_velocity_B[i], 2);
     }
-    ang_vel_magnitude = sqrt(ang_vel_magnitude);
     
-    double orientation_error = fabs(1.0 - q->R_W_B[4]);
+    double orientation_error = fabs(1.0 - q->R_W_B[4]);  // Maintain upright
     
-    double total_error = (pos_error * 2.0) + 
-                        (vel_magnitude * 1.0) + 
+    double total_error = (vel_error * 2.0) + 
                         (ang_vel_magnitude * 0.5) + 
                         (orientation_error * 2.0);
     
@@ -123,12 +136,20 @@ int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, do
     double t_physics = 0.0, t_control = 0.0;
     int steps = 0;
     
+    double desired_vel_B[3] = {0};
+    
     while(steps < MAX_STEPS && !is_terminated(sim->quad, target_pos)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, states[steps], target_pos);
+            // Get desired body-frame velocities from high-level controller
+            velocity_controller(sim->quad, target_pos, desired_vel_B);
+            
+            // Get state using only sensor data and desired velocities
+            get_state(sim->quad, states[steps], desired_vel_B);
+            
+            // Run policy network
             forward(policy, states[steps]);
             
             for(int i = 0; i < 4; i++) {
@@ -152,7 +173,7 @@ int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, do
                 sim->quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(sim->quad, target_pos);
+            rewards[steps] = compute_reward(sim->quad, desired_vel_B);
             steps++;
             t_control += DT_CONTROL;
         }
