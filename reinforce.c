@@ -9,10 +9,6 @@
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
 
-#define MAX_DISTANCE 2.0
-#define MAX_VELOCITY 5.0
-#define MAX_ANGULAR_VELOCITY 5.0
-
 #define STATE_DIM 10  // 3 accel + 3 gyro + 3 desired vel + 1 desired yaw rate
 #define ACTION_DIM 8
 
@@ -131,14 +127,25 @@ double compute_reward(Quad* q, double* desired_vel_B, double desired_yaw_rate) {
 }
 
 bool is_terminated(Quad* q, double* target_pos) {
+    static const double MAX_DISTANCE = 2.0;
+    static const double MAX_VELOCITY = 5.0;
+    static const double MAX_ANGULAR_VELOCITY = 5.0;
+    static const double MIN_HEIGHT = 0.1;
+    static const double MIN_ORIENTATION = 0.0;
+
     double dist = 0.0, vel = 0.0, ang_vel = 0.0;
     for(int i = 0; i < 3; i++) {
         dist += pow(q->linear_position_W[i] - target_pos[i], 2);
         vel += pow(q->linear_velocity_W[i], 2);
         ang_vel += pow(q->angular_velocity_B[i], 2);
     }
-    return sqrt(dist) > MAX_DISTANCE || sqrt(vel) > MAX_VELOCITY || 
-           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0;
+    
+    // Check all termination conditions
+    return q->linear_position_W[1] < MIN_HEIGHT ||    // Too low
+           sqrt(dist) > MAX_DISTANCE ||               // Too far from target
+           sqrt(vel) > MAX_VELOCITY ||               // Moving too fast
+           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY ||   // Spinning too fast
+           q->R_W_B[4] < MIN_ORIENTATION;           // Not upright
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, double* rewards, int epoch, int total_epochs) {
