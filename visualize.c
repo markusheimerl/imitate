@@ -9,7 +9,7 @@
 #define DT_CONTROL (1.0/60.0)
 #define DT_RENDER (1.0/30.0)
 
-#define STATE_DIM 9  // 3 accel + 3 gyro + 3 desired vel
+#define STATE_DIM 10  // 3 accel + 3 gyro + 3 desired vel + 1 desired yaw rate
 #define HIDDEN_DIM 64
 #define ACTION_DIM 8
 
@@ -38,7 +38,7 @@ void get_random_position(double pos[3], double center[3], double radius) {
     pos[1] = fmin(pos[1], MAX_HEIGHT);
 }
 
-void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B) {
+void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B, double* desired_yaw_rate) {
     // 1. Calculate position error in world frame
     double error_p[3];
     subVec3f(q->linear_position_W, target_pos, error_p);
@@ -47,13 +47,27 @@ void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B) {
     double desired_vel_W[3];
     multScalVec3f(-K_P, error_p, desired_vel_W);
     
-    // 3. Transform to body frame
+    // 3. Calculate desired heading (yaw) based on velocity direction
+    double desired_heading = atan2(desired_vel_W[2], desired_vel_W[0]);
+    
+    // Get current heading from rotation matrix
+    double current_heading = atan2(q->R_W_B[2], q->R_W_B[0]);
+    
+    // Calculate heading error (considering circular nature of angles)
+    double heading_error = desired_heading - current_heading;
+    if (heading_error > M_PI) heading_error -= 2*M_PI;
+    if (heading_error < -M_PI) heading_error += 2*M_PI;
+    
+    // Calculate desired yaw rate (proportional control)
+    *desired_yaw_rate = 2.0 * heading_error;  // You can tune this gain
+    
+    // 4. Transform desired velocity to body frame
     double R_B_W[9];
     transpMat3f(q->R_W_B, R_B_W);
     multMatVec3f(R_B_W, desired_vel_W, desired_vel_B);
 }
 
-void get_state(Quad* q, double* state, double* desired_vel_B) {
+void get_state(Quad* q, double* state, double* desired_vel_B, double desired_yaw_rate) {
     // Accelerometer readings (body frame)
     memcpy(state, q->linear_acceleration_B_s, 3 * sizeof(double));
     
@@ -62,6 +76,9 @@ void get_state(Quad* q, double* state, double* desired_vel_B) {
     
     // Desired velocities (body frame)
     memcpy(state + 6, desired_vel_B, 3 * sizeof(double));
+    
+    // Desired yaw rate
+    state[9] = desired_yaw_rate;
 }
 
 int main(int argc, char** argv) {
@@ -95,6 +112,7 @@ int main(int argc, char** argv) {
     // Initialize state buffer and desired velocities
     double state[STATE_DIM];
     double desired_vel_B[3] = {0};
+    double desired_yaw_rate = 0.0;
 
     double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
     
@@ -107,11 +125,11 @@ int main(int argc, char** argv) {
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            // Get desired velocities from high-level controller
-            velocity_controller(sim->quad, target_pos, desired_vel_B);
+            // Get desired velocities and yaw rate from high-level controller
+            velocity_controller(sim->quad, target_pos, desired_vel_B, &desired_yaw_rate);
             
             // Get state using sensor data
-            get_state(sim->quad, state, desired_vel_B);
+            get_state(sim->quad, state, desired_vel_B, desired_yaw_rate);
             
             // Run policy network
             forward(policy, state);
@@ -135,7 +153,7 @@ int main(int argc, char** argv) {
                 pow(sim->quad->linear_position_W[2] - target_pos[2], 2)
             );
             
-            printf("\rTime: %.2f/%.2f | Pos: (%.2f, %.2f, %.2f) | Vel_d: (%.2f, %.2f, %.2f) | Dist: %.3f", 
+            printf("\rTime: %.2f/%.2f | Pos: (%.2f, %.2f, %.2f) | Vel_d: (%.2f, %.2f, %.2f) | Yaw_d: %.2f | Dist: %.3f", 
                    t_physics, SIMULATION_DURATION,
                    sim->quad->linear_position_W[0],
                    sim->quad->linear_position_W[1],
@@ -143,6 +161,7 @@ int main(int argc, char** argv) {
                    desired_vel_B[0],
                    desired_vel_B[1],
                    desired_vel_B[2],
+                   desired_yaw_rate,
                    dist);
             fflush(stdout);
         }

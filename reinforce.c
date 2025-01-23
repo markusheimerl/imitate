@@ -13,7 +13,7 @@
 #define MAX_VELOCITY 5.0
 #define MAX_ANGULAR_VELOCITY 5.0
 
-#define STATE_DIM 9
+#define STATE_DIM 10  // 3 accel + 3 gyro + 3 desired vel + 1 desired yaw rate
 #define ACTION_DIM 8
 
 #define MAX_STEPS 1000 // 1000 * 60Hz = 16.66s
@@ -26,7 +26,7 @@
 double squash(double x, double min, double max) { return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); }
 double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); }
 
-void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B) {
+void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B, double* desired_yaw_rate) {
     // 1. Calculate position error in world frame
     double error_p[3];
     subVec3f(q->linear_position_W, target_pos, error_p);
@@ -35,7 +35,21 @@ void velocity_controller(Quad* q, double* target_pos, double* desired_vel_B) {
     double desired_vel_W[3];
     multScalVec3f(-K_P, error_p, desired_vel_W);
     
-    // 3. Transform to body frame
+    // 3. Calculate desired heading (yaw) based on velocity direction
+    double desired_heading = atan2(desired_vel_W[2], desired_vel_W[0]);
+    
+    // Get current heading from rotation matrix
+    double current_heading = atan2(q->R_W_B[2], q->R_W_B[0]);
+    
+    // Calculate heading error (considering circular nature of angles)
+    double heading_error = desired_heading - current_heading;
+    if (heading_error > M_PI) heading_error -= 2*M_PI;
+    if (heading_error < -M_PI) heading_error += 2*M_PI;
+    
+    // Calculate desired yaw rate (proportional control)
+    *desired_yaw_rate = K_R * heading_error;  // You can tune this gain
+    
+    // 4. Transform desired velocity to body frame
     double R_B_W[9];
     transpMat3f(q->R_W_B, R_B_W);
     multMatVec3f(R_B_W, desired_vel_W, desired_vel_B);
@@ -73,7 +87,7 @@ void get_random_position(double pos[3], double center[3], double radius) {
     pos[1] = fmin(pos[1], 1.5); // MAX_HEIGHT
 }
 
-void get_state(Quad* q, double* state, double* desired_vel_B) {
+void get_state(Quad* q, double* state, double* desired_vel_B, double desired_yaw_rate) {
     // Accelerometer readings (body frame)
     memcpy(state, q->linear_acceleration_B_s, 3 * sizeof(double));
     
@@ -82,9 +96,12 @@ void get_state(Quad* q, double* state, double* desired_vel_B) {
     
     // Desired velocities (body frame)
     memcpy(state + 6, desired_vel_B, 3 * sizeof(double));
+    
+    // Desired yaw rate
+    state[9] = desired_yaw_rate;
 }
 
-double compute_reward(Quad* q, double* desired_vel_B) {
+double compute_reward(Quad* q, double* desired_vel_B, double desired_yaw_rate) {
     // Calculate velocity error in body frame
     double current_vel_B[3];
     double R_B_W[9];
@@ -96,15 +113,18 @@ double compute_reward(Quad* q, double* desired_vel_B) {
         vel_error += pow(current_vel_B[i] - desired_vel_B[i], 2);
     }
     
-    double ang_vel_magnitude = 0.0;
-    for(int i = 0; i < 3; i++) {
-        ang_vel_magnitude += pow(q->angular_velocity_B[i], 2);
-    }
+    // Calculate yaw rate error
+    double yaw_rate_error = pow(q->angular_velocity_B[1] - desired_yaw_rate, 2);
+    
+    // Calculate other angular velocities (should be minimized)
+    double other_ang_vel = pow(q->angular_velocity_B[0], 2) + 
+                          pow(q->angular_velocity_B[2], 2);
     
     double orientation_error = fabs(1.0 - q->R_W_B[4]);  // Maintain upright
     
     double total_error = (vel_error * 2.0) + 
-                        (ang_vel_magnitude * 0.5) + 
+                        (yaw_rate_error * 1.0) +
+                        (other_ang_vel * 0.5) + 
                         (orientation_error * 2.0);
     
     return exp(-total_error);
@@ -137,17 +157,18 @@ int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, do
     int steps = 0;
     
     double desired_vel_B[3] = {0};
+    double desired_yaw_rate = 0.0;
     
     while(steps < MAX_STEPS && !is_terminated(sim->quad, target_pos)) {
         update_quad(sim->quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            // Get desired body-frame velocities from high-level controller
-            velocity_controller(sim->quad, target_pos, desired_vel_B);
+            // Get desired body-frame velocities and yaw rate from high-level controller
+            velocity_controller(sim->quad, target_pos, desired_vel_B, &desired_yaw_rate);
             
-            // Get state using only sensor data and desired velocities
-            get_state(sim->quad, states[steps], desired_vel_B);
+            // Get state using sensor data, desired velocities, and desired yaw rate
+            get_state(sim->quad, states[steps], desired_vel_B, desired_yaw_rate);
             
             // Run policy network
             forward(policy, states[steps]);
@@ -173,7 +194,7 @@ int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, do
                 sim->quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(sim->quad, desired_vel_B);
+            rewards[steps] = compute_reward(sim->quad, desired_vel_B, desired_yaw_rate);
             steps++;
             t_control += DT_CONTROL;
         }
