@@ -359,7 +359,10 @@ int main(int argc, char** argv) {
     save_net(final_weights, net);
     printf("Final weights saved to: %s\n", final_weights);
 
-    printf("\nTotal training time: %.2f seconds\n", elapsed);
+    int hours = (int)elapsed / 3600;
+    int minutes = ((int)elapsed % 3600) / 60;
+    int seconds = (int)elapsed % 60;
+    printf("\nTotal training time: %dh %dm %ds\n", hours, minutes, seconds);
 
     // Free all allocated memory
     for(int r = 0; r < NUM_ROLLOUTS; r++) {

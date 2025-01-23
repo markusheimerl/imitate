@@ -27,14 +27,14 @@ jobs:
         ./visualize.out $WEIGHTS_FILE
         GIF_FILE=$(ls -t *_flight.gif | head -n1)
         BEST_RETURN=$(grep "Best:" training.log | tail -n1 | sed 's/.*Best: //' | cut -d' ' -f1)
-        TOTAL_TIME=$(grep "Total training time:" training.log | sed 's/Total training time: //' | sed 's/ seconds//')
+        FORMATTED_TIME=$(grep "Total training time:" training.log | sed 's/Total training time: //')
         PERCENTAGE_RATE=$(grep "Rate:" training.log | tail -n1 | sed 's/.*Rate: //' | sed 's/ %\/s//')
         
         echo "WEIGHTS_FILE=${WEIGHTS_FILE}" >> $GITHUB_ENV
         echo "GIF_FILE=${GIF_FILE}" >> $GITHUB_ENV
         echo "TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_ENV
         echo "BEST_RETURN=${BEST_RETURN}" >> $GITHUB_ENV
-        echo "TOTAL_TIME=${TOTAL_TIME}" >> $GITHUB_ENV
+        echo "FORMATTED_TIME=${FORMATTED_TIME}" >> $GITHUB_ENV
         echo "PERCENTAGE_RATE=${PERCENTAGE_RATE}" >> $GITHUB_ENV
 
     - name: Create Release
@@ -47,7 +47,7 @@ jobs:
           
           - 🔄 Epochs: ${{ github.event.inputs.epochs }}
           - 🎯 Best Return: ${{ env.BEST_RETURN }}
-          - ⏱️ Total Time: ${{ env.TOTAL_TIME }} seconds
+          - ⏱️ Total Time: ${{ env.FORMATTED_TIME }}
           - 📈 Final Improvement Rate: ${{ env.PERCENTAGE_RATE }} %/s
           - ⏰ Completed: ${{ env.TIMESTAMP }}
         files: |
