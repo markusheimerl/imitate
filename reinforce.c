@@ -138,7 +138,7 @@ bool is_terminated(Quad* q, double* target_pos) {
         ang_vel += pow(q->angular_velocity_B[i], 2);
     }
     return sqrt(dist) > MAX_DISTANCE || sqrt(vel) > MAX_VELOCITY || 
-           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0;
+           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0 || q->linear_position_W[i] < 0.1;
 }
 
 int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, double* rewards, int epoch, int total_epochs) {
