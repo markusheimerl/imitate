@@ -94,15 +94,9 @@ void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
             forward(policy, rollout->states[rollout->length]);
             
             for(int i = 0; i < 4; i++) {
-                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], 
-                                  MIN_STD, MAX_STD);
-                
-                double safe_margin = 4.0 * std;
-                double mean_min = OMEGA_MIN + safe_margin;
-                double mean_max = OMEGA_MAX - safe_margin;
-                double mean = squash(policy->layers[policy->n_layers-1].x[i], 
-                                   mean_min, mean_max);
-                
+                double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
+                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
+
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
@@ -128,53 +122,55 @@ void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
     }
 }
 
-// ∇J(θ) = E[∇log π_θ(a|s) * R] ≈ (1/N) Σᵢ[∇log π_θ(aᵢ|sᵢ) * Rᵢ] - REINFORCE algorithm
-// For Gaussian policy π_θ(a|s) = N(μ_θ(s), σ_θ(s))
-// where μ_θ(s) is the mean action and σ_θ(s) is the standard deviation
+// ∇J(θ) = E[∇_θ log π_θ(a|s) * R] ≈ 1/N Σ_t [∇_θ log π_θ(a_t|s_t) * R_t]
+// Where:
+// J(θ) - Policy objective function
+// π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
+// R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
     double output_gradient[ACTION_DIM];
     
     for(int t = 0; t < rollout->length; t++) {
         forward(policy, rollout->states[t]);
-        Layer *output = &policy->layers[policy->n_layers-1];
         
         for(int i = 0; i < 4; i++) {
-            // 1. Transform network outputs to valid std and mean ranges
-            // σ ∈ [MIN_STD, MAX_STD] via squashing function
-            double std = squash(output->x[i + 4], MIN_STD, MAX_STD);
+            // Network outputs raw parameters before squashing
+            double mean_raw = policy->layers[policy->n_layers-1].x[i];
+            double std_raw = policy->layers[policy->n_layers-1].x[i + 4];
             
-            // Ensure actions stay within bounds with high probability (4σ = 99.994%)
-            // μ ∈ [OMEGA_MIN + 4σ, OMEGA_MAX - 4σ]
-            double safe_margin = 4.0 * std;
-            double mean_min = OMEGA_MIN + safe_margin;
-            double mean_max = OMEGA_MAX - safe_margin;
-            double mean = squash(output->x[i], mean_min, mean_max);
+            // Squashed parameters using tanh-based scaling
+            // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
+            // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
+            double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
+            double std_val = squash(std_raw, MIN_STD, MAX_STD);
             
-            // 2. Compute normalized action
-            // z = (a - μ)/σ
-            double z = (rollout->actions[t][i] - mean) / std;
-            
-            // 3. Compute gradients for Gaussian policy
-            // For mean: ∂log π/∂μ = (a-μ)/σ² = z/σ
-            // Chain rule: ∂log π/∂θμ = (∂log π/∂μ)(∂μ/∂θμ)
-            // where ∂μ/∂θμ = dsquash(θμ, mean_min, mean_max)
-            double dmean_dtheta = dsquash(output->x[i], mean_min, mean_max);
-            output_gradient[i] = -rollout->rewards[t] * (z / std) * dmean_dtheta;
-            
-            // 4. Gradient for standard deviation
-            // ∂log π/∂σ = (z² - 1)/σ
-            // Indirect effect through mean bounds: ∂μ/∂σ = -4.0 * dsquash
-            // Total effect: ∂log π/∂σ = (z² - 1)/σ + (z/σ) * (-4.0 * dsquash)
-            double dstd_direct = (z * z - 1.0) / std;
-            double dmean_dstd = -4.0 * dsquash(output->x[i], mean_min, mean_max);
-            double dstd = dstd_direct + (z / std) * dmean_dstd;
-            
-            // Chain rule through squashing: ∂log π/∂θσ = (∂log π/∂σ)(∂σ/∂θσ)
-            // where ∂σ/∂θσ = dsquash(θσ, MIN_STD, MAX_STD)
-            double dstd_dtheta = dsquash(output->x[i + 4], MIN_STD, MAX_STD);
-            output_gradient[i + 4] = -rollout->rewards[t] * dstd * dstd_dtheta;
+            // Sampled action and its deviation from mean
+            double action = rollout->actions[t][i];
+            double delta = action - mean;
+
+            // Gradient for mean parameter:
+            // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
+            // Where:
+            // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
+            // dμ/dμ_raw = derivative of squashing function (dsquash)
+            output_gradient[i] = -(delta / (std_val * std_val)) * 
+                dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
+                rollout->rewards[t];
+
+            // Gradient for standard deviation parameter:
+            // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
+            // Where:
+            // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
+            // dσ/dσ_raw = derivative of squashing function (dsquash)
+            output_gradient[i + 4] = -((delta * delta - std_val * std_val) / 
+                (std_val * std_val * std_val)) * 
+                dsquash(std_raw, MIN_STD, MAX_STD) * 
+                rollout->rewards[t];
         }
 
+        // Backpropagate gradients through network
+        // Negative sign converts gradient ascent (policy improvement) 
+        // to gradient descent (standard optimization framework)
         bwd(policy, output_gradient, epoch, epochs);
     }
 }

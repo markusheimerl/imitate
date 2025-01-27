@@ -14,6 +14,9 @@
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
+#define MAX_MEAN 55.0
+#define MIN_MEAN 45.0
+
 #define MIN_DISTANCE 0.1
 #define MAX_DISTANCE 2.0
 
