@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
         net = load_net(argv[2]);
     } else {
         int layers[] = {STATE_DIM, 64, ACTION_DIM};
-        net = init_net(3, layers, 1e-4);
+        net = init_net(3, layers, 1e-5);
     }
     
     Quad* quad = init_quad(0.0, 0.0, 0.0);

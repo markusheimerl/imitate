@@ -44,9 +44,9 @@ int main(int argc, char** argv) {
 
     // Initialize random target position
     double target_pos[3] = {
-        (double)rand() / RAND_MAX * 4.0 - 2.0,  // Range: -2 to 2
-        1.5,                                     // Fixed height
-        (double)rand() / RAND_MAX * 4.0 - 2.0   // Range: -2 to 2
+        (double)rand() / RAND_MAX * 2.0 - 1.0,  // Range: -1 to 1
+        1.3,                                     // Fixed height
+        (double)rand() / RAND_MAX * 2.0 - 1.0   // Range: -1 to 1
     };
     
     printf("Target position: (%.2f, %.2f, %.2f)\n", 
