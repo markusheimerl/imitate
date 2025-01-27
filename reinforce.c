@@ -88,8 +88,7 @@ double compute_reward(Quad q, double* target_pos) {
     return exp(-total_error);
 }
 
-int collect_rollout(Net* policy, double** states, double** actions, 
-                   double* rewards, int epoch, int total_epochs) {
+void collect_rollout(Net* policy, Rollout* rollout, int epoch, int total_epochs) {
     // Get random start/target with curriculum
     const double max_training_distance = 2.0;
     double r = (epoch < 100) ? 0.01 : 
@@ -111,9 +110,9 @@ int collect_rollout(Net* policy, double** states, double** actions,
     // Initialize timers
     double t_physics = 0.0;
     double t_control = 0.0;
-    int steps = 0;
+    rollout->length = 0;
 
-    while(steps < MAX_STEPS) {
+    while(rollout->length < MAX_STEPS) {
         if (dotVec3f(quad.linear_position_W, quad.linear_position_W) > 16.0 || // 4 meters squared
             dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 25.0 || // 5 m/s squared
             dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 25.0 || // ~5 rad/s squared
@@ -127,10 +126,10 @@ int collect_rollout(Net* policy, double** states, double** actions,
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            get_quad_state(quad, states[steps]);
-            memcpy(states[steps] + 12, target, 3 * sizeof(double));
+            get_quad_state(quad, rollout->states[rollout->length]);
+            memcpy(rollout->states[rollout->length] + 12, target, 3 * sizeof(double));
             
-            forward(policy, states[steps]);
+            forward(policy, rollout->states[rollout->length]);
             
             for(int i = 0; i < 4; i++) {
                 double std = squash(policy->layers[policy->n_layers-1].x[i + 4], 
@@ -146,12 +145,12 @@ int collect_rollout(Net* policy, double** states, double** actions,
                 double u2 = (double)rand()/RAND_MAX;
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
-                actions[steps][i] = mean + std * noise;
-                quad.omega_next[i] = actions[steps][i];
+                rollout->actions[rollout->length][i] = mean + std * noise;
+                quad.omega_next[i] = rollout->actions[rollout->length][i];
             }
             
-            rewards[steps] = compute_reward(quad, target);
-            steps++;
+            rollout->rewards[rollout->length] = compute_reward(quad, target);
+            rollout->length++;
             t_control = 0.0;
         }
         
@@ -162,22 +161,19 @@ int collect_rollout(Net* policy, double** states, double** actions,
     
     // Compute returns
     double G = 0.0;
-    for(int i = steps-1; i >= 0; i--) {
-        rewards[i] = G = rewards[i] + GAMMA * G;
+    for(int i = rollout->length-1; i >= 0; i--) {
+        rollout->rewards[i] = G = rollout->rewards[i] + GAMMA * G;
     }
-    
-    return steps;
 }
 
 // ∇J(θ) = E[∇log π_θ(a|s) * R] ≈ (1/N) Σᵢ[∇log π_θ(aᵢ|sᵢ) * Rᵢ] - REINFORCE algorithm
 // For Gaussian policy π_θ(a|s) = N(μ_θ(s), σ_θ(s))
 // where μ_θ(s) is the mean action and σ_θ(s) is the standard deviation
-void update_policy(Net* policy, double** states, double** actions, double* returns, 
-                  int steps, int epoch, int epochs) {
+void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
     double output_gradient[ACTION_DIM];
     
-    for(int t = 0; t < steps; t++) {
-        forward(policy, states[t]);
+    for(int t = 0; t < rollout->length; t++) {
+        forward(policy, rollout->states[t]);
         Layer *output = &policy->layers[policy->n_layers-1];
         
         for(int i = 0; i < 4; i++) {
@@ -194,14 +190,14 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             
             // 2. Compute normalized action
             // z = (a - μ)/σ
-            double z = (actions[t][i] - mean) / std;
+            double z = (rollout->actions[t][i] - mean) / std;
             
             // 3. Compute gradients for Gaussian policy
             // For mean: ∂log π/∂μ = (a-μ)/σ² = z/σ
             // Chain rule: ∂log π/∂θμ = (∂log π/∂μ)(∂μ/∂θμ)
             // where ∂μ/∂θμ = dsquash(θμ, mean_min, mean_max)
             double dmean_dtheta = dsquash(output->x[i], mean_min, mean_max);
-            output_gradient[i] = -returns[t] * (z / std) * dmean_dtheta;
+            output_gradient[i] = -rollout->rewards[t] * (z / std) * dmean_dtheta;
             
             // 4. Gradient for standard deviation
             // ∂log π/∂σ = (z² - 1)/σ
@@ -214,7 +210,7 @@ void update_policy(Net* policy, double** states, double** actions, double* retur
             // Chain rule through squashing: ∂log π/∂θσ = (∂log π/∂σ)(∂σ/∂θσ)
             // where ∂σ/∂θσ = dsquash(θσ, MIN_STD, MAX_STD)
             double dstd_dtheta = dsquash(output->x[i + 4], MIN_STD, MAX_STD);
-            output_gradient[i + 4] = -returns[t] * dstd * dstd_dtheta;
+            output_gradient[i + 4] = -rollout->rewards[t] * dstd * dstd_dtheta;
         }
 
         bwd(policy, output_gradient, epoch, epochs);
@@ -254,12 +250,12 @@ int main(int argc, char** argv) {
         double sum_returns = 0.0;
         
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            rollouts[r]->length = collect_rollout(net, rollouts[r]->states, rollouts[r]->actions, rollouts[r]->rewards, epoch, epochs);
+            collect_rollout(net, rollouts[r], epoch, epochs);
             sum_returns += rollouts[r]->rewards[0];
         }
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            update_policy(net, rollouts[r]->states, rollouts[r]->actions, rollouts[r]->rewards, rollouts[r]->length, epoch, epochs);
+            update_policy(net, rollouts[r], epoch, epochs);
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
