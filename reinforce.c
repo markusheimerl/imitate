@@ -88,11 +88,11 @@ double compute_reward(Quad q, double* target_pos) {
     return exp(-total_error);
 }
 
-void collect_rollout(Net* policy, Rollout* rollout, int epoch, int total_epochs) {
+void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
     // Get random start/target with curriculum
     const double max_training_distance = 2.0;
     double r = (epoch < 100) ? 0.01 : 
-               0.01 + (max_training_distance - 0.01) * fmin(1.0, (epoch - 100.0)/(total_epochs - 100.0));
+               0.01 + (max_training_distance - 0.01) * fmin(1.0, (epoch - 100.0)/(epochs - 100.0));
     
     double angle = 2 * M_PI * ((double)rand() / RAND_MAX);
     double dist = r * ((double)rand() / RAND_MAX);
