@@ -228,6 +228,15 @@ Quad* init_quad(double x, double y, double z) {
     return quad;
 }
 
+void get_quad_state(const Quad* q, double* state) {
+    memcpy(state, q->linear_position_W, 3 * sizeof(double));
+    memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
+    memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
+    state[9] = q->R_W_B[0];
+    state[10] = q->R_W_B[4];
+    state[11] = q->R_W_B[8];
+}
+
 void print_quad(Quad* q) {
     printf("\rP: %.2f %.2f %.2f | R: %.2f %.2f %.2f %.2f", q->linear_position_W[0], q->linear_position_W[1], q->linear_position_W[2], q->omega[0], q->omega[1], q->omega[2], q->omega[3]);
 }

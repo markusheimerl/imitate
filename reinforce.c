@@ -11,63 +11,52 @@
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
 
-#define MAX_DISTANCE 2.0
-#define MAX_VELOCITY 5.0
-#define MAX_ANGULAR_VELOCITY 5.0
-
 #define STATE_DIM 15
 #define ACTION_DIM 8
-
-#define MAX_STEPS 1000 // 1000 * 60Hz = 16.66s
+#define MAX_STEPS 1000
 #define NUM_ROLLOUTS 64
 
 #define GAMMA 0.999
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-double squash(double x, double min, double max) { return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); }
-double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); }
+typedef struct {
+    double** states;    // [MAX_STEPS][STATE_DIM]
+    double** actions;   // [MAX_STEPS][NUM_ROTORS]
+    double* rewards;    // [MAX_STEPS]
+    int length;
+} Rollout;
 
-double get_task_radius(int epoch, int total_epochs) {
-    const double INITIAL_TASK_RADIUS = 0.01;  // Start with easier tasks
-    const double FINAL_TASK_RADIUS = 1.0;     // End with harder tasks
-    const int CURRICULUM_WARMUP = 100;        // Initial warmup period
+Rollout* create_rollout() {
+    Rollout* r = malloc(sizeof(Rollout));
+    r->states = malloc(MAX_STEPS * sizeof(double*));
+    r->actions = malloc(MAX_STEPS * sizeof(double*));
+    r->rewards = malloc(MAX_STEPS * sizeof(double));
     
-    if (epoch < CURRICULUM_WARMUP) {
-        return INITIAL_TASK_RADIUS;
+    for(int i = 0; i < MAX_STEPS; i++) {
+        r->states[i] = malloc(STATE_DIM * sizeof(double));
+        r->actions[i] = malloc(4 * sizeof(double));
     }
-    
-    // Linear progress from 0 to 1 after warmup
-    double progress = (double)(epoch - CURRICULUM_WARMUP) / 
-                     (double)(total_epochs - CURRICULUM_WARMUP);
-    progress = fmin(1.0, fmax(0.0, progress));  // Clamp to [0,1]
-    
-    // Simple linear interpolation between initial and final radius
-    return INITIAL_TASK_RADIUS + 
-           (FINAL_TASK_RADIUS - INITIAL_TASK_RADIUS) * progress;
+    return r;
 }
 
-void get_random_position(double pos[3], double center[3], double radius) {
-    double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
-    double phi = acos(2.0 * ((double)rand()/RAND_MAX) - 1.0);
-    double r = radius * ((double)rand()/RAND_MAX);
-
-    pos[0] = center[0] + r * sin(phi) * cos(theta);
-    pos[1] = center[1] + r * sin(phi) * sin(theta);
-    pos[2] = center[2] + r * cos(phi);
-
-    pos[1] = fmax(pos[1], 0.5); // MIN_HEIGHT
-    pos[1] = fmin(pos[1], 1.5); // MAX_HEIGHT
+void free_rollout(Rollout* r) {
+    for(int i = 0; i < MAX_STEPS; i++) {
+        free(r->states[i]);
+        free(r->actions[i]);
+    }
+    free(r->states);
+    free(r->actions);
+    free(r->rewards);
+    free(r);
 }
 
-void get_state(Quad* q, double* state, double* target_pos) {
-    memcpy(state, q->linear_position_W, 3 * sizeof(double));
-    memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
-    memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
-    state[9] = q->R_W_B[0];
-    state[10] = q->R_W_B[4];
-    state[11] = q->R_W_B[8];
-    memcpy(state + 12, target_pos, 3 * sizeof(double));
+double squash(double x, double min, double max) { 
+    return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
+}
+
+double dsquash(double x, double min, double max) { 
+    return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
 }
 
 double compute_reward(Quad* q, double* target_pos) {
@@ -99,53 +88,63 @@ double compute_reward(Quad* q, double* target_pos) {
     return exp(-total_error);
 }
 
-bool is_terminated(Quad* q, double* target_pos) {
-    double dist = 0.0, vel = 0.0, ang_vel = 0.0;
-    for(int i = 0; i < 3; i++) {
-        dist += pow(q->linear_position_W[i] - target_pos[i], 2);
-        vel += pow(q->linear_velocity_W[i], 2);
-        ang_vel += pow(q->angular_velocity_B[i], 2);
+int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, 
+                   double* rewards, int epoch, int total_epochs) {
+    // Get random start/target with curriculum
+    double r = (epoch < 100) ? 0.01 : 
+               0.01 + 0.99 * fmin(1.0, (epoch - 100.0)/(total_epochs - 100.0));
+    
+    double start[3], target[3];
+    for(int i = 0; i < 2; i++) {  // Do twice: once for start, once for target
+        double a = 2*M_PI * (double)rand()/RAND_MAX;
+        double z = 2.0 * (double)rand()/RAND_MAX - 1.0;
+        double r1 = r * (double)rand()/RAND_MAX;
+        double p = sqrt(1-z*z);
+        
+        double* pos = i == 0 ? start : target;
+        double base = i == 0 ? 0 : start[0];
+        pos[0] = base + r1 * p * cos(a);
+        pos[1] = fmax(0.5, fmin(1.5, (i == 0 ? 1.0 : start[1]) + r1 * z));
+        pos[2] = (i == 0 ? 0 : start[2]) + r1 * p * sin(a);
     }
-    return sqrt(dist) > MAX_DISTANCE || sqrt(vel) > MAX_VELOCITY || 
-           sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0 || q->linear_position_W[1] < 0.2;
-}
-
-int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, double* rewards, int epoch, int total_epochs) {
-    double start_pos[3];
-    double target_pos[3];
     
-    // Get current task radius based on curriculum learning progress
-    double current_radius = get_task_radius(epoch, total_epochs);
-
-    get_random_position(start_pos, (double[3]){0, 1, 0}, current_radius);
-    get_random_position(target_pos, start_pos, current_radius);
-    
-    reset_quad(quad, start_pos[0], start_pos[1], start_pos[2]);
+    reset_quad(quad, start[0], start[1], start[2]);
     
     double t_physics = 0.0, t_control = 0.0;
     int steps = 0;
     
-    while(steps < MAX_STEPS && !is_terminated(quad, target_pos)) {
+    while(steps < MAX_STEPS) {
+        // Quick termination check
+        double d2 = 0, v2 = 0, w2 = 0;
+        for(int i = 0; i < 3; i++) {
+            double d = quad->linear_position_W[i] - target[i];
+            d2 += d*d;
+            v2 += quad->linear_velocity_W[i] * quad->linear_velocity_W[i];
+            w2 += quad->angular_velocity_B[i] * quad->angular_velocity_B[i];
+        }
+        if(d2 > 4.0 || v2 > 25.0 || w2 > 25.0 || 
+           quad->R_W_B[4] < 0.0 || quad->linear_position_W[1] < 0.2) break;
+        
         update_quad(quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(quad, states[steps], target_pos);
+            // Get state including target
+            get_quad_state(quad, states[steps]);
+            memcpy(states[steps] + 12, target, 3 * sizeof(double));
+            
             forward(policy, states[steps]);
             
             for(int i = 0; i < 4; i++) {
-                // 1. Transform network outputs to valid std and mean ranges
-                // σ ∈ [MIN_STD, MAX_STD] via squashing function
-                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
+                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], 
+                                  MIN_STD, MAX_STD);
                 
-                // Ensure actions stay within bounds with high probability (4σ = 99.994%)
-                // μ ∈ [OMEGA_MIN + 4σ, OMEGA_MAX - 4σ]
                 double safe_margin = 4.0 * std;
                 double mean_min = OMEGA_MIN + safe_margin;
                 double mean_max = OMEGA_MAX - safe_margin;
-                double mean = squash(policy->layers[policy->n_layers-1].x[i], mean_min, mean_max);
+                double mean = squash(policy->layers[policy->n_layers-1].x[i], 
+                                   mean_min, mean_max);
                 
-                // 2. Sample action from Gaussian distribution
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
@@ -154,13 +153,12 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, 
                 quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(quad, target_pos);
+            rewards[steps] = compute_reward(quad, target);
             steps++;
             t_control += DT_CONTROL;
         }
     }
     
-    // Compute discounted returns: Gₜ = Σₖ₌₀ γᵏ rₜ₊ₖ₊₁
     double G = 0.0;
     for(int i = steps-1; i >= 0; i--) {
         rewards[i] = G = rewards[i] + GAMMA * G;
@@ -172,7 +170,8 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, 
 // ∇J(θ) = E[∇log π_θ(a|s) * R] ≈ (1/N) Σᵢ[∇log π_θ(aᵢ|sᵢ) * Rᵢ] - REINFORCE algorithm
 // For Gaussian policy π_θ(a|s) = N(μ_θ(s), σ_θ(s))
 // where μ_θ(s) is the mean action and σ_θ(s) is the standard deviation
-void update_policy(Net* policy, double** states, double** actions, double* returns, int steps, int epoch, int epochs) {
+void update_policy(Net* policy, double** states, double** actions, double* returns, 
+                  int steps, int epoch, int epochs) {
     double output_gradient[ACTION_DIM];
     
     for(int t = 0; t < steps; t++) {
@@ -238,24 +237,10 @@ int main(int argc, char** argv) {
     
     Quad* quad = init_quad(0.0, 0.0, 0.0);
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
-    double elapsed = 0.0;
-
-    // Heap allocations for large arrays
-    double*** all_states = malloc(NUM_ROLLOUTS * sizeof(double**));
-    double*** all_actions = malloc(NUM_ROLLOUTS * sizeof(double**));
-    double** all_rewards = malloc(NUM_ROLLOUTS * sizeof(double*));
-    int* rollout_steps = malloc(NUM_ROLLOUTS * sizeof(int));
-
-    // Allocate memory for each rollout
+    
+    Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        all_states[r] = malloc(MAX_STEPS * sizeof(double*));
-        all_actions[r] = malloc(MAX_STEPS * sizeof(double*));
-        all_rewards[r] = malloc(MAX_STEPS * sizeof(double));
-        
-        for(int i = 0; i < MAX_STEPS; i++) {
-            all_states[r][i] = malloc(STATE_DIM * sizeof(double));
-            all_actions[r][i] = malloc(4 * sizeof(double));
-        }
+        rollouts[r] = create_rollout();
     }
 
     int epochs = atoi(argv[1]);
@@ -266,20 +251,20 @@ int main(int argc, char** argv) {
     
     for(int epoch = 0; epoch < epochs; epoch++) {
         double sum_returns = 0.0;
-        double current_radius = get_task_radius(epoch, epochs);
-
+        
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            rollout_steps[r] = collect_rollout(quad, net, 
-                                             all_states[r], 
-                                             all_actions[r], 
-                                             all_rewards[r],
-                                             epoch, epochs);
-            sum_returns += all_rewards[r][0];
+            rollouts[r]->length = collect_rollout(quad, net, 
+                                                rollouts[r]->states,
+                                                rollouts[r]->actions,
+                                                rollouts[r]->rewards,
+                                                epoch, epochs);
+            sum_returns += rollouts[r]->rewards[0];
         }
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            update_policy(net, all_states[r], all_actions[r], 
-                         all_rewards[r], rollout_steps[r], epoch, epochs);
+            update_policy(net, rollouts[r]->states, rollouts[r]->actions,
+                         rollouts[r]->rewards, rollouts[r]->length,
+                         epoch, epochs);
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
@@ -292,7 +277,7 @@ int main(int argc, char** argv) {
         }
 
         gettimeofday(&current_time, NULL);
-        elapsed = (current_time.tv_sec - start_time.tv_sec) + 
+        double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
                         (current_time.tv_usec - start_time.tv_usec) / 1000000.0;
         
         double initial_percentage = (initial_best / theoretical_max) * 100.0;
@@ -300,37 +285,22 @@ int main(int argc, char** argv) {
         double percentage_rate = (current_percentage - initial_percentage) / elapsed;
 
         printf("epoch %d/%d | Radius: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
-               epoch+1, epochs, current_radius, mean_return, theoretical_max, 
+               epoch+1, epochs, 
+               (epoch < 100) ? 0.01 : 0.01 + 0.99 * fmin(1.0, (epoch - 100.0)/(epochs - 100.0)),
+               mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
                percentage_rate);
     }
-    printf("\n");
 
     char final_weights[64];
     strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
              localtime(&(time_t){time(NULL)}));
     save_net(final_weights, net);
-    printf("Final weights saved to: %s\n", final_weights);
+    printf("\nFinal weights saved to: %s\n", final_weights);
 
-    int hours = (int)elapsed / 3600;
-    int minutes = ((int)elapsed % 3600) / 60;
-    int seconds = (int)elapsed % 60;
-    printf("\nTotal training time: %dh %dm %ds\n", hours, minutes, seconds);
-
-    // Free all allocated memory
     for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        for(int i = 0; i < MAX_STEPS; i++) {
-            free(all_states[r][i]);
-            free(all_actions[r][i]);
-        }
-        free(all_states[r]);
-        free(all_actions[r]);
-        free(all_rewards[r]);
+        free_rollout(rollouts[r]);
     }
-    free(all_states);
-    free(all_actions);
-    free(all_rewards);
-    free(rollout_steps);
 
     free_net(net);
     free(quad);
