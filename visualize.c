@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
     Quad quad = create_quad(start[0], start[1], start[2]);
     
     // Initialize raytracer scene
-    Scene scene = create_scene(800, 600, ((int)(DT_CONTROL * MAX_STEPS * 1000)), ((int)(1.0 / DT_RENDER), 0.8f);
+    Scene scene = create_scene(400, 300, ((int)(DT_CONTROL * MAX_STEPS * 1000)), ((int)(1.0 / DT_RENDER)), 0.8f);
     
     // Set up camera to view both start and target positions
     Vec3 center = {
