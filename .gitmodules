@@ -4,3 +4,6 @@
 [submodule "grad"]
 	path = grad
 	url = https://github.com/markusheimerl/grad.git
+[submodule "raytracer"]
+	path = raytracer
+	url = https://github.com/markusheimerl/raytracer.git
