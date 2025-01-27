@@ -6,7 +6,7 @@ reinforce.out: reinforce.c
 	$(CC) $(CFLAGS) reinforce.c $(LDFLAGS) -o reinforce.out
 
 run: reinforce.out
-	@time ./reinforce.out 100
+	@time ./reinforce.out 1000
 
 visualize.out: visualize.c
 	$(CC) $(CFLAGS) visualize.c $(LDFLAGS) -o visualize.out
