@@ -10,6 +10,7 @@
 
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
+#define DT_RENDER (1.0/24.0)
 
 #define STATE_DIM 15
 #define ACTION_DIM 8
