@@ -224,76 +224,50 @@ int main(int argc, char** argv) {
     }
 
     srand(time(NULL) ^ getpid());
-    
-    Net* net;
-    if(argc == 3) {
-        net = load_net(argv[2]);
-    } else {
-        int layers[] = {STATE_DIM, 64, ACTION_DIM};
-        net = init_net(3, layers, 1e-5);
-    }
-    
-    double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
+    Net* net = (argc == 3) ? load_net(argv[2]) : init_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 1e-5);
     
     Rollout* rollouts[NUM_ROLLOUTS];
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        rollouts[r] = create_rollout();
-    }
+    for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
 
     int epochs = atoi(argv[1]);
-    double best_return = -1e30;
-    double initial_best = -1e30;
-    struct timeval start_time, current_time;
+    double best_return = -1e30, initial_best = -1e30;
+    double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
+    struct timeval start_time;
     gettimeofday(&start_time, NULL);
     
     for(int epoch = 0; epoch < epochs; epoch++) {
         double sum_returns = 0.0;
-        
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             collect_rollout(net, rollouts[r], epoch, epochs);
             sum_returns += rollouts[r]->rewards[0];
         }
-
+        
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             update_policy(net, rollouts[r], epoch, epochs);
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
-        if(mean_return > best_return) {
-            best_return = mean_return;
-        }
+        best_return = fmax(mean_return, best_return);
+        if(epoch == 0) initial_best = best_return;
 
-        if(epoch == 0) {
-            initial_best = best_return;
-        }
-
-        gettimeofday(&current_time, NULL);
-        double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
-                        (current_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        double elapsed = (now.tv_sec - start_time.tv_sec) + (now.tv_usec - start_time.tv_usec) / 1e6;
         
-        double initial_percentage = (initial_best / theoretical_max) * 100.0;
-        double current_percentage = (best_return / theoretical_max) * 100.0;
-        double percentage_rate = (current_percentage - initial_percentage) / elapsed;
-
         printf("epoch %d/%d | Radius: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
                epoch+1, epochs, 
                (epoch < 100) ? 0.01 : 0.01 + 0.99 * fmin(1.0, (epoch - 100.0)/(epochs - 100.0)),
                mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
-               percentage_rate);
+               ((best_return/theoretical_max) * 100.0 - (initial_best/theoretical_max) * 100.0) / elapsed);
     }
 
-    char final_weights[64];
-    strftime(final_weights, sizeof(final_weights), "%Y%m%d_%H%M%S_policy.bin", 
-             localtime(&(time_t){time(NULL)}));
-    save_net(final_weights, net);
-    printf("\nFinal weights saved to: %s\n", final_weights);
+    char filename[64];
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
+    save_net(filename, net);
+    printf("\nFinal weights saved to: %s\n", filename);
 
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        free_rollout(rollouts[r]);
-    }
-
+    for(int r = 0; r < NUM_ROLLOUTS; r++) free_rollout(rollouts[r]);
     free_net(net);
-
     return 0;
 }
