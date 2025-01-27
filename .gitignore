@@ -4,7 +4,6 @@
 # Object files
 *.o
 *.ko
-*.obj
 *.elf
 
 # Linker output
@@ -51,8 +50,5 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-*.csv
-*.bin
-*.gif
-*.png
-*.txt
+*_policy.bin
+*_flight.webp

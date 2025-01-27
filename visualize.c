@@ -1,43 +1,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <stdbool.h>
+#include <time.h>
 #include <math.h>
-#include "grad.h"
-#include "scene.h"
 #include "quad.h"
+#include "scene.h"
+#include "grad.h"
 
-#define DT_PHYSICS (1.0/1000.0)
-#define DT_CONTROL (1.0/60.0)
-#define DT_RENDER (1.0/24.0)
+#define DT_PHYSICS  (1.0 / 1000.0)
+#define DT_CONTROL  (1.0 / 60.0)
+#define DT_RENDER   (1.0 / 24.0)
 
 #define STATE_DIM 15
-#define HIDDEN_DIM 64
 #define ACTION_DIM 8
-
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-#define TASK_RADIUS 3.0
-#define MIN_HEIGHT 0.5
-#define MAX_HEIGHT 1.5
-#define SIMULATION_DURATION 10.0
-
 double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
-}
-
-void get_random_position(double pos[3], double center[3], double radius) {
-    double theta = ((double)rand()/RAND_MAX) * 2.0 * M_PI;
-    double phi = acos(2.0 * ((double)rand()/RAND_MAX) - 1.0);
-    double r = radius * ((double)rand()/RAND_MAX);
-
-    pos[0] = center[0] + r * sin(phi) * cos(theta);
-    pos[1] = center[1] + r * sin(phi) * sin(theta);
-    pos[2] = center[2] + r * cos(phi);
-
-    pos[1] = fmax(pos[1], MIN_HEIGHT);
-    pos[1] = fmin(pos[1], MAX_HEIGHT);
 }
 
 void get_state(Quad* q, double* state, double* target_pos) {
@@ -56,20 +37,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    srand(time(NULL) ^ getpid());
-
-    // Initialize policy network
+    srand(time(NULL));
+    
+    // Load policy network
     Net* policy = load_net(argv[1]);
-    if(!policy) {
-        printf("Failed to load weights from %s\n", argv[1]);
-        return 1;
-    }
 
+    // Initialize random target position
+    double target_pos[3] = {
+        (double)rand() / RAND_MAX * 4.0 - 2.0,  // Range: -2 to 2
+        1.5,                                     // Fixed height
+        (double)rand() / RAND_MAX * 4.0 - 2.0   // Range: -2 to 2
+    };
+    
+    printf("Target position: (%.2f, %.2f, %.2f)\n", 
+           target_pos[0], target_pos[1], target_pos[2]);
+    
     // Initialize quadcopter
     Quad* quad = init_quad(0.0, 0.0, 0.0);
-
-    // Initialize scene
-    Scene scene = create_scene(800, 600, (int)(SIMULATION_DURATION/DT_RENDER), 24, 0.9f);
+    
+    // Initialize raytracer scene
+    Scene scene = create_scene(800, 600, 10000, 24, 0.9f);
     
     // Set up camera
     set_scene_camera(&scene,
@@ -86,40 +73,36 @@ int main(int argc, char** argv) {
     );
     
     // Add meshes to scene
-    Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
+    Mesh drone = create_mesh("raytracer/drone.obj", "raytracer/drone.webp");
     add_mesh_to_scene(&scene, drone);
     
-    Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
+    Mesh ground = create_mesh("raytracer/ground.obj", "raytracer/ground.webp");
     add_mesh_to_scene(&scene, ground);
 
-    // Generate start and target positions
-    double start_pos[3], target_pos[3];
-    double center[3] = {0, 1, 0};
-    
-    get_random_position(start_pos, center, TASK_RADIUS);
-    get_random_position(target_pos, start_pos, TASK_RADIUS);
-    
-    // Reset quadcopter to start position
-    reset_quad(quad, start_pos[0], start_pos[1], start_pos[2]);
-
-    // Initialize state buffer
-    double state[STATE_DIM];
-
-    double t_physics = 0.0, t_control = 0.0, t_render = 0.0;
+    // Initialize timers
+    double t_physics = 0.0;
+    double t_control = 0.0;
+    double t_render = 0.0;
     int frame = 0;
     
-    printf("Starting visualization...\n");
-    printf("Start position: (%.2f, %.2f, %.2f)\n", start_pos[0], start_pos[1], start_pos[2]);
-    printf("Target position: (%.2f, %.2f, %.2f)\n", target_pos[0], target_pos[1], target_pos[2]);
-    
-    while(t_physics < SIMULATION_DURATION) {
-        update_quad(quad, DT_PHYSICS);
-        t_physics += DT_PHYSICS;
+    // State buffer for neural network
+    double state[STATE_DIM];
+
+    // Main simulation loop
+    while (frame < scene.frame_count) {
+        // Physics update
+        if (t_physics >= DT_PHYSICS) {
+            update_quad(quad, DT_PHYSICS);
+            t_physics = 0.0;
+        }
         
-        if(t_control <= t_physics) {
+        // Control update
+        if (t_control >= DT_CONTROL) {
+            // Get current state and run through policy network
             get_state(quad, state, target_pos);
             forward(policy, state);
             
+            // Extract actions from network output
             for(int i = 0; i < 4; i++) {
                 double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
                 double safe_margin = 4.0 * std;
@@ -130,16 +113,16 @@ int main(int argc, char** argv) {
                 quad->omega_next[i] = mean;
             }
             
-            t_control += DT_CONTROL;
+            t_control = 0.0;
             
+            // Print current status
             double dist = sqrt(
                 pow(quad->linear_position_W[0] - target_pos[0], 2) +
                 pow(quad->linear_position_W[1] - target_pos[1], 2) +
                 pow(quad->linear_position_W[2] - target_pos[2], 2)
             );
-            
-            printf("\rTime: %.2f/%.2f | Pos: (%.2f, %.2f, %.2f) | Dist: %.3f", 
-                   t_physics, SIMULATION_DURATION,
+            printf("\rTime: %.2f | Pos: (%.2f, %.2f, %.2f) | Dist: %.3f", 
+                   frame * DT_RENDER,
                    quad->linear_position_W[0],
                    quad->linear_position_W[1],
                    quad->linear_position_W[2],
@@ -147,7 +130,8 @@ int main(int argc, char** argv) {
             fflush(stdout);
         }
         
-        if(t_render <= t_physics) {
+        // Render update
+        if (t_render >= DT_RENDER) {
             // Update drone position and orientation in the scene
             set_mesh_position(&scene.meshes[0], 
                 (Vec3){(float)quad->linear_position_W[0], 
@@ -166,36 +150,25 @@ int main(int argc, char** argv) {
             next_frame(&scene);
             
             frame++;
-            t_render += DT_RENDER;
+            t_render = 0.0;
         }
+        
+        // Increment timers
+        t_physics += DT_PHYSICS;
+        t_control += DT_PHYSICS;
+        t_render += DT_PHYSICS;
     }
 
-    double final_dist = sqrt(
-        pow(quad->linear_position_W[0] - target_pos[0], 2) +
-        pow(quad->linear_position_W[1] - target_pos[1], 2) +
-        pow(quad->linear_position_W[2] - target_pos[2], 2)
-    );
-
-    printf("\n\nSimulation complete!\n");
-    printf("Final position: (%.2f, %.2f, %.2f)\n",
-           quad->linear_position_W[0],
-           quad->linear_position_W[1],
-           quad->linear_position_W[2]);
-    printf("Target position: (%.2f, %.2f, %.2f)\n",
-           target_pos[0], target_pos[1], target_pos[2]);
-    printf("Final distance to target: %.3f\n", final_dist);
-
-    // Save the animation
+    // Save animation
     char filename[64];
     strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", 
              localtime(&(time_t){time(NULL)}));
     save_scene(&scene, filename);
-    printf("Animation saved as: %s\n", filename);
 
     // Cleanup
-    free_net(policy);
-    free(quad);
     destroy_scene(&scene);
-
+    free(quad);
+    free_net(policy);
+    
     return 0;
 }

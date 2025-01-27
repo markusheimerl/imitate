@@ -12,4 +12,4 @@ visualize.out: visualize.c
 	$(CC) $(CFLAGS) visualize.c $(LDFLAGS) -o visualize.out
 
 clean:
-	rm -f *.out *_flight.webp
+	rm -f *.out *_policy.bin *_flight.webp
