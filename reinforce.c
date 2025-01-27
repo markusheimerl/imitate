@@ -91,22 +91,19 @@ double compute_reward(Quad* q, double* target_pos) {
 int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, 
                    double* rewards, int epoch, int total_epochs) {
     // Get random start/target with curriculum
+    const double max_training_distance = 2.0;
     double r = (epoch < 100) ? 0.01 : 
-               0.01 + 0.99 * fmin(1.0, (epoch - 100.0)/(total_epochs - 100.0));
+               0.01 + (max_training_distance - 0.01) * fmin(1.0, (epoch - 100.0)/(total_epochs - 100.0));
     
-    double start[3], target[3];
-    for(int i = 0; i < 2; i++) {
-        double a = 2*M_PI * (double)rand()/RAND_MAX;
-        double z = 2.0 * (double)rand()/RAND_MAX - 1.0;
-        double r1 = r * (double)rand()/RAND_MAX;
-        double p = sqrt(1-z*z);
-        
-        double* pos = i == 0 ? start : target;
-        double base = i == 0 ? 0 : start[0];
-        pos[0] = base + r1 * p * cos(a);
-        pos[1] = fmax(0.5, fmin(1.5, (i == 0 ? 1.0 : start[1]) + r1 * z));
-        pos[2] = (i == 0 ? 0 : start[2]) + r1 * p * sin(a);
-    }
+    double angle = 2 * M_PI * ((double)rand() / RAND_MAX);
+    double dist = r * ((double)rand() / RAND_MAX);
+    
+    double start[3] = {0, 1, 0};
+    double target[3] = {
+        dist * cos(angle),
+        1 + 0.2 * ((double)rand()/RAND_MAX - 0.5),
+        dist * sin(angle)
+    };
     
     reset_quad(quad, start[0], start[1], start[2]);
     
@@ -116,17 +113,11 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
     int steps = 0;
 
     while(steps < MAX_STEPS) {
-        // Quick termination check
-        double d2 = 0, v2 = 0, w2 = 0;
-        for(int i = 0; i < 3; i++) {
-            double d = quad->linear_position_W[i] - target[i];
-            d2 += d*d;
-            v2 += quad->linear_velocity_W[i] * quad->linear_velocity_W[i];
-            w2 += quad->angular_velocity_B[i] * quad->angular_velocity_B[i];
-        }
-        if(d2 > 4.0 || v2 > 25.0 || w2 > 25.0 || 
-           quad->R_W_B[4] < 0.0 || quad->linear_position_W[1] < 0.2) break;
-
+        if (dotVec3f(quad->linear_position_W, quad->linear_position_W) > 16.0 || // 4 meters squared
+            dotVec3f(quad->linear_velocity_W, quad->linear_velocity_W) > 25.0 || // 5 m/s squared
+            dotVec3f(quad->angular_velocity_B, quad->angular_velocity_B) > 25.0 || // ~5 rad/s squared
+            quad->R_W_B[4] < 0.0 /* more than 90° tilt */) break;
+            
         // Physics update
         if (t_physics >= DT_PHYSICS) {
             update_quad(quad, DT_PHYSICS);
@@ -263,18 +254,12 @@ int main(int argc, char** argv) {
         double sum_returns = 0.0;
         
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            rollouts[r]->length = collect_rollout(quad, net, 
-                                                rollouts[r]->states,
-                                                rollouts[r]->actions,
-                                                rollouts[r]->rewards,
-                                                epoch, epochs);
+            rollouts[r]->length = collect_rollout(quad, net, rollouts[r]->states, rollouts[r]->actions, rollouts[r]->rewards, epoch, epochs);
             sum_returns += rollouts[r]->rewards[0];
         }
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            update_policy(net, rollouts[r]->states, rollouts[r]->actions,
-                         rollouts[r]->rewards, rollouts[r]->length,
-                         epoch, epochs);
+            update_policy(net, rollouts[r]->states, rollouts[r]->actions, rollouts[r]->rewards, rollouts[r]->length, epoch, epochs);
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
