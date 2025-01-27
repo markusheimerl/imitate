@@ -1,19 +1,15 @@
 CC = clang
-CFLAGS = -O3 -march=native -ffast-math -Isim -Igrad -Isim/rasterizer
-LDFLAGS = -static -lm -flto
-
-.PHONY: clean run
-
-all: $(TARGETS)
-
-visualize.out: visualize.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+CFLAGS = -O3 -march=native -ffast-math -Wall -Wextra -Igrad -Iraytracer
+LDFLAGS = -static -lm -lwebp -lwebpmux -lpthread -flto
 
 reinforce.out: reinforce.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) reinforce.c $(LDFLAGS) -o reinforce.out
 
 run: reinforce.out
-	./reinforce.out 10000
+	@time ./reinforce.out 100
+
+visualize.out: visualize.c
+	$(CC) $(CFLAGS) visualize.c $(LDFLAGS) -o visualize.out
 
 clean:
-	rm -f *.out *.bin *.gif
+	rm -f *.out *_flight.webp

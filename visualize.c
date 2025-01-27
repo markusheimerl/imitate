@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <math.h>
-#include "grad/grad.h"
-#include "sim/quad.h"
-#include "sim/raytracer/scene.h"
+#include "grad.h"
+#include "scene.h"
+#include "quad.h"
 
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)

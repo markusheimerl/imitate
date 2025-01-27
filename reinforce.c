@@ -3,8 +3,9 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
-#include "grad/grad.h"
-#include "sim/quad.h"
+#include <unistd.h>
+#include "grad.h"
+#include "quad.h"
 #include <stdbool.h>
 
 #define DT_PHYSICS (1.0/1000.0)
