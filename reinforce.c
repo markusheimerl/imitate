@@ -4,7 +4,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include "grad/grad.h"
-#include "sim/sim.h"
+#include "sim/quad.h"
+#include <stdbool.h>
 
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
@@ -108,7 +109,7 @@ bool is_terminated(Quad* q, double* target_pos) {
            sqrt(ang_vel) > MAX_ANGULAR_VELOCITY || q->R_W_B[4] < 0.0 || q->linear_position_W[1] < 0.2;
 }
 
-int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, double* rewards, int epoch, int total_epochs) {
+int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, double* rewards, int epoch, int total_epochs) {
     double start_pos[3];
     double target_pos[3];
     
@@ -118,17 +119,17 @@ int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, do
     get_random_position(start_pos, (double[3]){0, 1, 0}, current_radius);
     get_random_position(target_pos, start_pos, current_radius);
     
-    reset_quad(sim->quad, start_pos[0], start_pos[1], start_pos[2]);
+    reset_quad(quad, start_pos[0], start_pos[1], start_pos[2]);
     
     double t_physics = 0.0, t_control = 0.0;
     int steps = 0;
     
-    while(steps < MAX_STEPS && !is_terminated(sim->quad, target_pos)) {
-        update_quad(sim->quad, DT_PHYSICS);
+    while(steps < MAX_STEPS && !is_terminated(quad, target_pos)) {
+        update_quad(quad, DT_PHYSICS);
         t_physics += DT_PHYSICS;
         
         if(t_control <= t_physics) {
-            get_state(sim->quad, states[steps], target_pos);
+            get_state(quad, states[steps], target_pos);
             forward(policy, states[steps]);
             
             for(int i = 0; i < 4; i++) {
@@ -149,10 +150,10 @@ int collect_rollout(Sim* sim, Net* policy, double** states, double** actions, do
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
                 actions[steps][i] = mean + std * noise;
-                sim->quad->omega_next[i] = actions[steps][i];
+                quad->omega_next[i] = actions[steps][i];
             }
             
-            rewards[steps] = compute_reward(sim->quad, target_pos);
+            rewards[steps] = compute_reward(quad, target_pos);
             steps++;
             t_control += DT_CONTROL;
         }
@@ -241,7 +242,7 @@ int main(int argc, char** argv) {
         net = init_net(3, layers, 1e-4);
     }
     
-    Sim* sim = init_sim("", false);
+    Quad* quad = init_quad(0.0, 0.0, 0.0);
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
     double elapsed = 0.0;
 
@@ -274,7 +275,7 @@ int main(int argc, char** argv) {
         double current_radius = get_task_radius(epoch, epochs);
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            rollout_steps[r] = collect_rollout(sim, net, 
+            rollout_steps[r] = collect_rollout(quad, net, 
                                              all_states[r], 
                                              all_actions[r], 
                                              all_rewards[r],
@@ -338,7 +339,7 @@ int main(int argc, char** argv) {
     free(rollout_steps);
 
     free_net(net);
-    free_sim(sim);
+    free(quad);
 
     return 0;
 }
