@@ -20,6 +20,9 @@
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
+#define MIN_DISTANCE 0.1
+#define MAX_DISTANCE 2.0
+
 typedef struct {
     double** states;    // [MAX_STEPS][STATE_DIM]
     double** actions;   // [MAX_STEPS][NUM_ROTORS]
@@ -89,20 +92,24 @@ double compute_reward(Quad q, double* target_pos) {
 }
 
 void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
-    // Get random start/target with curriculum
-    const double max_training_distance = 2.0;
-    double r = (epoch < 100) ? 0.01 : 
-               0.01 + (max_training_distance - 0.01) * fmin(1.0, (epoch - 100.0)/(epochs - 100.0));
+    // Linear curriculum learning: increase max distance over time
+    double max_current_distance = MIN_DISTANCE + 
+        (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs);
     
-    double angle = 2 * M_PI * ((double)rand() / RAND_MAX);
-    double dist = r * ((double)rand() / RAND_MAX);
-    
-    double start[3] = {0, 1, 0};
-    double target[3] = {
-        dist * cos(angle),
-        1 + 0.2 * ((double)rand()/RAND_MAX - 0.5),
-        dist * sin(angle)
-    };
+    // Generate two random positions within a sphere of radius max_current_distance
+    double positions[2][3];
+    for(int i = 0; i < 2; i++) {
+        double r = max_current_distance * ((double)rand() / RAND_MAX);
+        double theta = 2 * M_PI * ((double)rand() / RAND_MAX);
+        double phi = acos(2 * ((double)rand() / RAND_MAX) - 1);
+        
+        positions[i][0] = r * sin(phi) * cos(theta);
+        positions[i][1] = r * sin(phi) * sin(theta) + 1.0;
+        positions[i][2] = r * cos(phi);
+    }
+
+    double* start = positions[0];
+    double* target = positions[1];
     
     // Create a new quad for this rollout
     Quad quad = create_quad(start[0], start[1], start[2]);
@@ -254,9 +261,9 @@ int main(int argc, char** argv) {
         gettimeofday(&now, NULL);
         double elapsed = (now.tv_sec - start_time.tv_sec) + (now.tv_usec - start_time.tv_usec) / 1e6;
         
-        printf("epoch %d/%d | Radius: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
+        printf("epoch %d/%d | Distance: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
                epoch+1, epochs, 
-               (epoch < 100) ? 0.01 : 0.01 + 0.99 * fmin(1.0, (epoch - 100.0)/(epochs - 100.0)),
+               MIN_DISTANCE + (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs),
                mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
                ((best_return/theoretical_max) * 100.0 - (initial_best/theoretical_max) * 100.0) / elapsed);

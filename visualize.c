@@ -8,27 +8,19 @@
 #include "scene.h"
 #include "grad.h"
 
-#define DT_PHYSICS  (1.0 / 1000.0)
-#define DT_CONTROL  (1.0 / 60.0)
-#define DT_RENDER   (1.0 / 24.0)
+#define DT_PHYSICS (1.0/1000.0)
+#define DT_CONTROL (1.0/60.0)
 
 #define STATE_DIM 15
 #define ACTION_DIM 8
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
+#define MIN_DISTANCE 0.1
+#define MAX_DISTANCE 2.0
+
 double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
-}
-
-void get_state(Quad q, double* state, double* target_pos) {
-    memcpy(state, q.linear_position_W, 3 * sizeof(double));
-    memcpy(state + 3, q.linear_velocity_W, 3 * sizeof(double));
-    memcpy(state + 6, q.angular_velocity_B, 3 * sizeof(double));
-    state[9] = q.R_W_B[0];
-    state[10] = q.R_W_B[4];
-    state[11] = q.R_W_B[8];
-    memcpy(state + 12, target_pos, 3 * sizeof(double));
 }
 
 int main(int argc, char** argv) {
@@ -42,26 +34,47 @@ int main(int argc, char** argv) {
     // Load policy network
     Net* policy = load_net(argv[1]);
 
-    // Initialize random target position
-    double target_pos[3] = {
-        (double)rand() / RAND_MAX * 2.0 - 1.0,  // Range: -1 to 1
-        1.3,                                     // Fixed height
-        (double)rand() / RAND_MAX * 2.0 - 1.0   // Range: -1 to 1
-    };
+    // Generate random start and target positions using spherical coordinates
+    double start[3], target[3];
     
-    printf("Target position: (%.2f, %.2f, %.2f)\n", 
-           target_pos[0], target_pos[1], target_pos[2]);
+    // Random start position
+    double r1 = MAX_DISTANCE * ((double)rand() / RAND_MAX);
+    double theta1 = 2 * M_PI * ((double)rand() / RAND_MAX);
+    double phi1 = acos(2 * ((double)rand() / RAND_MAX) - 1);
+    start[0] = r1 * sin(phi1) * cos(theta1);
+    start[1] = r1 * sin(phi1) * sin(theta1) + 1.0;
+    start[2] = r1 * cos(phi1);
     
-    // Initialize quadcopter
-    Quad quad = create_quad(0.0, 1.0, 0.0);
+    // Random target position
+    double r2 = MAX_DISTANCE * ((double)rand() / RAND_MAX);
+    double theta2 = 2 * M_PI * ((double)rand() / RAND_MAX);
+    double phi2 = acos(2 * ((double)rand() / RAND_MAX) - 1);
+    target[0] = r2 * sin(phi2) * cos(theta2);
+    target[1] = r2 * sin(phi2) * sin(theta2) + 1.0;
+    target[2] = r2 * cos(phi2);
+    
+    printf("Start position: (%.2f, %.2f, %.2f)\n", start[0], start[1], start[2]);
+    printf("Target position: (%.2f, %.2f, %.2f)\n", target[0], target[1], target[2]);
+    printf("Distance: %.2f meters\n", 
+           sqrt(pow(start[0]-target[0], 2) + pow(start[1]-target[1], 2) + pow(start[2]-target[2], 2)));
+    
+    // Initialize quadcopter at start position
+    Quad quad = create_quad(start[0], start[1], start[2]);
     
     // Initialize raytracer scene
     Scene scene = create_scene(800, 600, 10000, 24, 0.9f);
     
-    // Set up camera
+    // Set up camera to view both start and target positions
+    Vec3 center = {
+        (float)(start[0] + target[0]) / 2.0f,
+        (float)(start[1] + target[1]) / 2.0f,
+        (float)(start[2] + target[2]) / 2.0f
+    };
+    
+    float max_dist = (float)MAX_DISTANCE;
     set_scene_camera(&scene,
-        (Vec3){-3.0f, 3.0f, -3.0f},
-        (Vec3){0.0f, 0.0f, 0.0f},
+        (Vec3){center.x - max_dist*1.5f, center.y + max_dist, center.z - max_dist*1.5f},
+        center,
         (Vec3){0.0f, 1.0f, 0.0f},
         60.0f
     );
@@ -79,6 +92,11 @@ int main(int argc, char** argv) {
     Mesh ground = create_mesh("raytracer/ground.obj", "raytracer/ground.webp");
     add_mesh_to_scene(&scene, ground);
 
+    // Add target visualization (using treasure mesh)
+    Mesh treasure = create_mesh("raytracer/treasure.obj", "raytracer/treasure.webp");
+    add_mesh_to_scene(&scene, treasure);
+    set_mesh_position(&scene.meshes[2], (Vec3){target[0], target[1], target[2]});
+    
     // Initialize timers
     double t_physics = 0.0;
     double t_control = 0.0;
@@ -99,7 +117,8 @@ int main(int argc, char** argv) {
         // Control update
         if (t_control >= DT_CONTROL) {
             // Get current state and run through policy network
-            get_state(quad, state, target_pos);
+            get_quad_state(quad, state);
+            memcpy(state + 12, target, 3 * sizeof(double));
             forward(policy, state);
             
             // Extract actions from network output
@@ -117,11 +136,11 @@ int main(int argc, char** argv) {
             
             // Print current status
             double dist = sqrt(
-                pow(quad.linear_position_W[0] - target_pos[0], 2) +
-                pow(quad.linear_position_W[1] - target_pos[1], 2) +
-                pow(quad.linear_position_W[2] - target_pos[2], 2)
+                pow(quad.linear_position_W[0] - target[0], 2) +
+                pow(quad.linear_position_W[1] - target[1], 2) +
+                pow(quad.linear_position_W[2] - target[2], 2)
             );
-            printf("\rTime: %.2f | Pos: (%.2f, %.2f, %.2f) | Dist: %.3f", 
+            printf("\rTime: %.2f | Pos: (%.2f, %.2f, %.2f) | Dist to target: %.3f", 
                    frame * DT_RENDER,
                    quad.linear_position_W[0],
                    quad.linear_position_W[1],
