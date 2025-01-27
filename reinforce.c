@@ -95,7 +95,7 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
                0.01 + 0.99 * fmin(1.0, (epoch - 100.0)/(total_epochs - 100.0));
     
     double start[3], target[3];
-    for(int i = 0; i < 2; i++) {  // Do twice: once for start, once for target
+    for(int i = 0; i < 2; i++) {
         double a = 2*M_PI * (double)rand()/RAND_MAX;
         double z = 2.0 * (double)rand()/RAND_MAX - 1.0;
         double r1 = r * (double)rand()/RAND_MAX;
@@ -110,9 +110,11 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
     
     reset_quad(quad, start[0], start[1], start[2]);
     
-    double t_physics = 0.0, t_control = 0.0;
+    // Initialize timers
+    double t_physics = 0.0;
+    double t_control = 0.0;
     int steps = 0;
-    
+
     while(steps < MAX_STEPS) {
         // Quick termination check
         double d2 = 0, v2 = 0, w2 = 0;
@@ -124,12 +126,15 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
         }
         if(d2 > 4.0 || v2 > 25.0 || w2 > 25.0 || 
            quad->R_W_B[4] < 0.0 || quad->linear_position_W[1] < 0.2) break;
+
+        // Physics update
+        if (t_physics >= DT_PHYSICS) {
+            update_quad(quad, DT_PHYSICS);
+            t_physics = 0.0;
+        }
         
-        update_quad(quad, DT_PHYSICS);
-        t_physics += DT_PHYSICS;
-        
-        if(t_control <= t_physics) {
-            // Get state including target
+        // Control update
+        if (t_control >= DT_CONTROL) {
             get_quad_state(quad, states[steps]);
             memcpy(states[steps] + 12, target, 3 * sizeof(double));
             
@@ -155,10 +160,15 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
             
             rewards[steps] = compute_reward(quad, target);
             steps++;
-            t_control += DT_CONTROL;
+            t_control = 0.0;
         }
+        
+        // Increment timers
+        t_physics += DT_PHYSICS;
+        t_control += DT_PHYSICS;
     }
     
+    // Compute returns
     double G = 0.0;
     for(int i = steps-1; i >= 0; i--) {
         rewards[i] = G = rewards[i] + GAMMA * G;
