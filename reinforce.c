@@ -59,26 +59,26 @@ double dsquash(double x, double min, double max) {
     return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
 }
 
-double compute_reward(Quad* q, double* target_pos) {
+double compute_reward(Quad q, double* target_pos) {
     double pos_error = 0.0;
     for(int i = 0; i < 3; i++) {
-        pos_error += pow(q->linear_position_W[i] - target_pos[i], 2);
+        pos_error += pow(q.linear_position_W[i] - target_pos[i], 2);
     }
     pos_error = sqrt(pos_error);
     
     double vel_magnitude = 0.0;
     for(int i = 0; i < 3; i++) {
-        vel_magnitude += pow(q->linear_velocity_W[i], 2);
+        vel_magnitude += pow(q.linear_velocity_W[i], 2);
     }
     vel_magnitude = sqrt(vel_magnitude);
     
     double ang_vel_magnitude = 0.0;
     for(int i = 0; i < 3; i++) {
-        ang_vel_magnitude += pow(q->angular_velocity_B[i], 2);
+        ang_vel_magnitude += pow(q.angular_velocity_B[i], 2);
     }
     ang_vel_magnitude = sqrt(ang_vel_magnitude);
     
-    double orientation_error = fabs(1.0 - q->R_W_B[4]);
+    double orientation_error = fabs(1.0 - q.R_W_B[4]);
     
     double total_error = (pos_error * 2.0) + 
                         (vel_magnitude * 1.0) + 
@@ -88,7 +88,7 @@ double compute_reward(Quad* q, double* target_pos) {
     return exp(-total_error);
 }
 
-int collect_rollout(Quad* quad, Net* policy, double** states, double** actions, 
+int collect_rollout(Net* policy, double** states, double** actions, 
                    double* rewards, int epoch, int total_epochs) {
     // Get random start/target with curriculum
     const double max_training_distance = 2.0;
@@ -105,7 +105,8 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
         dist * sin(angle)
     };
     
-    reset_quad(quad, start[0], start[1], start[2]);
+    // Create a new quad for this rollout
+    Quad quad = create_quad(start[0], start[1], start[2]);
     
     // Initialize timers
     double t_physics = 0.0;
@@ -113,14 +114,14 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
     int steps = 0;
 
     while(steps < MAX_STEPS) {
-        if (dotVec3f(quad->linear_position_W, quad->linear_position_W) > 16.0 || // 4 meters squared
-            dotVec3f(quad->linear_velocity_W, quad->linear_velocity_W) > 25.0 || // 5 m/s squared
-            dotVec3f(quad->angular_velocity_B, quad->angular_velocity_B) > 25.0 || // ~5 rad/s squared
-            quad->R_W_B[4] < 0.0 /* more than 90° tilt */) break;
+        if (dotVec3f(quad.linear_position_W, quad.linear_position_W) > 16.0 || // 4 meters squared
+            dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 25.0 || // 5 m/s squared
+            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 25.0 || // ~5 rad/s squared
+            quad.R_W_B[4] < 0.0 /* more than 90° tilt */) break;
             
         // Physics update
         if (t_physics >= DT_PHYSICS) {
-            update_quad(quad, DT_PHYSICS);
+            update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
         }
         
@@ -146,7 +147,7 @@ int collect_rollout(Quad* quad, Net* policy, double** states, double** actions,
                 double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
                 actions[steps][i] = mean + std * noise;
-                quad->omega_next[i] = actions[steps][i];
+                quad.omega_next[i] = actions[steps][i];
             }
             
             rewards[steps] = compute_reward(quad, target);
@@ -236,7 +237,6 @@ int main(int argc, char** argv) {
         net = init_net(3, layers, 1e-5);
     }
     
-    Quad* quad = init_quad(0.0, 0.0, 0.0);
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
     
     Rollout* rollouts[NUM_ROLLOUTS];
@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
         double sum_returns = 0.0;
         
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            rollouts[r]->length = collect_rollout(quad, net, rollouts[r]->states, rollouts[r]->actions, rollouts[r]->rewards, epoch, epochs);
+            rollouts[r]->length = collect_rollout(net, rollouts[r]->states, rollouts[r]->actions, rollouts[r]->rewards, epoch, epochs);
             sum_returns += rollouts[r]->rewards[0];
         }
 
@@ -298,7 +298,6 @@ int main(int argc, char** argv) {
     }
 
     free_net(net);
-    free(quad);
 
     return 0;
 }

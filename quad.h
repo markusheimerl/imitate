@@ -206,39 +206,42 @@ typedef struct {
     double gyro_bias[3];
 } Quad;
 
-void reset_quad(Quad* q, double x, double y, double z) {
-    memcpy(q->omega, (double[]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
-    memcpy(q->linear_position_W, (double[]){x, y, z}, 3 * sizeof(double));
-    memcpy(q->linear_velocity_W, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
-    memcpy(q->angular_velocity_B, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
-    memcpy(q->R_W_B, (double[]){1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, 9 * sizeof(double));
-    memcpy(q->inertia, (double[]){0.01, 0.02, 0.01}, 3 * sizeof(double));
-    memcpy(q->omega_next, (double[]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
-    memcpy(q->linear_acceleration_B_s, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
-    memcpy(q->angular_velocity_B_s, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+Quad create_quad(double x, double y, double z) {
+    Quad q;
+    memcpy(q.omega, (double[]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
+    memcpy(q.linear_position_W, (double[]){x, y, z}, 3 * sizeof(double));
+    memcpy(q.linear_velocity_W, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.angular_velocity_B, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.R_W_B, (double[]){1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, 9 * sizeof(double));
+    memcpy(q.inertia, (double[]){0.01, 0.02, 0.01}, 3 * sizeof(double));
+    memcpy(q.omega_next, (double[]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
+    memcpy(q.linear_acceleration_B_s, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.angular_velocity_B_s, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
     for(int i = 0; i < 3; i++) {
-        q->accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
-        q->gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
+        q.accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
+        q.gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
     }
+    return q;
 }
 
-Quad* init_quad(double x, double y, double z) {
-    Quad* quad = malloc(sizeof(Quad));
-    reset_quad(quad, x, y, z);
-    return quad;
+void get_quad_state(Quad q, double* state) {
+    memcpy(state, q.linear_position_W, 3 * sizeof(double));
+    memcpy(state + 3, q.linear_velocity_W, 3 * sizeof(double));
+    memcpy(state + 6, q.angular_velocity_B, 3 * sizeof(double));
+    state[9] = q.R_W_B[0];
+    state[10] = q.R_W_B[4];
+    state[11] = q.R_W_B[8];
 }
 
-void get_quad_state(const Quad* q, double* state) {
-    memcpy(state, q->linear_position_W, 3 * sizeof(double));
-    memcpy(state + 3, q->linear_velocity_W, 3 * sizeof(double));
-    memcpy(state + 6, q->angular_velocity_B, 3 * sizeof(double));
-    state[9] = q->R_W_B[0];
-    state[10] = q->R_W_B[4];
-    state[11] = q->R_W_B[8];
-}
-
-void print_quad(Quad* q) {
-    printf("\rP: %.2f %.2f %.2f | R: %.2f %.2f %.2f %.2f", q->linear_position_W[0], q->linear_position_W[1], q->linear_position_W[2], q->omega[0], q->omega[1], q->omega[2], q->omega[3]);
+void print_quad(Quad q) {
+    printf("\rP: %.2f %.2f %.2f | R: %.2f %.2f %.2f %.2f", 
+           q.linear_position_W[0], 
+           q.linear_position_W[1], 
+           q.linear_position_W[2], 
+           q.omega[0], 
+           q.omega[1], 
+           q.omega[2], 
+           q.omega[3]);
 }
 
 static double gaussian_noise(double stddev) {
