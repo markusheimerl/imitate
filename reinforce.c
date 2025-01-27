@@ -1,27 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include "grad.h"
 #include "quad.h"
-#include <stdbool.h>
-
-#define DT_PHYSICS (1.0/1000.0)
-#define DT_CONTROL (1.0/60.0)
-
-#define STATE_DIM 15
-#define ACTION_DIM 8
-#define MAX_STEPS 1000
-#define NUM_ROLLOUTS 64
-
-#define GAMMA 0.999
-#define MAX_STD 3.0
-#define MIN_STD 1e-5
-
-#define MIN_DISTANCE 0.1
-#define MAX_DISTANCE 2.0
+#include "config.h"
 
 typedef struct {
     double** states;    // [MAX_STEPS][STATE_DIM]
@@ -237,7 +223,7 @@ int main(int argc, char** argv) {
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
 
     int epochs = atoi(argv[1]);
-    double best_return = -1e30, initial_best = -1e30;
+    double best_return = -1e30;
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
     struct timeval start_time;
     gettimeofday(&start_time, NULL);
@@ -255,7 +241,6 @@ int main(int argc, char** argv) {
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
         best_return = fmax(mean_return, best_return);
-        if(epoch == 0) initial_best = best_return;
 
         struct timeval now;
         gettimeofday(&now, NULL);
@@ -266,13 +251,12 @@ int main(int argc, char** argv) {
                MIN_DISTANCE + (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs),
                mean_return, theoretical_max, 
                (mean_return/theoretical_max) * 100.0, best_return,
-               ((best_return/theoretical_max) * 100.0 - (initial_best/theoretical_max) * 100.0) / elapsed);
+               ((best_return/theoretical_max) * 100.0 / elapsed));
     }
 
     char filename[64];
     strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
     save_net(filename, net);
-    printf("\nFinal weights saved to: %s\n", filename);
 
     for(int r = 0; r < NUM_ROLLOUTS; r++) free_rollout(rollouts[r]);
     free_net(net);

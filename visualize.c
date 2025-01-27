@@ -7,18 +7,7 @@
 #include "quad.h"
 #include "scene.h"
 #include "grad.h"
-
-#define DT_PHYSICS (1.0/1000.0)
-#define DT_CONTROL (1.0/60.0)
-#define DT_RENDER (1.0/24.0)
-
-#define STATE_DIM 15
-#define ACTION_DIM 8
-#define MAX_STD 3.0
-#define MIN_STD 1e-5
-
-#define MIN_DISTANCE 0.1
-#define MAX_DISTANCE 2.0
+#include "config.h"
 
 double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
@@ -63,7 +52,7 @@ int main(int argc, char** argv) {
     Quad quad = create_quad(start[0], start[1], start[2]);
     
     // Initialize raytracer scene
-    Scene scene = create_scene(800, 600, 10000, 24, 0.9f);
+    Scene scene = create_scene(800, 600, ((int)(DT_CONTROL * MAX_STEPS * 1000)), ((int)(1.0 / DT_RENDER), 0.8f);
     
     // Set up camera to view both start and target positions
     Vec3 center = {
@@ -184,6 +173,7 @@ int main(int argc, char** argv) {
     strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", 
              localtime(&(time_t){time(NULL)}));
     save_scene(&scene, filename);
+    printf("\nSaved animation to %s\n", filename);
 
     // Cleanup
     destroy_scene(&scene);
