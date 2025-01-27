@@ -30,7 +30,7 @@ double dsquash(double x, double min, double max) { return ((max - min) / 2.0) * 
 
 double get_task_radius(int epoch, int total_epochs) {
     const double INITIAL_TASK_RADIUS = 0.01;  // Start with easier tasks
-    const double FINAL_TASK_RADIUS = 5.0;     // End with harder tasks
+    const double FINAL_TASK_RADIUS = 1.0;     // End with harder tasks
     const int CURRICULUM_WARMUP = 100;        // Initial warmup period
     
     if (epoch < CURRICULUM_WARMUP) {

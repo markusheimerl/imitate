@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
            target_pos[0], target_pos[1], target_pos[2]);
     
     // Initialize quadcopter
-    Quad* quad = init_quad(0.0, 0.0, 0.0);
+    Quad* quad = init_quad(0.0, 1.0, 0.0);
     
     // Initialize raytracer scene
     Scene scene = create_scene(800, 600, 10000, 24, 0.9f);
