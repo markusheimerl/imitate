@@ -1,6 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include "quad.h"
+
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
 #define DT_RENDER (1.0/24.0)
@@ -14,10 +16,10 @@
 #define MAX_STD 3.0
 #define MIN_STD 1e-5
 
-#define MAX_MEAN 55.0
-#define MIN_MEAN 45.0
+#define MAX_MEAN (OMEGA_MAX - 4.0 * MAX_STD)
+#define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
 
-#define MIN_DISTANCE 0.1
-#define MAX_DISTANCE 2.0
+#define MIN_DISTANCE 0.01
+#define MAX_DISTANCE 0.5
 
 #endif
