@@ -56,8 +56,10 @@ int main(int argc, char** argv) {
     double t_render = 0.0;
     int frame = 0;
     
-    // State buffer for neural network (only sensor readings)
-    double state[STATE_DIM];  // 6D: 3 accel + 3 gyro
+    // Circular buffer for state history
+    double states[MAX_STEPS][STATE_DIM];
+    int state_count = 0;
+    double history_buffer[TOTAL_STATE_DIM] = {0};
 
     // Main simulation loop
     while (frame < scene.frame_count) {
@@ -69,11 +71,20 @@ int main(int argc, char** argv) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Get current sensor readings
-            memcpy(state, quad.linear_acceleration_B_s, 3 * sizeof(double));
-            memcpy(state + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+            // Store current state
+            memcpy(states[state_count % MAX_STEPS], quad.linear_acceleration_B_s, 3 * sizeof(double));
+            memcpy(states[state_count % MAX_STEPS] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            forward(policy, state);
+            // Fill history buffer with sparsely sampled states
+            memset(history_buffer, 0, TOTAL_STATE_DIM * sizeof(double));
+            for(int h = 0; h < HISTORY_LENGTH && h * HISTORY_FREQUENCY <= state_count; h++) {
+                int state_idx = (state_count - (h * HISTORY_FREQUENCY)) % MAX_STEPS;
+                memcpy(&history_buffer[h * STATE_DIM], 
+                       states[state_idx], 
+                       STATE_DIM * sizeof(double));
+            }
+            
+            forward(policy, history_buffer);
             
             // Extract actions from network output
             for(int i = 0; i < 4; i++) {
@@ -81,6 +92,7 @@ int main(int argc, char** argv) {
                 quad.omega_next[i] = mean;
             }
             
+            state_count++;
             t_control = 0.0;
             
             // Print current status with more detailed stability metrics
@@ -96,12 +108,14 @@ int main(int argc, char** argv) {
                 quad.angular_velocity_B_s[2] * quad.angular_velocity_B_s[2]
             );
             
-            printf("\rTime: %.2f | Height: %.2f | AccelMag: %.2f | AngVelMag: %.2f | Tilt: %.2f°", 
-                   frame * DT_RENDER,
-                   quad.linear_position_W[1],
-                   accel_magnitude,
-                   angvel_magnitude,
-                   acos(quad.R_W_B[4]) * 180.0 / M_PI);  // Convert tilt to degrees
+            printf("\rTime: %.2f | Height: %.2f | AccelMag: %.2f | AngVelMag: %.2f | Tilt: %.2f° | History: %d", 
+                frame * DT_RENDER,
+                quad.linear_position_W[1],
+                accel_magnitude,
+                angvel_magnitude,
+                acos(quad.R_W_B[4]) * 180.0 / M_PI,  // Convert tilt to degrees
+                (state_count < HISTORY_LENGTH * HISTORY_FREQUENCY) ? 
+                    state_count : HISTORY_LENGTH * HISTORY_FREQUENCY);
             fflush(stdout);
         }
         

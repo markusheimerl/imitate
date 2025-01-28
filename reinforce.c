@@ -51,13 +51,14 @@ double compute_reward(Quad q) {
     double stability_error = (accel_error * 1.0) +         // Acceleration stability
                            (ang_vel_magnitude * 2.0) +      // Angular velocity stability
                            (orientation_error * 4.0) +      // Upright orientation (most important)
-                           (position_error * 2.0);          // Position drift beyond allowed radius
+                           (position_error * 2.5);          // Position drift beyond allowed radius
     
     return exp(-stability_error);
 }
 
 void collect_rollout(Net* policy, Rollout* rollout) {
     Quad quad = create_quad(0.0, 1.0, 0.0);
+    double history_buffer[TOTAL_STATE_DIM];
     
     double t_physics = 0.0;
     double t_control = 0.0;
@@ -88,7 +89,16 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             memcpy(rollout->states[rollout->length], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[rollout->length] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            forward(policy, rollout->states[rollout->length]);
+            // Fill history buffer with sparsely sampled states
+            memset(history_buffer, 0, TOTAL_STATE_DIM * sizeof(double));
+            for(int h = 0; h < HISTORY_LENGTH && h * HISTORY_FREQUENCY <= rollout->length; h++) {
+                int state_idx = rollout->length - (h * HISTORY_FREQUENCY);
+                memcpy(&history_buffer[h * STATE_DIM], 
+                       rollout->states[state_idx], 
+                       STATE_DIM * sizeof(double));
+            }
+            
+            forward(policy, history_buffer);
             
             for(int i = 0; i < 4; i++) {
                 double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
@@ -124,9 +134,19 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
     double output_gradient[ACTION_DIM];
+    double history_buffer[TOTAL_STATE_DIM];
     
     for(int t = 0; t < rollout->length; t++) {
-        forward(policy, rollout->states[t]);
+        // Fill history buffer with sparsely sampled states
+        memset(history_buffer, 0, TOTAL_STATE_DIM * sizeof(double));
+        for(int h = 0; h < HISTORY_LENGTH && h * HISTORY_FREQUENCY <= t; h++) {
+            int state_idx = t - (h * HISTORY_FREQUENCY);
+            memcpy(&history_buffer[h * STATE_DIM], 
+                   rollout->states[state_idx], 
+                   STATE_DIM * sizeof(double));
+        }
+        
+        forward(policy, history_buffer);
         
         for(int i = 0; i < 4; i++) {
             // Network outputs raw parameters before squashing
@@ -177,7 +197,8 @@ int main(int argc, char** argv) {
     }
 
     srand(time(NULL) ^ getpid());
-    Net* net = (argc == 3) ? load_net(argv[2]) : init_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 5e-6);
+    Net* net = (argc == 3) ? load_net(argv[2]) : 
+        init_net(3, (int[]){TOTAL_STATE_DIM, 64, ACTION_DIM}, 5e-6);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
