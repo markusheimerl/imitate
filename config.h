@@ -7,8 +7,10 @@
 #define DT_CONTROL (1.0/60.0)
 #define DT_RENDER (1.0/24.0)
 
-#define STATE_DIM 6  // 3 accel + 3 gyro
+#define MEMORY_DIM 4
+#define STATE_DIM (6 + MEMORY_DIM)  // 3 accel + 3 gyro + memory values
 #define ACTION_DIM 8
+#define TOTAL_OUTPUT_DIM (ACTION_DIM + MEMORY_DIM)
 #define MAX_STEPS 1000
 #define NUM_ROLLOUTS 128
 
