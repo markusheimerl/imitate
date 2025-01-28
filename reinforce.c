@@ -75,7 +75,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
         if (dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 4.0 ||  // ~2 m/s
             dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 9.0 || // ~3 rad/s
             quad.R_W_B[4] < 0.0 ||    // More than 90° tilt
-            drift > 1.0) {            // More than 1m from hover point
+            drift > 0.8) {            // More than 0.8m from hover point
             break;
         }
             
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     Net* net = (argc == 3) ? load_net(argv[2]) : 
-        init_net(3, (int[]){TOTAL_STATE_DIM, 64, ACTION_DIM}, 5e-6);
+        init_net(4, (int[]){TOTAL_STATE_DIM, 64, 32, ACTION_DIM}, 5e-6);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
