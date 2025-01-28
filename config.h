@@ -10,7 +10,7 @@
 #define STATE_DIM 15
 #define ACTION_DIM 8
 #define MAX_STEPS 1000
-#define NUM_ROLLOUTS 64
+#define NUM_ROLLOUTS 128
 
 #define GAMMA 0.999
 #define MAX_STD 3.0
