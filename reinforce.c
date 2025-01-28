@@ -18,42 +18,15 @@ double dsquash(double x, double min, double max) {
 }
 
 double compute_reward(Quad q) {
-    // 1. Acceleration stability (want close to 0 for hover)
-    double accel_error = 0.0;
-    for(int i = 0; i < 3; i++) {
-        double accel = q.linear_acceleration_B_s[i];
-        if(i == 1) accel += GRAVITY;  // Compensate for gravity in Y axis
-        accel_error += accel * accel;
-    }
-    accel_error = sqrt(accel_error);
-    
-    // 2. Angular velocity stability (want close to 0 for hover)
-    double ang_vel_magnitude = 0.0;
-    for(int i = 0; i < 3; i++) {
-        ang_vel_magnitude += q.angular_velocity_B_s[i] * q.angular_velocity_B_s[i];
-    }
-    ang_vel_magnitude = sqrt(ang_vel_magnitude);
-    
-    // 3. Orientation stability (want upright)
-    double orientation_error = fabs(1.0 - q.R_W_B[4]);
-    
-    // 4. Position drift (3D distance from hover point)
-    double drift = sqrt(
-        pow(q.linear_position_W[0], 2) +
-        pow(q.linear_position_W[1] - 1.0, 2) +
-        pow(q.linear_position_W[2], 2)
+    // Calculate distance to target position (0, 1, 0)
+    double distance = sqrt(
+        pow(q.linear_position_W[0] - 0.0, 2) +  // x distance from 0
+        pow(q.linear_position_W[1] - 1.0, 2) +  // y distance from 1
+        pow(q.linear_position_W[2] - 0.0, 2)    // z distance from 0
     );
     
-    // Only penalize drift beyond 0.25m radius
-    double position_error = fmax(0.0, drift - 0.25);
-    
-    // Combine all factors with strong emphasis on stability
-    double stability_error = (accel_error * 0.1) +         // Acceleration stability
-                           (ang_vel_magnitude * 0.1) +      // Angular velocity stability
-                           (orientation_error * 0.1) +      // Upright orientation (most important)
-                           (position_error * 1.0);          // Position drift beyond allowed radius
-    
-    return exp(-stability_error);
+    // Return 1 only if extremely close to target
+    return (distance < 0.02) ? 1.0 : 0.0;
 }
 
 void collect_rollout(Net* policy, Rollout* rollout) {
@@ -82,7 +55,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
         if (t_physics >= DT_PHYSICS) {
             update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
-        }c v
+        }
         
         if (t_control >= DT_CONTROL) {
             // Use only sensor readings as state
@@ -198,7 +171,7 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     Net* net = (argc == 3) ? load_net(argv[2]) : 
-        init_net(4, (int[]){TOTAL_STATE_DIM, 64, 32, ACTION_DIM}, 5e-6);
+        init_net(4, (int[]){TOTAL_STATE_DIM, 64, 32, ACTION_DIM}, 1e-5);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
