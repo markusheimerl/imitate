@@ -56,12 +56,8 @@ int main(int argc, char** argv) {
     double t_render = 0.0;
     int frame = 0;
     
-    // State buffer for neural network (sensor readings + memory)
-    double state[STATE_DIM];
-    
-    // Initialize memory values to zero
-    double memory[MEMORY_DIM] = {0};
-    memcpy(state + 6, memory, MEMORY_DIM * sizeof(double));
+    // State buffer for neural network (only sensor readings)
+    double state[STATE_DIM];  // 6D: 3 accel + 3 gyro
 
     // Main simulation loop
     while (frame < scene.frame_count) {
@@ -73,10 +69,9 @@ int main(int argc, char** argv) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Update state vector with current sensor readings and memory
+            // Get current sensor readings
             memcpy(state, quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(state + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
-            memcpy(state + 6, memory, MEMORY_DIM * sizeof(double));
             
             forward(policy, state);
             
@@ -84,11 +79,6 @@ int main(int argc, char** argv) {
             for(int i = 0; i < 4; i++) {
                 double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
                 quad.omega_next[i] = mean;
-            }
-            
-            // Update memory values
-            for(int i = 0; i < MEMORY_DIM; i++) {
-                memory[i] = tanh(policy->layers[policy->n_layers-1].x[ACTION_DIM + i]);
             }
             
             t_control = 0.0;
@@ -106,14 +96,12 @@ int main(int argc, char** argv) {
                 quad.angular_velocity_B_s[2] * quad.angular_velocity_B_s[2]
             );
             
-            // Add memory values to status display
-            printf("\rTime: %.2f | Height: %.2f | AccelMag: %.2f | AngVelMag: %.2f | Tilt: %.2f° | Mem: [%.2f %.2f %.2f %.2f]", 
+            printf("\rTime: %.2f | Height: %.2f | AccelMag: %.2f | AngVelMag: %.2f | Tilt: %.2f°", 
                    frame * DT_RENDER,
                    quad.linear_position_W[1],
                    accel_magnitude,
                    angvel_magnitude,
-                   acos(quad.R_W_B[4]) * 180.0 / M_PI,
-                   memory[0], memory[1], memory[2], memory[3]);
+                   acos(quad.R_W_B[4]) * 180.0 / M_PI);  // Convert tilt to degrees
             fflush(stdout);
         }
         

@@ -63,9 +63,6 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     double t_control = 0.0;
     rollout->length = 0;
 
-    // Initialize memory values to zero
-    double memory[MEMORY_DIM] = {0};
-
     while(rollout->length < MAX_STEPS) {
         // Calculate 3D distance from hover point
         double drift = sqrt(
@@ -87,14 +84,12 @@ void collect_rollout(Net* policy, Rollout* rollout) {
         }
         
         if (t_control >= DT_CONTROL) {
-            // Combine sensor readings and memory into state
+            // Use only sensor readings as state
             memcpy(rollout->states[rollout->length], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[rollout->length] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
-            memcpy(rollout->states[rollout->length] + 6, memory, MEMORY_DIM * sizeof(double));
             
             forward(policy, rollout->states[rollout->length]);
             
-            // Process action outputs
             for(int i = 0; i < 4; i++) {
                 double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
                 double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
@@ -105,11 +100,6 @@ void collect_rollout(Net* policy, Rollout* rollout) {
                 
                 rollout->actions[rollout->length][i] = mean + std * noise;
                 quad.omega_next[i] = rollout->actions[rollout->length][i];
-            }
-            
-            // Get new memory values (last MEMORY_DIM outputs from network)
-            for(int i = 0; i < MEMORY_DIM; i++) {
-                memory[i] = tanh(policy->layers[policy->n_layers-1].x[ACTION_DIM + i]);
             }
             
             rollout->rewards[rollout->length] = compute_reward(quad);
@@ -133,7 +123,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
-    double output_gradient[TOTAL_OUTPUT_DIM];
+    double output_gradient[ACTION_DIM];
     
     for(int t = 0; t < rollout->length; t++) {
         forward(policy, rollout->states[t]);
@@ -171,31 +161,6 @@ void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
                 (std_val * std_val * std_val)) * 
                 dsquash(std_raw, MIN_STD, MAX_STD) * 
                 rollout->rewards[t];
-        }
-
-        // Memory value gradients
-        for(int i = 0; i < MEMORY_DIM; i++) {
-            double memory_out = tanh(policy->layers[policy->n_layers-1].x[ACTION_DIM + i]);
-            
-            // Get the gradient of log probability with respect to memory
-            // This measures how much the memory affected action selection
-            double action_influence = 0.0;
-            for(int j = 0; j < 4; j++) {
-                double mean = squash(policy->layers[policy->n_layers-1].x[j], MIN_MEAN, MAX_MEAN);
-                double std = squash(policy->layers[policy->n_layers-1].x[j + 4], MIN_STD, MAX_STD);
-                double action = rollout->actions[t][j];
-                double delta = action - mean;
-                
-                // How much did this memory value influence the action distribution?
-                action_influence += (delta * delta - std * std) / (std * std * std);
-            }
-
-            // The gradient should be proportional to:
-            // 1. How much the memory influenced actions (action_influence)
-            // 2. The resulting reward (rollout->rewards[t])
-            // 3. The derivative of tanh (1 - memory_out^2)
-            output_gradient[ACTION_DIM + i] = 
-                -action_influence * rollout->rewards[t] * (1.0 - memory_out * memory_out);
         }
 
         // Backpropagate gradients through network
