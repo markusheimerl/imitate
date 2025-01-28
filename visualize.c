@@ -23,25 +23,17 @@ int main(int argc, char** argv) {
     
     // Load policy network
     Net* policy = load_net(argv[1]);
-
-    // Start at hover height
-    double start[3] = {0.0, 1.0, 0.0};
-    
-    printf("Starting at hover height: %.2f meters\n", start[1]);
     
     // Initialize quadcopter at hover height
-    Quad quad = create_quad(start[0], start[1], start[2]);
+    Quad quad = create_quad(0.0, 1.0, 0.0);
     
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, ((int)(DT_CONTROL * MAX_STEPS * 1000)), ((int)(1.0 / DT_RENDER)), 0.8f);
-    
-    // Set up camera to view hover area
-    Vec3 center = {0.0f, 1.0f, 0.0f};  // Look at hover height
-    
+
     set_scene_camera(&scene,
-        (Vec3){2.0f, 2.0f, 2.0f},  // Camera position
-        center,
-        (Vec3){0.0f, 1.0f, 0.0f},  // Up vector
+        (Vec3){-3.0f, 3.0f, -3.0f}, // Camera position
+        (Vec3){0.0f, 1.0f, 0.0f},   // Look at center
+        (Vec3){0.0f, 1.0f, 0.0f},   // Up vector
         60.0f                       // FOV
     );
     

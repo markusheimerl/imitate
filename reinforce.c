@@ -19,7 +19,6 @@ double dsquash(double x, double min, double max) {
 
 double compute_reward(Quad q) {
     // 1. Acceleration stability (want close to 0 for hover)
-    // Note: We subtract gravity from Y acceleration as that's normal in hover
     double accel_error = 0.0;
     for(int i = 0; i < 3; i++) {
         double accel = q.linear_acceleration_B_s[i];
@@ -38,17 +37,21 @@ double compute_reward(Quad q) {
     // 3. Orientation stability (want upright)
     double orientation_error = fabs(1.0 - q.R_W_B[4]);
     
-    // 4. Very soft position bounds (only penalize if far from hover height)
-    double height_error = fmax(0.0, fabs(q.linear_position_W[1] - 1.0) - 0.5);  // Allow ±0.5m height variation
-    double horizontal_error = fmax(0.0, sqrt(q.linear_position_W[0] * q.linear_position_W[0] + 
-                                           q.linear_position_W[2] * q.linear_position_W[2]) - 0.5);  // Allow 0.5m radius drift
+    // 4. Position drift (3D distance from hover point)
+    double drift = sqrt(
+        pow(q.linear_position_W[0], 2) +
+        pow(q.linear_position_W[1] - 1.0, 2) +
+        pow(q.linear_position_W[2], 2)
+    );
+    
+    // Only penalize drift beyond 0.25m radius
+    double position_error = fmax(0.0, drift - 0.25);
     
     // Combine all factors with strong emphasis on stability
     double stability_error = (accel_error * 1.0) +         // Acceleration stability
                            (ang_vel_magnitude * 2.0) +      // Angular velocity stability
                            (orientation_error * 4.0) +      // Upright orientation (most important)
-                           (height_error * 0.1) +           // Very soft height bounds
-                           (horizontal_error * 2.0);        // Very soft horizontal bounds
+                           (position_error * 2.0);          // Position drift beyond allowed radius
     
     return exp(-stability_error);
 }
@@ -61,11 +64,17 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     rollout->length = 0;
 
     while(rollout->length < MAX_STEPS) {
-        if (dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 25.0 || 
-            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 25.0 || 
-            quad.R_W_B[4] < 0.0 ||  // More than 90° tilt
-            quad.linear_position_W[1] < 0.1 ||  // Too close to ground
-            quad.linear_position_W[1] > 2.0) {  // Too high
+        // Calculate 3D distance from hover point
+        double drift = sqrt(
+            pow(quad.linear_position_W[0], 2) +
+            pow(quad.linear_position_W[1] - 1.0, 2) +
+            pow(quad.linear_position_W[2], 2)
+        );
+
+        if (dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 4.0 ||  // ~2 m/s
+            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 9.0 || // ~3 rad/s
+            quad.R_W_B[4] < 0.0 ||    // More than 90° tilt
+            drift > 1.0) {            // More than 1m from hover point
             break;
         }
             
