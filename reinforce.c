@@ -17,79 +17,67 @@ double dsquash(double x, double min, double max) {
     return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
 }
 
-double compute_reward(Quad q, double* target_pos) {
-    double pos_error = 0.0;
+double compute_reward(Quad q) {
+    // 1. Acceleration stability (want close to 0 for hover)
+    // Note: We subtract gravity from Y acceleration as that's normal in hover
+    double accel_error = 0.0;
     for(int i = 0; i < 3; i++) {
-        pos_error += pow(q.linear_position_W[i] - target_pos[i], 2);
+        double accel = q.linear_acceleration_B_s[i];
+        if(i == 1) accel += GRAVITY;  // Compensate for gravity in Y axis
+        accel_error += accel * accel;
     }
-    pos_error = sqrt(pos_error);
+    accel_error = sqrt(accel_error);
     
-    double vel_magnitude = 0.0;
-    for(int i = 0; i < 3; i++) {
-        vel_magnitude += pow(q.linear_velocity_W[i], 2);
-    }
-    vel_magnitude = sqrt(vel_magnitude);
-    
+    // 2. Angular velocity stability (want close to 0 for hover)
     double ang_vel_magnitude = 0.0;
     for(int i = 0; i < 3; i++) {
-        ang_vel_magnitude += pow(q.angular_velocity_B[i], 2);
+        ang_vel_magnitude += q.angular_velocity_B_s[i] * q.angular_velocity_B_s[i];
     }
     ang_vel_magnitude = sqrt(ang_vel_magnitude);
     
+    // 3. Orientation stability (want upright)
     double orientation_error = fabs(1.0 - q.R_W_B[4]);
     
-    double total_error = (pos_error * 2.0) + 
-                        (vel_magnitude * 1.0) + 
-                        (ang_vel_magnitude * 0.5) + 
-                        (orientation_error * 2.0);
+    // 4. Very soft position bounds (only penalize if far from hover height)
+    double height_error = fmax(0.0, fabs(q.linear_position_W[1] - 1.0) - 0.5);  // Allow ±0.5m height variation
+    double horizontal_error = fmax(0.0, sqrt(q.linear_position_W[0] * q.linear_position_W[0] + 
+                                           q.linear_position_W[2] * q.linear_position_W[2]) - 0.5);  // Allow 0.5m radius drift
     
-    return exp(-total_error);
+    // Combine all factors with strong emphasis on stability
+    double stability_error = (accel_error * 1.0) +         // Acceleration stability
+                           (ang_vel_magnitude * 2.0) +      // Angular velocity stability
+                           (orientation_error * 4.0) +      // Upright orientation (most important)
+                           (height_error * 0.1) +           // Very soft height bounds
+                           (horizontal_error * 2.0);        // Very soft horizontal bounds
+    
+    return exp(-stability_error);
 }
 
-void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
-    // Linear curriculum learning: increase max distance over time
-    double max_current_distance = MIN_DISTANCE + 
-        (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs);
+void collect_rollout(Net* policy, Rollout* rollout) {
+    Quad quad = create_quad(0.0, 1.0, 0.0);
     
-    // Generate two random positions within a sphere of radius max_current_distance
-    double positions[2][3];
-    for(int i = 0; i < 2; i++) {
-        double r = max_current_distance * ((double)rand() / RAND_MAX);
-        double theta = 2 * M_PI * ((double)rand() / RAND_MAX);
-        double phi = acos(2 * ((double)rand() / RAND_MAX) - 1);
-        
-        positions[i][0] = r * sin(phi) * cos(theta);
-        positions[i][1] = r * sin(phi) * sin(theta) + 1.0;
-        positions[i][2] = r * cos(phi);
-    }
-
-    double* start = positions[0];
-    double* target = positions[1];
-    
-    // Create a new quad for this rollout
-    Quad quad = create_quad(start[0], start[1], start[2]);
-    
-    // Initialize timers
     double t_physics = 0.0;
     double t_control = 0.0;
     rollout->length = 0;
 
     while(rollout->length < MAX_STEPS) {
-        if (dotVec3f(quad.linear_position_W, quad.linear_position_W) > 16.0 || // 4 meters squared
-            dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 25.0 || // 5 m/s squared
-            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 25.0 || // ~5 rad/s squared
-            quad.R_W_B[4] < 0.0 /* more than 90° tilt */) break;
+        if (dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 25.0 || 
+            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 25.0 || 
+            quad.R_W_B[4] < 0.0 ||  // More than 90° tilt
+            quad.linear_position_W[1] < 0.1 ||  // Too close to ground
+            quad.linear_position_W[1] > 2.0) {  // Too high
+            break;
+        }
             
-        // Physics update
         if (t_physics >= DT_PHYSICS) {
             update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
         }
         
-        // Control update
         if (t_control >= DT_CONTROL) {
-            get_quad_state(quad, rollout->states[rollout->length]);
-            memcpy(rollout->states[rollout->length] + 12, target, 3 * sizeof(double));
+            // Use only sensor readings as state
+            memcpy(rollout->states[rollout->length], quad.linear_acceleration_B_s, 3 * sizeof(double));
+            memcpy(rollout->states[rollout->length] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
             forward(policy, rollout->states[rollout->length]);
             
@@ -105,17 +93,15 @@ void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
                 quad.omega_next[i] = rollout->actions[rollout->length][i];
             }
             
-            rollout->rewards[rollout->length] = compute_reward(quad, target);
+            rollout->rewards[rollout->length] = compute_reward(quad);
             rollout->length++;
             t_control = 0.0;
         }
         
-        // Increment timers
         t_physics += DT_PHYSICS;
         t_control += DT_PHYSICS;
     }
     
-    // Compute returns
     double G = 0.0;
     for(int i = rollout->length-1; i >= 0; i--) {
         rollout->rewards[i] = G = rollout->rewards[i] + GAMMA * G;
@@ -196,7 +182,7 @@ int main(int argc, char** argv) {
     for(int epoch = 0; epoch < epochs; epoch++) {
         double sum_returns = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            collect_rollout(net, rollouts[r], epoch, epochs);
+            collect_rollout(net, rollouts[r]);
             sum_returns += rollouts[r]->rewards[0];
         }
         
@@ -211,12 +197,11 @@ int main(int argc, char** argv) {
         gettimeofday(&now, NULL);
         double elapsed = (now.tv_sec - start_time.tv_sec) + (now.tv_usec - start_time.tv_usec) / 1e6;
         
-        printf("epoch %d/%d | Distance: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
-               epoch+1, epochs, 
-               MIN_DISTANCE + (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs),
-               mean_return, theoretical_max, 
-               (mean_return/theoretical_max) * 100.0, best_return,
-               ((best_return/theoretical_max) * 100.0 / elapsed));
+        printf("epoch %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
+            epoch+1, epochs,
+            mean_return, theoretical_max, 
+            (mean_return/theoretical_max) * 100.0, best_return,
+            ((best_return/theoretical_max) * 100.0 / elapsed));
     }
 
     char filename[64];

@@ -24,49 +24,25 @@ int main(int argc, char** argv) {
     // Load policy network
     Net* policy = load_net(argv[1]);
 
-    // Generate random start and target positions using spherical coordinates
-    double start[3], target[3];
+    // Start at hover height
+    double start[3] = {0.0, 1.0, 0.0};
     
-    // Random start position
-    double r1 = MAX_DISTANCE * ((double)rand() / RAND_MAX);
-    double theta1 = 2 * M_PI * ((double)rand() / RAND_MAX);
-    double phi1 = acos(2 * ((double)rand() / RAND_MAX) - 1);
-    start[0] = r1 * sin(phi1) * cos(theta1);
-    start[1] = r1 * sin(phi1) * sin(theta1) + 1.0;
-    start[2] = r1 * cos(phi1);
+    printf("Starting at hover height: %.2f meters\n", start[1]);
     
-    // Random target position
-    double r2 = MAX_DISTANCE * ((double)rand() / RAND_MAX);
-    double theta2 = 2 * M_PI * ((double)rand() / RAND_MAX);
-    double phi2 = acos(2 * ((double)rand() / RAND_MAX) - 1);
-    target[0] = r2 * sin(phi2) * cos(theta2);
-    target[1] = r2 * sin(phi2) * sin(theta2) + 1.0;
-    target[2] = r2 * cos(phi2);
-    
-    printf("Start position: (%.2f, %.2f, %.2f)\n", start[0], start[1], start[2]);
-    printf("Target position: (%.2f, %.2f, %.2f)\n", target[0], target[1], target[2]);
-    printf("Distance: %.2f meters\n", 
-           sqrt(pow(start[0]-target[0], 2) + pow(start[1]-target[1], 2) + pow(start[2]-target[2], 2)));
-    
-    // Initialize quadcopter at start position
+    // Initialize quadcopter at hover height
     Quad quad = create_quad(start[0], start[1], start[2]);
     
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, ((int)(DT_CONTROL * MAX_STEPS * 1000)), ((int)(1.0 / DT_RENDER)), 0.8f);
     
-    // Set up camera to view both start and target positions
-    Vec3 center = {
-        (float)(start[0] + target[0]) / 2.0f,
-        (float)(start[1] + target[1]) / 2.0f,
-        (float)(start[2] + target[2]) / 2.0f
-    };
+    // Set up camera to view hover area
+    Vec3 center = {0.0f, 1.0f, 0.0f};  // Look at hover height
     
-    float max_dist = (float)MAX_DISTANCE;
     set_scene_camera(&scene,
-        (Vec3){center.x - max_dist*1.5f, center.y + max_dist, center.z - max_dist*1.5f},
+        (Vec3){2.0f, 2.0f, 2.0f},  // Camera position
         center,
-        (Vec3){0.0f, 1.0f, 0.0f},
-        60.0f
+        (Vec3){0.0f, 1.0f, 0.0f},  // Up vector
+        60.0f                       // FOV
     );
     
     // Set up light
@@ -82,19 +58,14 @@ int main(int argc, char** argv) {
     Mesh ground = create_mesh("raytracer/ground.obj", "raytracer/ground.webp");
     add_mesh_to_scene(&scene, ground);
 
-    // Add target visualization (using treasure mesh)
-    Mesh treasure = create_mesh("raytracer/treasure.obj", "raytracer/treasure.webp");
-    add_mesh_to_scene(&scene, treasure);
-    set_mesh_position(&scene.meshes[2], (Vec3){target[0], target[1], target[2]});
-    
     // Initialize timers
     double t_physics = 0.0;
     double t_control = 0.0;
     double t_render = 0.0;
     int frame = 0;
     
-    // State buffer for neural network
-    double state[STATE_DIM];
+    // State buffer for neural network (only sensor readings)
+    double state[STATE_DIM];  // 6D: 3 accel + 3 gyro
 
     // Main simulation loop
     while (frame < scene.frame_count) {
@@ -106,36 +77,39 @@ int main(int argc, char** argv) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Get current state and run through policy network
-            get_quad_state(quad, state);
-            memcpy(state + 12, target, 3 * sizeof(double));
+            // Get current sensor readings
+            memcpy(state, quad.linear_acceleration_B_s, 3 * sizeof(double));
+            memcpy(state + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+            
             forward(policy, state);
             
             // Extract actions from network output
             for(int i = 0; i < 4; i++) {
-                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
-                double safe_margin = 4.0 * std;
-                double mean_min = OMEGA_MIN + safe_margin;
-                double mean_max = OMEGA_MAX - safe_margin;
-                double mean = squash(policy->layers[policy->n_layers-1].x[i], mean_min, mean_max);
-                
+                double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
                 quad.omega_next[i] = mean;
             }
             
             t_control = 0.0;
             
-            // Print current status
-            double dist = sqrt(
-                pow(quad.linear_position_W[0] - target[0], 2) +
-                pow(quad.linear_position_W[1] - target[1], 2) +
-                pow(quad.linear_position_W[2] - target[2], 2)
+            // Print current status with more detailed stability metrics
+            double accel_magnitude = sqrt(
+                quad.linear_acceleration_B_s[0] * quad.linear_acceleration_B_s[0] +
+                quad.linear_acceleration_B_s[1] * quad.linear_acceleration_B_s[1] +
+                quad.linear_acceleration_B_s[2] * quad.linear_acceleration_B_s[2]
             );
-            printf("\rTime: %.2f | Pos: (%.2f, %.2f, %.2f) | Dist to target: %.3f", 
+            
+            double angvel_magnitude = sqrt(
+                quad.angular_velocity_B_s[0] * quad.angular_velocity_B_s[0] +
+                quad.angular_velocity_B_s[1] * quad.angular_velocity_B_s[1] +
+                quad.angular_velocity_B_s[2] * quad.angular_velocity_B_s[2]
+            );
+            
+            printf("\rTime: %.2f | Height: %.2f | AccelMag: %.2f | AngVelMag: %.2f | Tilt: %.2f°", 
                    frame * DT_RENDER,
-                   quad.linear_position_W[0],
                    quad.linear_position_W[1],
-                   quad.linear_position_W[2],
-                   dist);
+                   accel_magnitude,
+                   angvel_magnitude,
+                   acos(quad.R_W_B[4]) * 180.0 / M_PI);  // Convert tilt to degrees
             fflush(stdout);
         }
         

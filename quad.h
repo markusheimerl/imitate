@@ -117,11 +117,6 @@ void orthonormalize_rotation_matrix(double* R) {
 #define ACCEL_BIAS 0.05
 #define GYRO_BIAS 0.005
 
-#define K_P 0.2
-#define K_V 0.6
-#define K_R 0.6
-#define K_W 0.6
-
 typedef struct {
     // State variables
     double omega[4];
