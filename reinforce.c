@@ -48,10 +48,10 @@ double compute_reward(Quad q) {
     double position_error = fmax(0.0, drift - 0.25);
     
     // Combine all factors with strong emphasis on stability
-    double stability_error = (accel_error * 1.0) +         // Acceleration stability
-                           (ang_vel_magnitude * 2.0) +      // Angular velocity stability
-                           (orientation_error * 4.0) +      // Upright orientation (most important)
-                           (position_error * 2.5);          // Position drift beyond allowed radius
+    double stability_error = (accel_error * 0.1) +         // Acceleration stability
+                           (ang_vel_magnitude * 0.1) +      // Angular velocity stability
+                           (orientation_error * 0.1) +      // Upright orientation (most important)
+                           (position_error * 1.0);          // Position drift beyond allowed radius
     
     return exp(-stability_error);
 }
@@ -82,7 +82,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
         if (t_physics >= DT_PHYSICS) {
             update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
-        }
+        }c v
         
         if (t_control >= DT_CONTROL) {
             // Use only sensor readings as state
