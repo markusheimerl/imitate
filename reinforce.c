@@ -5,8 +5,9 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include "grad.cuh"
-#include "rollout.cuh"
+#include "grad.h"
+#include "quad.h"
+#include "rollout.h"
 
 double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
@@ -165,9 +166,7 @@ int main(int argc, char** argv) {
     }
 
     srand(time(NULL) ^ getpid());
-    
-    int layers[] = {STATE_DIM, 64, ACTION_DIM};
-    Net* net = (argc == 3) ? load_net(argv[2]) : init_net(3, layers, 5e-6);
+    Net* net = (argc == 3) ? load_net(argv[2]) : init_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 5e-6);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
@@ -204,8 +203,7 @@ int main(int argc, char** argv) {
     }
 
     char filename[64];
-    time_t current_time = time(NULL);
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&current_time));
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
     save_net(filename, net);
 
     for(int r = 0; r < NUM_ROLLOUTS; r++) free_rollout(rollouts[r]);

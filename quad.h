@@ -1,5 +1,5 @@
-#ifndef QUAD_CUH
-#define QUAD_CUH
+#ifndef QUAD_H
+#define QUAD_H
 
 #include <math.h>
 
@@ -136,22 +136,15 @@ typedef struct {
 
 Quad create_quad(double x, double y, double z) {
     Quad q;
-    double zero4[4] = {0.0, 0.0, 0.0, 0.0};
-    double pos[3] = {x, y, z};
-    double zero3[3] = {0.0, 0.0, 0.0};
-    double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-    double inertia_vals[3] = {0.01, 0.02, 0.01};
-
-    memcpy(q.omega, zero4, 4 * sizeof(double));
-    memcpy(q.linear_position_W, pos, 3 * sizeof(double));
-    memcpy(q.linear_velocity_W, zero3, 3 * sizeof(double));
-    memcpy(q.angular_velocity_B, zero3, 3 * sizeof(double));
-    memcpy(q.R_W_B, identity, 9 * sizeof(double));
-    memcpy(q.inertia, inertia_vals, 3 * sizeof(double));
-    memcpy(q.omega_next, zero4, 4 * sizeof(double));
-    memcpy(q.linear_acceleration_B_s, zero3, 3 * sizeof(double));
-    memcpy(q.angular_velocity_B_s, zero3, 3 * sizeof(double));
-    
+    memcpy(q.omega, (double[]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
+    memcpy(q.linear_position_W, (double[]){x, y, z}, 3 * sizeof(double));
+    memcpy(q.linear_velocity_W, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.angular_velocity_B, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.R_W_B, (double[]){1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, 9 * sizeof(double));
+    memcpy(q.inertia, (double[]){0.01, 0.02, 0.01}, 3 * sizeof(double));
+    memcpy(q.omega_next, (double[]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
+    memcpy(q.linear_acceleration_B_s, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.angular_velocity_B_s, (double[]){0.0, 0.0, 0.0}, 3 * sizeof(double));
     for(int i = 0; i < 3; i++) {
         q.accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
         q.gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
@@ -190,17 +183,10 @@ void update_quad(Quad* q, double dt) {
     double tau_B[3] = {0, m[0] - m[1] + m[2] - m[3], 0};
 
     // 4. Add thrust torques
-    double rotor_positions[4][3] = {
-        {-L, 0,  L},
-        { L, 0,  L},
-        { L, 0, -L},
-        {-L, 0, -L}
-    };
-    
     for(int i = 0; i < 4; i++) {
         double f_vector[3] = {0, f[i], 0};
         double tau_thrust[3];
-        crossVec3f(rotor_positions[i], f_vector, tau_thrust);
+        crossVec3f((double [4][3]){{-L, 0,  L}, { L, 0,  L}, { L, 0, -L}, {-L, 0, -L}}[i], f_vector, tau_thrust);
         addVec3f(tau_B, tau_thrust, tau_B);
     }
 
@@ -260,11 +246,8 @@ void update_quad(Quad* q, double dt) {
     double linear_acceleration_B[3], R_B_W[9];
     transpMat3f(q->R_W_B, R_B_W);
     multMatVec3f(R_B_W, linear_acceleration_W, linear_acceleration_B);
-    
-    double gravity_vec[3] = {0, GRAVITY, 0};
     double gravity_B[3];
-    multMatVec3f(R_B_W, gravity_vec, gravity_B);
-    
+    multMatVec3f(R_B_W, (double[3]){0, GRAVITY, 0}, gravity_B);
     subVec3f(linear_acceleration_B, gravity_B, linear_acceleration_B);
     for(int i = 0; i < 3; i++) {
         q->linear_acceleration_B_s[i] = linear_acceleration_B[i] + gaussian_noise(ACCEL_NOISE_STDDEV) + q->accel_bias[i];
@@ -277,4 +260,4 @@ void update_quad(Quad* q, double dt) {
     }
 }
 
-#endif // QUAD_CUH
+#endif // QUAD_H

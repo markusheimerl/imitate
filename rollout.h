@@ -1,7 +1,7 @@
-#ifndef ROLLOUT_CUH
-#define ROLLOUT_CUH
+#ifndef CONFIG_H
+#define CONFIG_H
 
-#include "quad.cuh"
+#include "quad.h"
 
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
@@ -28,8 +28,8 @@ typedef struct {
 } History;
 
 History* create_history() {
-    History* h = (History*)malloc(sizeof(History));
-    h->buffer = (double*)calloc(STATE_DIM, sizeof(double));
+    History* h = malloc(sizeof(History));
+    h->buffer = calloc(STATE_DIM, sizeof(double));
     h->head = 0;
     h->filled = 0;
     return h;
@@ -75,15 +75,15 @@ typedef struct {
 } Rollout;
 
 Rollout* create_rollout() {
-    Rollout* r = (Rollout*)malloc(sizeof(Rollout));
-    r->states = (double**)malloc(MAX_STEPS * sizeof(double*));
-    r->actions = (double**)malloc(MAX_STEPS * sizeof(double*));
-    r->rewards = (double*)malloc(MAX_STEPS * sizeof(double));
+    Rollout* r = malloc(sizeof(Rollout));
+    r->states = malloc(MAX_STEPS * sizeof(double*));
+    r->actions = malloc(MAX_STEPS * sizeof(double*));
+    r->rewards = malloc(MAX_STEPS * sizeof(double));
     r->history = create_history();
     
     for(int i = 0; i < MAX_STEPS; i++) {
-        r->states[i] = (double*)malloc(STATE_DIM * sizeof(double));
-        r->actions[i] = (double*)malloc(ACTION_DIM * sizeof(double));
+        r->states[i] = malloc(STATE_DIM * sizeof(double));
+        r->actions[i] = malloc(ACTION_DIM * sizeof(double));
     }
     return r;
 }
