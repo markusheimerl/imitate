@@ -13,7 +13,7 @@
 #define DT_RENDER (1.0/24.0)
 
 #define STATE_DIM 6      // 3 accel + 3 gyro
-#define ACTION_DIM 8      // 4 means + 4 stds
+#define ACTION_DIM 8     // 4 means + 4 stds
 #define MAX_STEPS 1000
 #define NUM_ROLLOUTS 128
 
@@ -38,6 +38,10 @@ int main(int argc, char** argv) {
     
     // Load policy network
     Net* policy = load_net(argv[1]);
+    if (!policy) {
+        printf("Failed to load policy network\n");
+        return 1;
+    }
     
     // Initialize quadcopter at hover height
     Quad quad = create_quad(0.0, 1.0, 0.0);
@@ -54,8 +58,8 @@ int main(int argc, char** argv) {
     
     // Set up light
     set_scene_light(&scene,
-        (Vec3){1.0f, 1.0f, -1.0f},     // Direction
-        (Vec3){1.4f, 1.4f, 1.4f}       // White light
+        (Vec3){1.0f, 1.0f, -1.0f},  // Direction
+        (Vec3){1.4f, 1.4f, 1.4f}    // White light
     );
     
     // Add meshes to scene
@@ -88,11 +92,12 @@ int main(int argc, char** argv) {
             memcpy(state, quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(state + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            forward(policy, state);
+            // Forward pass through network
+            forward_net(policy, state);
             
             // Extract actions from network output
             for(int i = 0; i < 4; i++) {
-                double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
+                double mean = squash(policy->layers[policy->num_layers-1].values[i], MIN_MEAN, MAX_MEAN);
                 quad.omega_next[i] = mean;
             }
             
