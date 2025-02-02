@@ -6,8 +6,8 @@
 #include <math.h>
 #include "quad.h"
 #include "scene.h"
-#include "grad.h"
-#include "config.h"
+#include "net.h"
+#include "rollout.h"
 
 double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 

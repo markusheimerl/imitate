@@ -30,13 +30,6 @@ double compute_reward(Quad q) {
 
 void collect_rollout(Net* policy, Rollout* rollout) {
     Quad quad = create_quad(0.0, 1.0, 0.0);
-    double zero_actions[ACTION_DIM] = {0};  // Initial actions
-    
-    // Initialize history with zeros
-    double zero_sensors[SENSOR_DIM] = {0};
-    for(int i = 0; i < HISTORY_LENGTH; i++) {
-        update_history(rollout->history, zero_sensors, zero_actions);
-    }
     
     double t_physics = 0.0;
     double t_control = 0.0;
@@ -63,17 +56,10 @@ void collect_rollout(Net* policy, Rollout* rollout) {
         }
         
         if (t_control >= DT_CONTROL) {
-            // Get current sensor readings
-            double sensors[SENSOR_DIM];
-            memcpy(sensors, quad.linear_acceleration_B_s, 3 * sizeof(double));
-            memcpy(sensors + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+            // Use only sensor readings as state
+            memcpy(rollout->states[rollout->length], quad.linear_acceleration_B_s, 3 * sizeof(double));
+            memcpy(rollout->states[rollout->length] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            // Update history and get full state vector
-            update_history(rollout->history, sensors, 
-                         rollout->length > 0 ? rollout->actions[rollout->length-1] : zero_actions);
-            get_state_vector(rollout->history, rollout->states[rollout->length]);
-            
-            // Forward pass through policy network
             forward(policy, rollout->states[rollout->length]);
             
             // Sample actions from Gaussian distribution
