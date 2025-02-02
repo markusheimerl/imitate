@@ -19,7 +19,4 @@
 #define MAX_MEAN (OMEGA_MAX - 4.0 * MAX_STD)
 #define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
 
-#define MIN_DISTANCE 0.01
-#define MAX_DISTANCE 0.5
-
 #endif
