@@ -25,8 +25,7 @@ double compute_reward(Quad q) {
         pow(q.linear_position_W[2] - 0.0, 2)    // z distance from 0
     );
     
-    // Return 1 only if extremely close to target
-    return (distance < 0.02) ? 1.0 : 0.0;
+    return fmax(exp(-3.0 * (distance - 0.02)), 1.0);
 }
 
 void collect_rollout(Net* policy, Rollout* rollout) {
