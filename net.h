@@ -2,313 +2,349 @@
 #define NET_H
 
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
-typedef struct {
-    double *x;      // layer values
-    double *dx;     // gradients
-    int size;       // size of this layer
-} Layer;
+// Constants for optimization
+#define BETA1 0.9     // Momentum factor for AdamW
+#define BETA2 0.999   // Velocity factor for AdamW
+#define EPSILON 1e-8  // Small constant for numerical stability
+#define WARMUP_EPOCHS 5
 
-typedef struct {
-    Layer *layers;  // array of layers
-    double **W;     // weights between layers
-    double **dW;    // weight gradients
-    double **b;     // biases for each layer
-    double **db;    // bias gradients
-    double **m_W;   // momentum for weights (AdamW)
-    double **v_W;   // velocity for weights (AdamW)
-    double **m_b;   // momentum for biases (AdamW)
-    double **v_b;   // velocity for biases (AdamW)
-    int n_layers;   // number of layers
-    int t;          // timestep for AdamW
-    double lr;      // initial learning rate
-} Net;
+// Forward declarations
+typedef struct Layer Layer;
+typedef struct Net Net;
 
-// Initialize network with given architecture
-Net* init_net(int n_layers, int* sizes, double lr) {
-    Net* net = malloc(sizeof(Net));
-    net->n_layers = n_layers;
-    net->t = 1;  // Initialize timestep
-    net->lr = lr;  // Set initial learning rate
-    net->layers = malloc(n_layers * sizeof(Layer));
+// Structure definitions
+struct Layer {
+    double* values;     // Layer activation values
+    double* gradients;  // Layer gradients
+    int size;          // Number of neurons
+};
+
+struct Net {
+    Layer* layers;      // Array of layers
+    double** weights;   // Weight matrices
+    double** biases;    // Bias vectors
     
-    // Initialize layers
-    for(int i = 0; i < n_layers; i++) {
-        net->layers[i].size = sizes[i];
-        net->layers[i].x = calloc(sizes[i], sizeof(double));
-        net->layers[i].dx = calloc(sizes[i], sizeof(double));
-    }
+    // Gradient matrices
+    double** weight_gradients;
+    double** bias_gradients;
     
-    // Initialize weights and biases
-    net->W = malloc((n_layers-1) * sizeof(double*));
-    net->dW = malloc((n_layers-1) * sizeof(double*));
-    net->b = malloc((n_layers-1) * sizeof(double*));
-    net->db = malloc((n_layers-1) * sizeof(double*));
-    net->m_W = malloc((n_layers-1) * sizeof(double*));
-    net->v_W = malloc((n_layers-1) * sizeof(double*));
-    net->m_b = malloc((n_layers-1) * sizeof(double*));
-    net->v_b = malloc((n_layers-1) * sizeof(double*));
+    // AdamW optimizer states
+    double** weight_momentum;
+    double** weight_velocity;
+    double** bias_momentum;
+    double** bias_velocity;
     
-    for(int i = 0; i < n_layers-1; i++) {
-        int rows = sizes[i+1];
-        int cols = sizes[i];
-        net->W[i] = malloc(rows * cols * sizeof(double));
-        net->dW[i] = calloc(rows * cols, sizeof(double));
-        net->b[i] = malloc(rows * sizeof(double));
-        net->db[i] = calloc(rows, sizeof(double));
-        net->m_W[i] = calloc(rows * cols, sizeof(double));
-        net->v_W[i] = calloc(rows * cols, sizeof(double));
-        net->m_b[i] = calloc(rows, sizeof(double));
-        net->v_b[i] = calloc(rows, sizeof(double));
-        
-        // Xavier initialization
-        double scale = sqrt(2.0 / (sizes[i] + sizes[i+1]));
-        for(int j = 0; j < rows * cols; j++)
-            net->W[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale;
-        for(int j = 0; j < rows; j++)
-            net->b[i][j] = 0;
-    }
-    return net;
-}
+    int num_layers;     // Total number of layers
+    int timestep;       // Current optimization step
+    double learning_rate;
+};
 
-double gelu(double x) {
+// Activation functions
+static double gelu(double x) {
     return 0.5 * x * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
 }
 
-double gelu_derivative(double x) {
+static double gelu_derivative(double x) {
     double cdf = 0.5 * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
     double pdf = exp(-0.5 * x * x) / sqrt(2 * M_PI);
     return cdf + x * pdf;
 }
 
-// Forward pass
-void forward(Net* net, double* input) {
-    // Set input layer
-    memcpy(net->layers[0].x, input, net->layers[0].size * sizeof(double));
-    
-    // Forward propagation
-    for(int i = 0; i < net->n_layers-1; i++) {
-        Layer *curr = &net->layers[i];
-        Layer *next = &net->layers[i+1];
-        
-        // Reset next layer
-        memset(next->x, 0, next->size * sizeof(double));
-        
-        // Compute weighted sum
-        for(int j = 0; j < next->size; j++) {
-            for(int k = 0; k < curr->size; k++) {
-                next->x[j] += curr->x[k] * net->W[i][j * curr->size + k];
-            }
-            next->x[j] += net->b[i][j];
-            // Apply gelu activation (except for output layer)
-            if(i < net->n_layers-2) {
-                next->x[j] = gelu(next->x[j]);
-            }
-        }
-    }
+// Learning rate scheduling functions
+static double compute_warmup_lr(int epoch, int warmup_epochs, double initial_lr) {
+    return (epoch < warmup_epochs) ? initial_lr * epoch / warmup_epochs : initial_lr;
 }
 
-double get_learning_rate(int epoch, int total_epochs, double initial_lr) {
+static double compute_cosine_lr(int epoch, int total_epochs, double initial_lr) {
     return initial_lr * (1 + cos(M_PI * epoch / total_epochs)) / 2;
 }
 
-double get_weight_decay(int epoch, int total_epochs) {
+static double compute_weight_decay(int epoch, int total_epochs) {
     return 0.01 * (1 - epoch / (double)total_epochs);
 }
 
-double get_warmup_lr(int epoch, int warmup_epochs, double initial_lr) {
-    if (epoch < warmup_epochs) {
-        return initial_lr * epoch / warmup_epochs;
-    }
-    return initial_lr;
-}
+// Net initialization
+Net* create_net(int num_layers, const int* layer_sizes, double learning_rate) {
+    Net* net = malloc(sizeof(Net));
+    if (!net) return NULL;
 
-// AdamW update function with learning rate scheduling
-void adamw_update(Net* net, int epoch, int total_epochs) {
-    const double beta1 = 0.9;    // Momentum factor
-    const double beta2 = 0.999;  // Velocity factor
-    const double eps = 1e-8;     // Small constant for numerical stability
+    net->num_layers = num_layers;
+    net->timestep = 1;
+    net->learning_rate = learning_rate;
     
-    // Adaptive learning rate and weight decay scheduling
-    const int warmup_epochs = 5;
-    double current_lr = get_warmup_lr(epoch, warmup_epochs, net->lr);
-    current_lr = get_learning_rate(epoch, total_epochs, current_lr);
-    double weight_decay = get_weight_decay(epoch, total_epochs);
-    
-    for(int i = 0; i < net->n_layers-1; i++) {
-        Layer *curr = &net->layers[i];
-        Layer *next = &net->layers[i+1];
-        int w_size = next->size * curr->size;
-        
-        // Update weights
-        for(int j = 0; j < w_size; j++) {
-            // Momentum update
-            net->m_W[i][j] = beta1 * net->m_W[i][j] + (1 - beta1) * net->dW[i][j];
-            // Velocity update
-            net->v_W[i][j] = beta2 * net->v_W[i][j] + (1 - beta2) * net->dW[i][j] * net->dW[i][j];
-            
-            // Bias correction
-            double m_hat = net->m_W[i][j] / (1 - pow(beta1, net->t));
-            double v_hat = net->v_W[i][j] / (1 - pow(beta2, net->t));
-            
-            // AdamW update (including weight decay)
-            net->W[i][j] -= current_lr * (m_hat / (sqrt(v_hat) + eps) + 
-                                        weight_decay * net->W[i][j]);
-        }
-        
-        // Update biases
-        for(int j = 0; j < next->size; j++) {
-            net->m_b[i][j] = beta1 * net->m_b[i][j] + (1 - beta1) * net->db[i][j];
-            net->v_b[i][j] = beta2 * net->v_b[i][j] + (1 - beta2) * net->db[i][j] * net->db[i][j];
-            
-            double m_hat = net->m_b[i][j] / (1 - pow(beta1, net->t));
-            double v_hat = net->v_b[i][j] / (1 - pow(beta2, net->t));
-            
-            net->b[i][j] -= current_lr * m_hat / (sqrt(v_hat) + eps);
-        }
+    // Allocate layers
+    net->layers = malloc(num_layers * sizeof(Layer));
+    if (!net->layers) {
+        free(net);
+        return NULL;
     }
-    net->t++;  // Increment time step
-}
 
-// Backward pass
-void bwd(Net* net, double* output_gradient, int epoch, int total_epochs) {
-    int last = net->n_layers-1;
-    
-    // Set output layer gradient
-    memcpy(net->layers[last].dx, output_gradient, net->layers[last].size * sizeof(double));
-    
-    // Backward propagation
-    for(int i = last-1; i >= 0; i--) {
-        Layer *curr = &net->layers[i];
-        Layer *next = &net->layers[i+1];
-        
-        // Compute gradients for weights and biases
-        for(int j = 0; j < next->size; j++) {
-            for(int k = 0; k < curr->size; k++) {
-                net->dW[i][j * curr->size + k] = next->dx[j] * curr->x[k];
-            }
-            net->db[i][j] = next->dx[j];
-        }
-        
-        // Compute gradients for current layer
-        if(i > 0) {
-            memset(curr->dx, 0, curr->size * sizeof(double));
-            for(int j = 0; j < curr->size; j++) {
-                for(int k = 0; k < next->size; k++) {
-                    curr->dx[j] += next->dx[k] * net->W[i][k * curr->size + j];
-                }
-                curr->dx[j] *= gelu_derivative(curr->x[j]);
-            }
+    // Initialize layers
+    for (int i = 0; i < num_layers; i++) {
+        net->layers[i].size = layer_sizes[i];
+        net->layers[i].values = calloc(layer_sizes[i], sizeof(double));
+        net->layers[i].gradients = calloc(layer_sizes[i], sizeof(double));
+    }
+
+    // Allocate matrices
+    net->weights = malloc((num_layers - 1) * sizeof(double*));
+    net->biases = malloc((num_layers - 1) * sizeof(double*));
+    net->weight_gradients = malloc((num_layers - 1) * sizeof(double*));
+    net->bias_gradients = malloc((num_layers - 1) * sizeof(double*));
+    net->weight_momentum = malloc((num_layers - 1) * sizeof(double*));
+    net->weight_velocity = malloc((num_layers - 1) * sizeof(double*));
+    net->bias_momentum = malloc((num_layers - 1) * sizeof(double*));
+    net->bias_velocity = malloc((num_layers - 1) * sizeof(double*));
+
+    // Initialize weights and related matrices
+    for (int i = 0; i < num_layers - 1; i++) {
+        int rows = layer_sizes[i + 1];
+        int cols = layer_sizes[i];
+        double scale = sqrt(2.0 / (layer_sizes[i] + layer_sizes[i + 1]));  // Xavier initialization
+
+        net->weights[i] = malloc(rows * cols * sizeof(double));
+        net->biases[i] = calloc(rows, sizeof(double));
+        net->weight_gradients[i] = calloc(rows * cols, sizeof(double));
+        net->bias_gradients[i] = calloc(rows, sizeof(double));
+        net->weight_momentum[i] = calloc(rows * cols, sizeof(double));
+        net->weight_velocity[i] = calloc(rows * cols, sizeof(double));
+        net->bias_momentum[i] = calloc(rows, sizeof(double));
+        net->bias_velocity[i] = calloc(rows, sizeof(double));
+
+        // Initialize weights with Xavier initialization
+        for (int j = 0; j < rows * cols; j++) {
+            net->weights[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale;
         }
     }
-    
-    // Update weights and biases using AdamW
-    adamw_update(net, epoch, total_epochs);
-}
 
-void save_net(const char* f, Net* net) {
-    FILE* fp = fopen(f, "wb");
-    if(!fp) return;
-    
-    // Save network architecture, learning rate, and timestep
-    fwrite(&net->n_layers, sizeof(int), 1, fp);
-    fwrite(&net->lr, sizeof(double), 1, fp);
-    fwrite(&net->t, sizeof(int), 1, fp);
-    
-    // Save layer sizes
-    for(int i = 0; i < net->n_layers; i++) {
-        fwrite(&net->layers[i].size, sizeof(int), 1, fp);
-    }
-    
-    // Save weights, biases, and optimizer states
-    for(int i = 0; i < net->n_layers-1; i++) {
-        int rows = net->layers[i+1].size;
-        int cols = net->layers[i].size;
-        int w_size = rows * cols;
-        
-        // Save weights and related optimizer states
-        fwrite(net->W[i], sizeof(double), w_size, fp);
-        fwrite(net->m_W[i], sizeof(double), w_size, fp);
-        fwrite(net->v_W[i], sizeof(double), w_size, fp);
-        
-        // Save biases and related optimizer states
-        fwrite(net->b[i], sizeof(double), rows, fp);
-        fwrite(net->m_b[i], sizeof(double), rows, fp);
-        fwrite(net->v_b[i], sizeof(double), rows, fp);
-    }
-    
-    fclose(fp);
-}
-
-Net* load_net(const char* f) {
-    FILE* fp = fopen(f, "rb");
-    if(!fp) return NULL;
-    
-    // Load network architecture and learning rate
-    int n_layers;
-    double learning_rate;
-    int timestep;
-    fread(&n_layers, sizeof(int), 1, fp);
-    fread(&learning_rate, sizeof(double), 1, fp);
-    fread(&timestep, sizeof(int), 1, fp);  // Load timestep
-    
-    // Load layer sizes
-    int* sizes = malloc(n_layers * sizeof(int));
-    for(int i = 0; i < n_layers; i++) {
-        fread(&sizes[i], sizeof(int), 1, fp);
-    }
-    
-    // Initialize network
-    Net* net = init_net(n_layers, sizes, learning_rate);
-    net->t = timestep;  // Restore timestep
-    free(sizes);
-    
-    // Load weights, biases, and optimizer states
-    for(int i = 0; i < n_layers-1; i++) {
-        int rows = net->layers[i+1].size;
-        int cols = net->layers[i].size;
-        int w_size = rows * cols;
-        
-        // Load weights and related optimizer states
-        fread(net->W[i], sizeof(double), w_size, fp);
-        fread(net->m_W[i], sizeof(double), w_size, fp);
-        fread(net->v_W[i], sizeof(double), w_size, fp);
-        
-        // Load biases and related optimizer states
-        fread(net->b[i], sizeof(double), rows, fp);
-        fread(net->m_b[i], sizeof(double), rows, fp);
-        fread(net->v_b[i], sizeof(double), rows, fp);
-    }
-    
-    fclose(fp);
     return net;
 }
 
+// Forward propagation
+void forward_net(Net* net, const double* input) {
+    memcpy(net->layers[0].values, input, net->layers[0].size * sizeof(double));
+
+    for (int i = 0; i < net->num_layers - 1; i++) {
+        Layer* current = &net->layers[i];
+        Layer* next = &net->layers[i + 1];
+        memset(next->values, 0, next->size * sizeof(double));
+
+        // Compute weighted sum and activation
+        for (int j = 0; j < next->size; j++) {
+            for (int k = 0; k < current->size; k++) {
+                next->values[j] += current->values[k] * net->weights[i][j * current->size + k];
+            }
+            next->values[j] += net->biases[i][j];
+            
+            if (i < net->num_layers - 2) {
+                next->values[j] = gelu(next->values[j]);
+            }
+        }
+    }
+}
+
+// AdamW optimizer update
+static void network_adamw_update(Net* net, int epoch, int total_epochs) {
+    double current_lr = compute_warmup_lr(epoch, WARMUP_EPOCHS, net->learning_rate);
+    current_lr = compute_cosine_lr(epoch, total_epochs, current_lr);
+    double weight_decay = compute_weight_decay(epoch, total_epochs);
+    
+    for (int i = 0; i < net->num_layers - 1; i++) {
+        Layer* current = &net->layers[i];
+        Layer* next = &net->layers[i + 1];
+        int weight_size = next->size * current->size;
+        
+        // Update weights
+        for (int j = 0; j < weight_size; j++) {
+            // Update momentum and velocity
+            net->weight_momentum[i][j] = BETA1 * net->weight_momentum[i][j] + 
+                                       (1 - BETA1) * net->weight_gradients[i][j];
+            net->weight_velocity[i][j] = BETA2 * net->weight_velocity[i][j] + 
+                                       (1 - BETA2) * net->weight_gradients[i][j] * net->weight_gradients[i][j];
+            
+            // Bias correction
+            double m_hat = net->weight_momentum[i][j] / (1 - pow(BETA1, net->timestep));
+            double v_hat = net->weight_velocity[i][j] / (1 - pow(BETA2, net->timestep));
+            
+            // AdamW update
+            net->weights[i][j] -= current_lr * (m_hat / (sqrt(v_hat) + EPSILON) + 
+                                              weight_decay * net->weights[i][j]);
+        }
+        
+        // Update biases
+        for (int j = 0; j < next->size; j++) {
+            // Update momentum and velocity
+            net->bias_momentum[i][j] = BETA1 * net->bias_momentum[i][j] + 
+                                     (1 - BETA1) * net->bias_gradients[i][j];
+            net->bias_velocity[i][j] = BETA2 * net->bias_velocity[i][j] + 
+                                     (1 - BETA2) * net->bias_gradients[i][j] * net->bias_gradients[i][j];
+            
+            // Bias correction
+            double m_hat = net->bias_momentum[i][j] / (1 - pow(BETA1, net->timestep));
+            double v_hat = net->bias_velocity[i][j] / (1 - pow(BETA2, net->timestep));
+            
+            // Update bias
+            net->biases[i][j] -= current_lr * m_hat / (sqrt(v_hat) + EPSILON);
+        }
+    }
+    net->timestep++;
+}
+
+// Backward propagation
+void backward_net(Net* net, const double* output_gradient, int epoch, int total_epochs) {
+    int last_layer = net->num_layers - 1;
+    memcpy(net->layers[last_layer].gradients, output_gradient, 
+           net->layers[last_layer].size * sizeof(double));
+    
+    // Backward propagation through layers
+    for (int i = last_layer - 1; i >= 0; i--) {
+        Layer* current = &net->layers[i];
+        Layer* next = &net->layers[i + 1];
+        
+        // Compute weight and bias gradients
+        for (int j = 0; j < next->size; j++) {
+            for (int k = 0; k < current->size; k++) {
+                net->weight_gradients[i][j * current->size + k] = 
+                    next->gradients[j] * current->values[k];
+            }
+            net->bias_gradients[i][j] = next->gradients[j];
+        }
+        
+        // Compute gradients for current layer
+        if (i > 0) {
+            memset(current->gradients, 0, current->size * sizeof(double));
+            for (int j = 0; j < current->size; j++) {
+                for (int k = 0; k < next->size; k++) {
+                    current->gradients[j] += next->gradients[k] * 
+                        net->weights[i][k * current->size + j];
+                }
+                current->gradients[j] *= gelu_derivative(current->values[j]);
+            }
+        }
+    }
+    
+    network_adamw_update(net, epoch, total_epochs);
+}
+
+// Save network to file
+bool save_net(const char* filename, const Net* net) {
+    FILE* file = fopen(filename, "wb");
+    if (!file) return false;
+    
+    // Save network architecture and parameters
+    fwrite(&net->num_layers, sizeof(int), 1, file);
+    fwrite(&net->learning_rate, sizeof(double), 1, file);
+    fwrite(&net->timestep, sizeof(int), 1, file);
+    
+    // Save layer sizes
+    for (int i = 0; i < net->num_layers; i++) {
+        fwrite(&net->layers[i].size, sizeof(int), 1, file);
+    }
+    
+    // Save weights, biases, and optimizer states
+    for (int i = 0; i < net->num_layers - 1; i++) {
+        int rows = net->layers[i + 1].size;
+        int cols = net->layers[i].size;
+        int weight_size = rows * cols;
+        
+        // Save weights and optimizer states
+        fwrite(net->weights[i], sizeof(double), weight_size, file);
+        fwrite(net->weight_momentum[i], sizeof(double), weight_size, file);
+        fwrite(net->weight_velocity[i], sizeof(double), weight_size, file);
+        
+        // Save biases and optimizer states
+        fwrite(net->biases[i], sizeof(double), rows, file);
+        fwrite(net->bias_momentum[i], sizeof(double), rows, file);
+        fwrite(net->bias_velocity[i], sizeof(double), rows, file);
+    }
+    
+    fclose(file);
+    return true;
+}
+
+// Load network from file
+Net* load_net(const char* filename) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) return NULL;
+    
+    // Load network architecture
+    int num_layers;
+    double learning_rate;
+    int timestep;
+    
+    fread(&num_layers, sizeof(int), 1, file);
+    fread(&learning_rate, sizeof(double), 1, file);
+    fread(&timestep, sizeof(int), 1, file);
+    
+    // Load layer sizes
+    int* layer_sizes = malloc(num_layers * sizeof(int));
+    for (int i = 0; i < num_layers; i++) {
+        fread(&layer_sizes[i], sizeof(int), 1, file);
+    }
+    
+    // Create network
+    Net* net = create_net(num_layers, layer_sizes, learning_rate);
+    if (!net) {
+        free(layer_sizes);
+        fclose(file);
+        return NULL;
+    }
+    
+    net->timestep = timestep;
+    
+    // Load weights, biases, and optimizer states
+    for (int i = 0; i < num_layers - 1; i++) {
+        int rows = net->layers[i + 1].size;
+        int cols = net->layers[i].size;
+        int weight_size = rows * cols;
+        
+        fread(net->weights[i], sizeof(double), weight_size, file);
+        fread(net->weight_momentum[i], sizeof(double), weight_size, file);
+        fread(net->weight_velocity[i], sizeof(double), weight_size, file);
+        
+        fread(net->biases[i], sizeof(double), rows, file);
+        fread(net->bias_momentum[i], sizeof(double), rows, file);
+        fread(net->bias_velocity[i], sizeof(double), rows, file);
+    }
+    
+    free(layer_sizes);
+    fclose(file);
+    return net;
+}
+
+// Free network resources
 void free_net(Net* net) {
-    for(int i = 0; i < net->n_layers; i++) {
-        free(net->layers[i].x);
-        free(net->layers[i].dx);
+    if (!net) return;
+    
+    for (int i = 0; i < net->num_layers; i++) {
+        free(net->layers[i].values);
+        free(net->layers[i].gradients);
     }
-    for(int i = 0; i < net->n_layers-1; i++) {
-        free(net->W[i]);
-        free(net->dW[i]);
-        free(net->b[i]);
-        free(net->db[i]);
-        free(net->m_W[i]);
-        free(net->v_W[i]);
-        free(net->m_b[i]);
-        free(net->v_b[i]);
+    
+    for (int i = 0; i < net->num_layers - 1; i++) {
+        free(net->weights[i]);
+        free(net->biases[i]);
+        free(net->weight_gradients[i]);
+        free(net->bias_gradients[i]);
+        free(net->weight_momentum[i]);
+        free(net->weight_velocity[i]);
+        free(net->bias_momentum[i]);
+        free(net->bias_velocity[i]);
     }
-    free(net->W);
-    free(net->dW);
-    free(net->b);
-    free(net->db);
-    free(net->m_W);
-    free(net->v_W);
-    free(net->m_b);
-    free(net->v_b);
+    
+    free(net->weights);
+    free(net->biases);
+    free(net->weight_gradients);
+    free(net->bias_gradients);
+    free(net->weight_momentum);
+    free(net->weight_velocity);
+    free(net->bias_momentum);
+    free(net->bias_velocity);
     free(net->layers);
     free(net);
 }
 
-#endif
+#endif // NET_H

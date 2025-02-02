@@ -106,12 +106,12 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             memcpy(rollout->states[rollout->length], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[rollout->length] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            forward(policy, rollout->states[rollout->length]);
+            forward_net(policy, rollout->states[rollout->length]);
             
             // Sample actions from Gaussian distribution
             for(int i = 0; i < 4; i++) {
-                double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
-                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
+                double mean = squash(policy->layers[policy->num_layers-1].values[i], MIN_MEAN, MAX_MEAN);
+                double std = squash(policy->layers[policy->num_layers-1].values[i + 4], MIN_STD, MAX_STD);
 
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
@@ -146,12 +146,12 @@ void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
     double output_gradient[ACTION_DIM];
     
     for(int t = 0; t < rollout->length; t++) {
-        forward(policy, rollout->states[t]);
+        forward_net(policy, rollout->states[t]);
         
         for(int i = 0; i < 4; i++) {
             // Network outputs raw parameters before squashing
-            double mean_raw = policy->layers[policy->n_layers-1].x[i];
-            double std_raw = policy->layers[policy->n_layers-1].x[i + 4];
+            double mean_raw = policy->layers[policy->num_layers-1].values[i];
+            double std_raw = policy->layers[policy->num_layers-1].values[i + 4];
             
             // Squashed parameters using tanh-based scaling
             // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
@@ -186,7 +186,7 @@ void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
         // Backpropagate gradients through network
         // Negative sign converts gradient ascent (policy improvement) 
         // to gradient descent (standard optimization framework)
-        bwd(policy, output_gradient, epoch, epochs);
+        backward_net(policy, output_gradient, epoch, epochs);
     }
 }
 
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
     }
 
     srand(time(NULL) ^ getpid());
-    Net* net = (argc == 3) ? load_net(argv[2]) : init_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 5e-6);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 5e-6);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
