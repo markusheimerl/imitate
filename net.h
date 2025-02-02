@@ -68,7 +68,7 @@ static double compute_weight_decay(int epoch, int total_epochs) {
 
 // Net initialization
 Net* create_net(int num_layers, const int* layer_sizes, double learning_rate) {
-    Net* net = malloc(sizeof(Net));
+    Net* net = (Net*)malloc(sizeof(Net));
     if (!net) return NULL;
 
     net->num_layers = num_layers;
@@ -76,7 +76,7 @@ Net* create_net(int num_layers, const int* layer_sizes, double learning_rate) {
     net->learning_rate = learning_rate;
     
     // Allocate layers
-    net->layers = malloc(num_layers * sizeof(Layer));
+    net->layers = (Layer*)malloc(num_layers * sizeof(Layer));
     if (!net->layers) {
         free(net);
         return NULL;
@@ -85,34 +85,34 @@ Net* create_net(int num_layers, const int* layer_sizes, double learning_rate) {
     // Initialize layers
     for (int i = 0; i < num_layers; i++) {
         net->layers[i].size = layer_sizes[i];
-        net->layers[i].values = calloc(layer_sizes[i], sizeof(double));
-        net->layers[i].gradients = calloc(layer_sizes[i], sizeof(double));
+        net->layers[i].values = (double*)calloc(layer_sizes[i], sizeof(double));
+        net->layers[i].gradients = (double*)calloc(layer_sizes[i], sizeof(double));
     }
 
     // Allocate matrices
-    net->weights = malloc((num_layers - 1) * sizeof(double*));
-    net->biases = malloc((num_layers - 1) * sizeof(double*));
-    net->weight_gradients = malloc((num_layers - 1) * sizeof(double*));
-    net->bias_gradients = malloc((num_layers - 1) * sizeof(double*));
-    net->weight_momentum = malloc((num_layers - 1) * sizeof(double*));
-    net->weight_velocity = malloc((num_layers - 1) * sizeof(double*));
-    net->bias_momentum = malloc((num_layers - 1) * sizeof(double*));
-    net->bias_velocity = malloc((num_layers - 1) * sizeof(double*));
+    net->weights = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->biases = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->weight_gradients = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->bias_gradients = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->weight_momentum = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->weight_velocity = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->bias_momentum = (double**)malloc((num_layers - 1) * sizeof(double*));
+    net->bias_velocity = (double**)malloc((num_layers - 1) * sizeof(double*));
 
-    // Initialize weights and related matrices
+        // Initialize weights and related matrices
     for (int i = 0; i < num_layers - 1; i++) {
         int rows = layer_sizes[i + 1];
         int cols = layer_sizes[i];
         double scale = sqrt(2.0 / (layer_sizes[i] + layer_sizes[i + 1]));  // Xavier initialization
 
-        net->weights[i] = malloc(rows * cols * sizeof(double));
-        net->biases[i] = calloc(rows, sizeof(double));
-        net->weight_gradients[i] = calloc(rows * cols, sizeof(double));
-        net->bias_gradients[i] = calloc(rows, sizeof(double));
-        net->weight_momentum[i] = calloc(rows * cols, sizeof(double));
-        net->weight_velocity[i] = calloc(rows * cols, sizeof(double));
-        net->bias_momentum[i] = calloc(rows, sizeof(double));
-        net->bias_velocity[i] = calloc(rows, sizeof(double));
+        net->weights[i] = (double*)malloc(rows * cols * sizeof(double));
+        net->biases[i] = (double*)calloc(rows, sizeof(double));
+        net->weight_gradients[i] = (double*)calloc(rows * cols, sizeof(double));
+        net->bias_gradients[i] = (double*)calloc(rows, sizeof(double));
+        net->weight_momentum[i] = (double*)calloc(rows * cols, sizeof(double));
+        net->weight_velocity[i] = (double*)calloc(rows * cols, sizeof(double));
+        net->bias_momentum[i] = (double*)calloc(rows, sizeof(double));
+        net->bias_velocity[i] = (double*)calloc(rows, sizeof(double));
 
         // Initialize weights with Xavier initialization
         for (int j = 0; j < rows * cols; j++) {
@@ -250,12 +250,10 @@ bool save_net(const char* filename, const Net* net) {
         int cols = net->layers[i].size;
         int weight_size = rows * cols;
         
-        // Save weights and optimizer states
         fwrite(net->weights[i], sizeof(double), weight_size, file);
         fwrite(net->weight_momentum[i], sizeof(double), weight_size, file);
         fwrite(net->weight_velocity[i], sizeof(double), weight_size, file);
         
-        // Save biases and optimizer states
         fwrite(net->biases[i], sizeof(double), rows, file);
         fwrite(net->bias_momentum[i], sizeof(double), rows, file);
         fwrite(net->bias_velocity[i], sizeof(double), rows, file);
@@ -280,7 +278,7 @@ Net* load_net(const char* filename) {
     fread(&timestep, sizeof(int), 1, file);
     
     // Load layer sizes
-    int* layer_sizes = malloc(num_layers * sizeof(int));
+    int* layer_sizes = (int*)malloc(num_layers * sizeof(int));
     for (int i = 0; i < num_layers; i++) {
         fread(&layer_sizes[i], sizeof(int), 1, file);
     }

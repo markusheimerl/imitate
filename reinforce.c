@@ -32,14 +32,14 @@ typedef struct {
 } Rollout;
 
 Rollout* create_rollout() {
-    Rollout* r = malloc(sizeof(Rollout));
-    r->states = malloc(MAX_STEPS * sizeof(double*));
-    r->actions = malloc(MAX_STEPS * sizeof(double*));
-    r->rewards = malloc(MAX_STEPS * sizeof(double));
+    Rollout* r = (Rollout*)malloc(sizeof(Rollout));
+    r->states = (double**)malloc(MAX_STEPS * sizeof(double*));
+    r->actions = (double**)malloc(MAX_STEPS * sizeof(double*));
+    r->rewards = (double*)malloc(MAX_STEPS * sizeof(double));
     
     for(int i = 0; i < MAX_STEPS; i++) {
-        r->states[i] = malloc(STATE_DIM * sizeof(double));
-        r->actions[i] = malloc(ACTION_DIM * sizeof(double));
+        r->states[i] = (double*)malloc(STATE_DIM * sizeof(double));
+        r->actions[i] = (double*)malloc(ACTION_DIM * sizeof(double));
     }
     return r;
 }
@@ -197,7 +197,9 @@ int main(int argc, char** argv) {
     }
 
     srand(time(NULL) ^ getpid());
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 5e-6);
+    
+    static const int layer_sizes[] = {STATE_DIM, 64, ACTION_DIM};
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, layer_sizes, 5e-6);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
@@ -234,7 +236,8 @@ int main(int argc, char** argv) {
     }
 
     char filename[64];
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&(time_t){time(NULL)}));
+    time_t current_time = time(NULL);
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&current_time));
     save_net(filename, net);
 
     for(int r = 0; r < NUM_ROLLOUTS; r++) free_rollout(rollouts[r]);
