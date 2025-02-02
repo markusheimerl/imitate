@@ -5,7 +5,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include "grad.h"
+#include "net.h"
 #include "quad.h"
 #include "rollout.h"
 
