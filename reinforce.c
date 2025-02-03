@@ -55,7 +55,6 @@ void collect_rollouts(Net* policy, Rollout* rollout) {
         rollout->quads[r] = create_quad(0.0, 1.0, 0.0);
         Quad* quad = &rollout->quads[r];
         
-        double t_physics = 0.0;
         double t_control = 0.0;
         rollout->lengths[r] = 0;
 
@@ -67,10 +66,8 @@ void collect_rollouts(Net* policy, Rollout* rollout) {
                 break;
             }
 
-            if (t_physics >= DT_PHYSICS) {
-                update_quad(quad, DT_PHYSICS);
-                t_physics = 0.0;
-            }
+            update_quad(quad, DT_PHYSICS);
+            t_control += DT_PHYSICS;
             
             if (t_control >= DT_CONTROL) {
                 int step = rollout->lengths[r];
@@ -96,9 +93,6 @@ void collect_rollouts(Net* policy, Rollout* rollout) {
                 rollout->lengths[r]++;
                 t_control = 0.0;
             }
-            
-            t_physics += DT_PHYSICS;
-            t_control += DT_PHYSICS;
         }
         
         // Compute discounted returns
