@@ -171,10 +171,12 @@ int main(int argc, char** argv) {
         
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             collect_rollout(net, &rollouts[r]);
-            update_policy(net, &rollouts[r]);
         }
         
-        update_net(net);
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            update_policy(net, &rollouts[r]);
+            update_net(net);
+        }
 
         double mean_return = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
