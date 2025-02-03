@@ -2,10 +2,10 @@ CC = nvcc
 CFLAGS = -O3
 LDFLAGS = -lm
 
-reinforce.out: %.out: %.cu
+reinforce.out: %.out: %.c
 	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
 
-visualize.out: %.out: %.cu
+visualize.out: %.out: %.c
 	$(CC) $(CFLAGS) -Iraytracer $< $(LDFLAGS) -lwebp -lwebpmux -lpthread -o $@
 
 run: reinforce.out
