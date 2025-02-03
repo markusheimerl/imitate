@@ -108,7 +108,7 @@ void forward_net(Net* net, const double* input) {
     }
 }
 
-// Simple SGD update
+// Compute gradients through backpropagation
 void backward_net(Net* net, const double* output_gradient) {
     int last_layer = net->num_layers - 1;
     memcpy(net->layers[last_layer].gradients, output_gradient, 
@@ -119,15 +119,13 @@ void backward_net(Net* net, const double* output_gradient) {
         Layer* current = &net->layers[i];
         Layer* next = &net->layers[i + 1];
         
-        // Compute weight and bias gradients and update weights
+        // Accumulate weight and bias gradients
         for (int j = 0; j < next->size; j++) {
             for (int k = 0; k < current->size; k++) {
                 int idx = j * current->size + k;
-                net->weight_gradients[i][idx] = next->gradients[j] * current->values[k];
-                net->weights[i][idx] -= net->learning_rate * net->weight_gradients[i][idx];
+                net->weight_gradients[i][idx] += next->gradients[j] * current->values[k];
             }
-            net->bias_gradients[i][j] = next->gradients[j];
-            net->biases[i][j] -= net->learning_rate * net->bias_gradients[i][j];
+            net->bias_gradients[i][j] += next->gradients[j];
         }
         
         // Compute gradients for current layer
@@ -140,6 +138,34 @@ void backward_net(Net* net, const double* output_gradient) {
                 }
                 current->gradients[j] *= gelu_derivative(current->values[j]);
             }
+        }
+    }
+}
+
+void zero_gradients(Net* net) {
+    for (int i = 0; i < net->num_layers - 1; i++) {
+        Layer* current = &net->layers[i];
+        Layer* next = &net->layers[i + 1];
+        
+        int weight_size = next->size * current->size;
+        memset(net->weight_gradients[i], 0, weight_size * sizeof(double));
+        memset(net->bias_gradients[i], 0, next->size * sizeof(double));
+    }
+}
+
+// Apply SGD update using computed gradients
+void update_net(Net* net) {
+    for (int i = 0; i < net->num_layers - 1; i++) {
+        Layer* current = &net->layers[i];
+        Layer* next = &net->layers[i + 1];
+        
+        // Update weights and biases using gradients
+        for (int j = 0; j < next->size; j++) {
+            for (int k = 0; k < current->size; k++) {
+                int idx = j * current->size + k;
+                net->weights[i][idx] -= net->learning_rate * net->weight_gradients[i][idx];
+            }
+            net->biases[i][j] -= net->learning_rate * net->bias_gradients[i][j];
         }
     }
 }

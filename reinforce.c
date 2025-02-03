@@ -117,6 +117,7 @@ void collect_rollouts(Net* policy, Rollout* rollout) {
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
     double output_gradient[ACTION_DIM];
+    zero_gradients(policy);
     
     for(int r = 0; r < NUM_ROLLOUTS; r++) {
         for(int t = 0; t < rollout->lengths[r]; t++) {
@@ -159,6 +160,7 @@ void update_policy(Net* policy, Rollout* rollout) {
             backward_net(policy, output_gradient);
         }
     }
+    update_net(policy);
 }
 
 int main(int argc, char** argv) {
@@ -170,7 +172,7 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
     static const int layer_sizes[] = {STATE_DIM, 64, ACTION_DIM};
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, layer_sizes, 5e-7);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, layer_sizes, 9e-8);
     
     Rollout rollout = {0};
 
