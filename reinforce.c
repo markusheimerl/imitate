@@ -5,6 +5,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include "net.h"
 #include "quad.h"
 
@@ -148,6 +150,42 @@ void update_policy(Net* policy, Rollout* rollout) {
     }
 }
 
+void* collection_thread(void* arg) {
+    void** args = (void**)arg;
+    Net* net = (Net*)args[0];
+    Rollout* rollouts = (Rollout*)args[1];
+    atomic_bool* done = (atomic_bool*)args[2];
+    
+    while(1) {
+        if(!atomic_load(done)) {
+            for(int r = 0; r < NUM_ROLLOUTS; r++) {
+                collect_rollout(net, &rollouts[r]);
+            }
+            atomic_store(done, true);
+        }
+    }
+    return NULL;
+}
+
+void* update_thread(void* arg) {
+    void** args = (void**)arg;
+    Net* net = (Net*)args[0];
+    Rollout* rollouts = (Rollout*)args[1];
+    atomic_bool* done = (atomic_bool*)args[2];
+    
+    while(1) {
+        if(!atomic_load(done)) {
+            for(int r = 0; r < NUM_ROLLOUTS; r++) {
+                zero_gradients(net);
+                update_policy(net, &rollouts[r]);
+                update_net(net);
+            }
+            atomic_store(done, true);
+        }
+    }
+    return NULL;
+}
+
 int main(int argc, char** argv) {
     if(argc != 2 && argc != 3) {
         printf("Usage: %s <num_epochs> [initial_weights.bin]\n", argv[0]);
@@ -156,9 +194,17 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(9e-8);
-    
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
     Rollout rollouts[NUM_ROLLOUTS];
+    atomic_bool collection_done = false;
+    atomic_bool update_done = true;
+    
+    void* collection_args[] = {net, rollouts, &collection_done};
+    void* update_args[] = {net, rollouts, &update_done};
+    
+    pthread_t collector, updater;
+    pthread_create(&collector, NULL, collection_thread, collection_args);
+    pthread_create(&updater, NULL, update_thread, update_args);
 
     int epochs = atoi(argv[1]);
     double best_return = -1e30;
@@ -167,15 +213,16 @@ int main(int argc, char** argv) {
     gettimeofday(&start_time, NULL);
     
     for(int epoch = 0; epoch < epochs; epoch++) {
-        zero_gradients(net);
+        atomic_store(&collection_done, false);
         
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            collect_rollout(net, &rollouts[r]);
+        while(!atomic_load(&collection_done)) {
+            usleep(1000);
         }
         
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            update_policy(net, &rollouts[r]);
-            update_net(net);
+        atomic_store(&update_done, false);
+        
+        while(!atomic_load(&update_done)) {
+            usleep(1000);
         }
 
         double mean_return = 0.0;
