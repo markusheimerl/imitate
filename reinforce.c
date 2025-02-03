@@ -154,15 +154,15 @@ void* collection_thread(void* arg) {
     void** args = (void**)arg;
     Net* net = (Net*)args[0];
     Rollout* rollouts = (Rollout*)args[1];
-    atomic_bool* done = (atomic_bool*)args[2];
+    atomic_int* state = (atomic_int*)args[2];
+    
+    Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {
-        if(!atomic_load(done)) {
-            for(int r = 0; r < NUM_ROLLOUTS; r++) {
-                collect_rollout(net, &rollouts[r]);
-            }
-            atomic_store(done, true);
-        }
+        for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(net, &local_rollouts[r]);
+        while(atomic_load(state) != 0);
+        memcpy(rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        atomic_store(state, 1);
     }
     return NULL;
 }
@@ -171,16 +171,19 @@ void* update_thread(void* arg) {
     void** args = (void**)arg;
     Net* net = (Net*)args[0];
     Rollout* rollouts = (Rollout*)args[1];
-    atomic_bool* done = (atomic_bool*)args[2];
+    atomic_int* state = (atomic_int*)args[2];
+    
+    Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {
-        if(!atomic_load(done)) {
-            for(int r = 0; r < NUM_ROLLOUTS; r++) {
-                zero_gradients(net);
-                update_policy(net, &rollouts[r]);
-                update_net(net);
-            }
-            atomic_store(done, true);
+        while(atomic_load(state) != 1);
+        memcpy(local_rollouts, rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        atomic_store(state, 0);
+        
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            zero_gradients(net);
+            update_policy(net, &local_rollouts[r]);
+            update_net(net);
         }
     }
     return NULL;
@@ -196,11 +199,10 @@ int main(int argc, char** argv) {
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
     Rollout rollouts[NUM_ROLLOUTS];
-    atomic_bool collection_done = false;
-    atomic_bool update_done = true;
+    atomic_int state = 0;
     
-    void* collection_args[] = {net, rollouts, &collection_done};
-    void* update_args[] = {net, rollouts, &update_done};
+    void* collection_args[] = {net, rollouts, &state};
+    void* update_args[] = {net, rollouts, &state};
     
     pthread_t collector, updater;
     pthread_create(&collector, NULL, collection_thread, collection_args);
@@ -213,18 +215,9 @@ int main(int argc, char** argv) {
     gettimeofday(&start_time, NULL);
     
     for(int epoch = 0; epoch < epochs; epoch++) {
-        atomic_store(&collection_done, false);
+        sleep(1);
+        atomic_store(&state, 2);  // Stop both threads
         
-        while(!atomic_load(&collection_done)) {
-            usleep(1000);
-        }
-        
-        atomic_store(&update_done, false);
-        
-        while(!atomic_load(&update_done)) {
-            usleep(1000);
-        }
-
         double mean_return = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             mean_return += rollouts[r].returns[0];
@@ -243,6 +236,8 @@ int main(int argc, char** argv) {
             mean_return, theoretical_max, 
             (mean_return/theoretical_max) * 100.0, best_return,
             ((best_return/theoretical_max) * 100.0 / elapsed));
+            
+        atomic_store(&state, 0);  // Resume threads
     }
 
     char filename[64];
