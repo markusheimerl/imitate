@@ -142,7 +142,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // J(θ) - Policy objective function
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
-void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
+void update_policy(Net* policy, Rollout* rollout) {
     double output_gradient[ACTION_DIM];
     
     for(int t = 0; t < rollout->length; t++) {
@@ -186,7 +186,7 @@ void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
         // Backpropagate gradients through network
         // Negative sign converts gradient ascent (policy improvement) 
         // to gradient descent (standard optimization framework)
-        backward_net(policy, output_gradient, epoch, epochs);
+        backward_net(policy, output_gradient);
     }
 }
 
@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
     static const int layer_sizes[] = {STATE_DIM, 64, ACTION_DIM};
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, layer_sizes, 5e-6);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, layer_sizes, 5e-7);
     
     Rollout* rollouts[NUM_ROLLOUTS];
     for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
         }
         
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            update_policy(net, rollouts[r], epoch, epochs);
+            update_policy(net, rollouts[r]);
         }
 
         double mean_return = sum_returns / NUM_ROLLOUTS;
