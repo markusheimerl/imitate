@@ -156,8 +156,8 @@ int main(int argc, char** argv) {
 
     // Save animation
     char filename[64];
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", 
-             localtime(&(time_t){time(NULL)}));
+    time_t current_time = time(NULL);
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", localtime(&current_time));
     save_scene(&scene, filename);
     printf("\nSaved animation to %s\n", filename);
 

@@ -263,56 +263,6 @@ bool save_net(const char* filename, const Net* net) {
     return true;
 }
 
-// Load network from file
-Net* load_net(const char* filename) {
-    FILE* file = fopen(filename, "rb");
-    if (!file) return NULL;
-    
-    // Load network architecture
-    int num_layers;
-    double learning_rate;
-    int timestep;
-    
-    fread(&num_layers, sizeof(int), 1, file);
-    fread(&learning_rate, sizeof(double), 1, file);
-    fread(&timestep, sizeof(int), 1, file);
-    
-    // Load layer sizes
-    int* layer_sizes = (int*)malloc(num_layers * sizeof(int));
-    for (int i = 0; i < num_layers; i++) {
-        fread(&layer_sizes[i], sizeof(int), 1, file);
-    }
-    
-    // Create network
-    Net* net = create_net(num_layers, layer_sizes, learning_rate);
-    if (!net) {
-        free(layer_sizes);
-        fclose(file);
-        return NULL;
-    }
-    
-    net->timestep = timestep;
-    
-    // Load weights, biases, and optimizer states
-    for (int i = 0; i < num_layers - 1; i++) {
-        int rows = net->layers[i + 1].size;
-        int cols = net->layers[i].size;
-        int weight_size = rows * cols;
-        
-        fread(net->weights[i], sizeof(double), weight_size, file);
-        fread(net->weight_momentum[i], sizeof(double), weight_size, file);
-        fread(net->weight_velocity[i], sizeof(double), weight_size, file);
-        
-        fread(net->biases[i], sizeof(double), rows, file);
-        fread(net->bias_momentum[i], sizeof(double), rows, file);
-        fread(net->bias_velocity[i], sizeof(double), rows, file);
-    }
-    
-    free(layer_sizes);
-    fclose(file);
-    return net;
-}
-
 // Free network resources
 void free_net(Net* net) {
     if (!net) return;
@@ -343,6 +293,68 @@ void free_net(Net* net) {
     free(net->bias_velocity);
     free(net->layers);
     free(net);
+}
+
+// Load network from file
+Net* load_net(const char* filename) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) return NULL;
+    
+    // Load network architecture
+    int num_layers;
+    double learning_rate;
+    int timestep;
+    
+    if (fread(&num_layers, sizeof(int), 1, file) != 1 ||
+        fread(&learning_rate, sizeof(double), 1, file) != 1 ||
+        fread(&timestep, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return NULL;
+    }
+    
+    // Load layer sizes
+    int* layer_sizes = (int*)malloc(num_layers * sizeof(int));
+    for (int i = 0; i < num_layers; i++) {
+        if (fread(&layer_sizes[i], sizeof(int), 1, file) != 1) {
+            free(layer_sizes);
+            fclose(file);
+            return NULL;
+        }
+    }
+    
+    // Create network
+    Net* net = create_net(num_layers, layer_sizes, learning_rate);
+    if (!net) {
+        free(layer_sizes);
+        fclose(file);
+        return NULL;
+    }
+    
+    net->timestep = timestep;
+    
+    // Load weights, biases, and optimizer states
+    for (int i = 0; i < num_layers - 1; i++) {
+        int rows = net->layers[i + 1].size;
+        int cols = net->layers[i].size;
+        int weight_size = rows * cols;
+        
+        if (fread(net->weights[i], sizeof(double), (size_t)weight_size, file) != (size_t)weight_size ||
+            fread(net->weight_momentum[i], sizeof(double), (size_t)weight_size, file) != (size_t)weight_size ||
+            fread(net->weight_velocity[i], sizeof(double), (size_t)weight_size, file) != (size_t)weight_size ||
+            fread(net->biases[i], sizeof(double), (size_t)rows, file) != (size_t)rows ||
+            fread(net->bias_momentum[i], sizeof(double), (size_t)rows, file) != (size_t)rows ||
+            fread(net->bias_velocity[i], sizeof(double), (size_t)rows, file) != (size_t)rows) {
+            
+            free_net(net);
+            free(layer_sizes);
+            fclose(file);
+            return NULL;
+        }
+    }
+    
+    free(layer_sizes);
+    fclose(file);
+    return net;
 }
 
 #endif // NET_H
