@@ -25,12 +25,11 @@
 #define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
 
 typedef struct {
-    double states[NUM_ROLLOUTS][MAX_STEPS][STATE_DIM];
-    double actions[NUM_ROLLOUTS][MAX_STEPS][ACTION_DIM];
-    double rewards[NUM_ROLLOUTS][MAX_STEPS];
-    double returns[NUM_ROLLOUTS][MAX_STEPS];
-    int lengths[NUM_ROLLOUTS];
-    Quad quads[NUM_ROLLOUTS];
+    double states[MAX_STEPS][STATE_DIM];
+    double actions[MAX_STEPS][ACTION_DIM];
+    double rewards[MAX_STEPS];
+    double returns[MAX_STEPS];
+    int length;
 } Rollout;
 
 double squash(double x, double min, double max) { 
@@ -50,57 +49,53 @@ double compute_reward(const Quad* q) {
     return exp(-4.0 * distance);
 }
 
-void collect_rollouts(Net* policy, Rollout* rollout) {
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        rollout->quads[r] = create_quad(0.0, 1.0, 0.0);
-        Quad* quad = &rollout->quads[r];
+void collect_rollout(Net* policy, Rollout* rollout) {
+    Quad quad = create_quad(0.0, 1.0, 0.0);
+    double t_control = 0.0;
+    rollout->length = 0;
+
+    while(rollout->length < MAX_STEPS) {
+        if (sqrt(
+            pow(quad.linear_position_W[0], 2) +
+            pow(quad.linear_position_W[1] - 1.0, 2) +
+            pow(quad.linear_position_W[2], 2)) > 1.0) {
+            break;
+        }
+
+        update_quad(&quad, DT_PHYSICS);
+        t_control += DT_PHYSICS;
         
-        double t_control = 0.0;
-        rollout->lengths[r] = 0;
-
-        while(rollout->lengths[r] < MAX_STEPS) {
-            if (sqrt(
-                pow(quad->linear_position_W[0], 2) +
-                pow(quad->linear_position_W[1] - 1.0, 2) +
-                pow(quad->linear_position_W[2], 2)) > 1.0) {
-                break;
-            }
-
-            update_quad(quad, DT_PHYSICS);
-            t_control += DT_PHYSICS;
+        if (t_control >= DT_CONTROL) {
+            int step = rollout->length;
             
-            if (t_control >= DT_CONTROL) {
-                int step = rollout->lengths[r];
-                
-                memcpy(rollout->states[r][step], quad->linear_acceleration_B_s, 3 * sizeof(double));
-                memcpy(rollout->states[r][step] + 3, quad->angular_velocity_B_s, 3 * sizeof(double));
-                
-                forward_net(policy, rollout->states[r][step]);
-                
-                for(int i = 0; i < 4; i++) {
-                    double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
-                    double std = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
+            memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
+            memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+            
+            forward_net(policy, rollout->states[step]);
+            
+            for(int i = 0; i < 4; i++) {
+                double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                double std = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
 
-                    double u1 = (double)rand()/RAND_MAX;
-                    double u2 = (double)rand()/RAND_MAX;
-                    double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                    
-                    rollout->actions[r][step][i] = mean + std * noise;
-                    quad->omega_next[i] = rollout->actions[r][step][i];
-                }
+                double u1 = (double)rand()/RAND_MAX;
+                double u2 = (double)rand()/RAND_MAX;
+                double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
-                rollout->rewards[r][step] = compute_reward(quad);
-                rollout->lengths[r]++;
-                t_control = 0.0;
+                rollout->actions[step][i] = mean + std * noise;
+                quad.omega_next[i] = rollout->actions[step][i];
             }
+            
+            rollout->rewards[step] = compute_reward(&quad);
+            rollout->length++;
+            t_control = 0.0;
         }
-        
-        // Compute discounted returns
-        double G = 0.0;
-        for(int i = rollout->lengths[r]-1; i >= 0; i--) {
-            G = rollout->rewards[r][i] + GAMMA * G;
-            rollout->returns[r][i] = G;
-        }
+    }
+    
+    // Compute discounted returns
+    double G = 0.0;
+    for(int i = rollout->length-1; i >= 0; i--) {
+        G = rollout->rewards[i] + GAMMA * G;
+        rollout->returns[i] = G;
     }
 }
 
@@ -111,50 +106,46 @@ void collect_rollouts(Net* policy, Rollout* rollout) {
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
     double output_gradient[ACTION_DIM];
-    zero_gradients(policy);
     
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        for(int t = 0; t < rollout->lengths[r]; t++) {
-            forward_net(policy, rollout->states[r][t]);
+    for(int t = 0; t < rollout->length; t++) {
+        forward_net(policy, rollout->states[t]);
+        
+        for(int i = 0; i < 4; i++) {
+            // Network outputs raw parameters before squashing
+            double mean_raw = policy->h[2][i];
+            double std_raw = policy->h[2][i + 4];
             
-            for(int i = 0; i < 4; i++) {
-                // Network outputs raw parameters before squashing
-                double mean_raw = policy->h[2][i];
-                double std_raw = policy->h[2][i + 4];
-                
-                // Squashed parameters using tanh-based scaling
-                // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
-                // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
-                double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
-                double std_val = squash(std_raw, MIN_STD, MAX_STD);
-                
-                // Sampled action and its deviation from mean
-                double delta = rollout->actions[r][t][i] - mean;
+            // Squashed parameters using tanh-based scaling
+            // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
+            // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
+            double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
+            double std_val = squash(std_raw, MIN_STD, MAX_STD);
+            
+            // Sampled action and its deviation from mean
+            double delta = rollout->actions[t][i] - mean;
 
-                // Gradient for mean parameter:
-                // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
-                // Where:
-                // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
-                // dμ/dμ_raw = derivative of squashing function (dsquash)
-                output_gradient[i] = -(delta / (std_val * std_val)) * 
-                    dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
-                    rollout->returns[r][t];
+            // Gradient for mean parameter:
+            // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
+            // Where:
+            // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
+            // dμ/dμ_raw = derivative of squashing function (dsquash)
+            output_gradient[i] = -(delta / (std_val * std_val)) * 
+                dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
+                rollout->returns[t];
 
-                // Gradient for standard deviation parameter:
-                // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
-                // Where:
-                // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
-                // dσ/dσ_raw = derivative of squashing function (dsquash)
-                output_gradient[i + 4] = -((delta * delta - std_val * std_val) / 
-                    (std_val * std_val * std_val)) * 
-                    dsquash(std_raw, MIN_STD, MAX_STD) * 
-                    rollout->returns[r][t];
-            }
-
-            backward_net(policy, output_gradient);
+            // Gradient for standard deviation parameter:
+            // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
+            // Where:
+            // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
+            // dσ/dσ_raw = derivative of squashing function (dsquash)
+            output_gradient[i + 4] = -((delta * delta - std_val * std_val) / 
+                (std_val * std_val * std_val)) * 
+                dsquash(std_raw, MIN_STD, MAX_STD) * 
+                rollout->returns[t];
         }
+
+        backward_net(policy, output_gradient);
     }
-    update_net(policy);
 }
 
 int main(int argc, char** argv) {
@@ -167,7 +158,7 @@ int main(int argc, char** argv) {
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(9e-8);
     
-    Rollout rollout = {0};
+    Rollout rollouts[NUM_ROLLOUTS];
 
     int epochs = atoi(argv[1]);
     double best_return = -1e30;
@@ -176,12 +167,18 @@ int main(int argc, char** argv) {
     gettimeofday(&start_time, NULL);
     
     for(int epoch = 0; epoch < epochs; epoch++) {
-        collect_rollouts(net, &rollout);
-        update_policy(net, &rollout);
+        zero_gradients(net);
+        
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            collect_rollout(net, &rollouts[r]);
+            update_policy(net, &rollouts[r]);
+        }
+        
+        update_net(net);
 
         double mean_return = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            mean_return += rollout.returns[r][0];
+            mean_return += rollouts[r].returns[0];
         }
         mean_return /= NUM_ROLLOUTS;
         
