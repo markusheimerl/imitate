@@ -95,9 +95,9 @@ int main(int argc, char** argv) {
             // Forward pass through network
             forward_net(policy, state);
             
-            // Extract actions from network output
+            // Extract actions from network output (means only)
             for(int i = 0; i < 4; i++) {
-                double mean = squash(policy->layers[policy->num_layers-1].values[i], MIN_MEAN, MAX_MEAN);
+                double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
                 quad.omega_next[i] = mean;
             }
             
