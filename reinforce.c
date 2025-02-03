@@ -71,7 +71,8 @@ double compute_reward(Quad q) {
         pow(q.linear_position_W[2] - 0.0, 2)    // z distance from 0
     );
     
-    return fmax(exp(-3.0 * (distance - 0.02)), 1.0);
+    // Exponential decay from 1.0 at distance=0 to ~0 at large distances
+    return exp(-2.0 * distance);
 }
 
 void collect_rollout(Net* policy, Rollout* rollout) {
