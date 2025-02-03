@@ -83,6 +83,13 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     rollout->length = 0;
 
     while(rollout->length < MAX_STEPS) {
+        if (sqrt(
+            pow(quad.linear_position_W[0], 2) +
+            pow(quad.linear_position_W[1] - 1.0, 2) +
+            pow(quad.linear_position_W[2], 2)) > 1.0) {
+            break;
+        }
+
         if (t_physics >= DT_PHYSICS) {
             update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
