@@ -78,8 +78,8 @@ void collect_rollouts(Net* policy, Rollout* rollout) {
                 forward_net(policy, rollout->states[r][step]);
                 
                 for(int i = 0; i < 4; i++) {
-                    double mean = squash(policy->layers[policy->num_layers-1].values[i], MIN_MEAN, MAX_MEAN);
-                    double std = squash(policy->layers[policy->num_layers-1].values[i + 4], MIN_STD, MAX_STD);
+                    double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                    double std = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
 
                     double u1 = (double)rand()/RAND_MAX;
                     double u2 = (double)rand()/RAND_MAX;
@@ -119,8 +119,8 @@ void update_policy(Net* policy, Rollout* rollout) {
             
             for(int i = 0; i < 4; i++) {
                 // Network outputs raw parameters before squashing
-                double mean_raw = policy->layers[policy->num_layers-1].values[i];
-                double std_raw = policy->layers[policy->num_layers-1].values[i + 4];
+                double mean_raw = policy->h[2][i];
+                double std_raw = policy->h[2][i + 4];
                 
                 // Squashed parameters using tanh-based scaling
                 // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
@@ -165,8 +165,7 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     
-    static const int layer_sizes[] = {STATE_DIM, 64, ACTION_DIM};
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3, layer_sizes, 9e-8);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(9e-8);
     
     Rollout rollout = {0};
 
