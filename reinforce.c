@@ -14,7 +14,7 @@
 
 #define STATE_DIM 6      // 3 accel + 3 gyro
 #define ACTION_DIM 8      // 4 means + 4 stds
-#define MAX_STEPS 1000
+#define MAX_STEPS 256
 #define NUM_ROLLOUTS 128
 
 #define GAMMA 0.999
@@ -72,7 +72,7 @@ double compute_reward(Quad q) {
     );
     
     // Exponential decay from 1.0 at distance=0 to ~0 at large distances
-    return exp(-2.0 * distance);
+    return exp(-4.0 * distance);
 }
 
 void collect_rollout(Net* policy, Rollout* rollout) {
@@ -83,20 +83,6 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     rollout->length = 0;
 
     while(rollout->length < MAX_STEPS) {
-        // Calculate 3D distance from hover point
-        double drift = sqrt(
-            pow(quad.linear_position_W[0], 2) +
-            pow(quad.linear_position_W[1] - 1.0, 2) +
-            pow(quad.linear_position_W[2], 2)
-        );
-
-        if (dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 4.0 ||  // ~2 m/s
-            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 9.0 || // ~3 rad/s
-            quad.R_W_B[4] < 0.0 ||    // More than 90° tilt
-            drift > 1.0) {            // More than 1m from hover point
-            break;
-        }
-            
         if (t_physics >= DT_PHYSICS) {
             update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
