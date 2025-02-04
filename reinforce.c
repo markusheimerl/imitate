@@ -152,24 +152,18 @@ void update_policy(Net* policy, Rollout* rollout) {
 
 void* collection_thread(void* arg) {
     srand(time(NULL) ^ getpid());
-    
+
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
     atomic_bool* sync = (atomic_bool*)args[2];
-    double* shared_mean_return = (double*)args[3];
     
     Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(shared_net, &local_rollouts[r]);
-        
-        double local_mean_return = 0.0;
-        for(int r = 0; r < NUM_ROLLOUTS; r++) local_mean_return += local_rollouts[r].returns[0];
-        local_mean_return /= NUM_ROLLOUTS;
 
         while(atomic_load(sync));
-        memcpy(shared_mean_return, &local_mean_return, sizeof(double));
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         atomic_store(sync, true);
     }
@@ -183,16 +177,22 @@ void* update_thread(void* arg) {
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
     atomic_bool* sync = (atomic_bool*)args[2];
-    
+    double* shared_mean_return = (double*)args[3];
+
     Net* local_net = create_net(shared_net->lr);
     memcpy(local_net, shared_net, sizeof(Net));
     
     Rollout local_rollouts[NUM_ROLLOUTS];
     
-    while(1) {    
+    while(1) {
+        double local_mean_return = 0.0;
+        for(int r = 0; r < NUM_ROLLOUTS; r++) local_mean_return += local_rollouts[r].returns[0];
+        local_mean_return /= NUM_ROLLOUTS;
+
         while(!atomic_load(sync));
         memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         memcpy(shared_net, local_net, sizeof(Net));
+        memcpy(shared_mean_return, &local_mean_return, sizeof(double));
         atomic_store(sync, false);
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
@@ -219,8 +219,8 @@ int main(int argc, char** argv) {
     atomic_bool sync = false;
     double shared_mean_return = 0.0;
     
-    void* collection_args[] = {net, shared_rollouts, &sync, &shared_mean_return};
-    void* update_args[] = {net, shared_rollouts, &sync};
+    void* collection_args[] = {net, shared_rollouts, &sync};
+    void* update_args[] = {net, shared_rollouts, &sync, &shared_mean_return};
     
     pthread_t collector, updater;
     pthread_create(&collector, NULL, collection_thread, collection_args);
