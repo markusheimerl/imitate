@@ -152,40 +152,53 @@ void update_policy(Net* policy, Rollout* rollout) {
 
 void* collection_thread(void* arg) {
     void** args = (void**)arg;
-    Net* net = (Net*)args[0];
-    Rollout* rollouts = (Rollout*)args[1];
-    atomic_int* state = (atomic_int*)args[2];
+    Net* shared_net = (Net*)args[0];
+    Rollout* shared_rollouts = (Rollout*)args[1];
+    atomic_bool* done = (atomic_bool*)args[2];
+    double* shared_mean_return = (double*)args[3];
     
     Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {
-        for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(net, &local_rollouts[r]);
-        while(atomic_load(state) != 0);
-        memcpy(rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
-        atomic_store(state, 1);
+        for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(shared_net, &local_rollouts[r]);
+        
+        double local_mean_return = 0.0;
+        for(int r = 0; r < NUM_ROLLOUTS; r++) local_mean_return += local_rollouts[r].returns[0];
+        local_mean_return /= NUM_ROLLOUTS;
+
+        while(atomic_load(done));
+        memcpy(shared_mean_return, &local_mean_return, sizeof(double));
+        memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        atomic_store(done, true);
     }
     return NULL;
 }
 
 void* update_thread(void* arg) {
     void** args = (void**)arg;
-    Net* net = (Net*)args[0];
-    Rollout* rollouts = (Rollout*)args[1];
-    atomic_int* state = (atomic_int*)args[2];
+    Net* shared_net = (Net*)args[0];
+    Rollout* shared_rollouts = (Rollout*)args[1];
+    atomic_bool* done = (atomic_bool*)args[2];
+    
+    Net* local_net = create_net(shared_net->lr);
+    memcpy(local_net, shared_net, sizeof(Net));
     
     Rollout local_rollouts[NUM_ROLLOUTS];
     
-    while(1) {
-        while(atomic_load(state) != 1);
-        memcpy(local_rollouts, rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
-        atomic_store(state, 0);
-        
+    while(1) {    
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            zero_gradients(net);
-            update_policy(net, &local_rollouts[r]);
-            update_net(net);
+            zero_gradients(local_net);
+            update_policy(local_net, &local_rollouts[r]);
+            update_net(local_net);
         }
+
+        while(!atomic_load(done));
+        memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        memcpy(shared_net, local_net, sizeof(Net));
+        atomic_store(done, false);
     }
+    
+    free_net(local_net);
     return NULL;
 }
 
@@ -198,11 +211,12 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
-    Rollout rollouts[NUM_ROLLOUTS];
-    atomic_int state = 0;
+    Rollout shared_rollouts[NUM_ROLLOUTS];
+    atomic_bool done = false;
+    double shared_mean_return = 0.0;
     
-    void* collection_args[] = {net, rollouts, &state};
-    void* update_args[] = {net, rollouts, &state};
+    void* collection_args[] = {net, shared_rollouts, &done, &shared_mean_return};
+    void* update_args[] = {net, shared_rollouts, &done};
     
     pthread_t collector, updater;
     pthread_create(&collector, NULL, collection_thread, collection_args);
@@ -216,15 +230,12 @@ int main(int argc, char** argv) {
     
     for(int epoch = 0; epoch < epochs; epoch++) {
         sleep(1);
-        atomic_store(&state, 2);  // Stop both threads
+        while(!atomic_load(&done));
         
-        double mean_return = 0.0;
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            mean_return += rollouts[r].returns[0];
-        }
-        mean_return /= NUM_ROLLOUTS;
+        double local_mean_return;
+        memcpy(&local_mean_return, &shared_mean_return, sizeof(double));
         
-        best_return = fmax(mean_return, best_return);
+        best_return = fmax(local_mean_return, best_return);
 
         struct timeval now;
         gettimeofday(&now, NULL);
@@ -233,11 +244,9 @@ int main(int argc, char** argv) {
         
         printf("epoch %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
             epoch+1, epochs,
-            mean_return, theoretical_max, 
-            (mean_return/theoretical_max) * 100.0, best_return,
+            local_mean_return, theoretical_max, 
+            (local_mean_return/theoretical_max) * 100.0, best_return,
             ((best_return/theoretical_max) * 100.0 / elapsed));
-            
-        atomic_store(&state, 0);  // Resume threads
     }
 
     char filename[64];
