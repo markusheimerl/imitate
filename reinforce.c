@@ -55,7 +55,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     Quad quad = create_quad(0.0, 1.0, 0.0);
     double t_control = 0.0;
     rollout->length = 0;
-    double input[12] = {0};
+    double input[INPUT_DIM] = {0};
 
     while(rollout->length < MAX_STEPS) {
         if (sqrt(
@@ -74,8 +74,11 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            memcpy(input, rollout->states[step], 6 * sizeof(double));
-            if (step > 0) memcpy(input + 6, rollout->states[step-1], 6 * sizeof(double));
+            // Fill input array with history using exponential decay
+            for(int i = 0; i < 16 && step - i >= 0; i++)
+                for(int j = 0; j < 6; j++) 
+                    input[i * 6 + j] = rollout->states[step - i][j] * pow(0.85, i);
+                
             forward_net(policy, input);
             
             for(int i = 0; i < 4; i++) {
@@ -111,11 +114,14 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
     double output_gradient[ACTION_DIM];
-    double input[12] = {0};
+    double input[INPUT_DIM] = {0};
     
-    for(int t = 0; t < rollout->length; t++) {
-        memcpy(input, rollout->states[t], 6 * sizeof(double));
-        if (t > 0) memcpy(input + 6, rollout->states[t-1], 6 * sizeof(double));
+    for(int step = 0; step < rollout->length; step++) {
+        // Fill input array with history using exponential decay
+        for(int i = 0; i < 16 && step - i >= 0; i++) 
+            for(int j = 0; j < 6; j++) 
+                input[i * 6 + j] = rollout->states[step - i][j] * pow(0.85, i);
+            
         forward_net(policy, input);
         
         for(int i = 0; i < 4; i++) {
@@ -130,7 +136,7 @@ void update_policy(Net* policy, Rollout* rollout) {
             double std_val = squash(std_raw, MIN_STD, MAX_STD);
             
             // Sampled action and its deviation from mean
-            double delta = rollout->actions[t][i] - mean;
+            double delta = rollout->actions[step][i] - mean;
 
             // Gradient for mean parameter:
             // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
@@ -139,7 +145,7 @@ void update_policy(Net* policy, Rollout* rollout) {
             // dμ/dμ_raw = derivative of squashing function (dsquash)
             output_gradient[i] = -(delta / (std_val * std_val)) * 
                 dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
-                rollout->returns[t];
+                rollout->returns[step];
 
             // Gradient for standard deviation parameter:
             // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
@@ -149,7 +155,7 @@ void update_policy(Net* policy, Rollout* rollout) {
             output_gradient[i + 4] = -((delta * delta - std_val * std_val) / 
                 (std_val * std_val * std_val)) * 
                 dsquash(std_raw, MIN_STD, MAX_STD) * 
-                rollout->returns[t];
+                rollout->returns[step];
         }
 
         backward_net(policy, output_gradient);

@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define INPUT_DIM 12   // 6 states (3 gyro, 3 acceleromter) + 6 previous states
+#define INPUT_DIM 96   // 6 states * 16 history length
 #define HIDDEN_DIM 64  // Power of 2
 #define OUTPUT_DIM 8   // Padded from 4 (4 means + 4 stds)
 
