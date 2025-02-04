@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define INPUT_DIM 96   // 6 states * 16 history length
-#define HIDDEN_DIM 64  // Power of 2
+#define HIDDEN_DIM 91  // About halfway work split between collector and updater threads
 #define OUTPUT_DIM 8   // Padded from 4 (4 means + 4 stds)
 
 typedef struct {
