@@ -176,6 +176,7 @@ void* collection_thread(void* arg) {
         
         unsigned long long local_count = 0;
         while(*sync) local_count++;
+        //printf("Collection thread waited %llu times\n", local_count);
         
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         *sync = true;
@@ -204,6 +205,7 @@ void* update_thread(void* arg) {
 
         unsigned long long local_count = 0;
         while(!(*sync)) local_count++;
+        //printf("Update thread waited %llu times\n", local_count);
 
         memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         memcpy(shared_net, local_net, sizeof(Net));
