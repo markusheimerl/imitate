@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define INPUT_DIM 8    // Padded from 6 (3 accel + 3 gyro + 2 padding)
+#define INPUT_DIM 12   // 6 states (3 gyro, 3 acceleromter) + 6 previous states
 #define HIDDEN_DIM 64  // Power of 2
 #define OUTPUT_DIM 8   // Padded from 4 (4 means + 4 stds)
 
@@ -15,7 +15,7 @@ typedef struct {
     double W2[OUTPUT_DIM][HIDDEN_DIM];
     
     // Layer activations
-    double h[3][64];  // h[0] is input, h[1] is hidden, h[2] is output
+    double h[3][HIDDEN_DIM];  // h[0] is input, h[1] is hidden, h[2] is output
     
     // Gradient accumulation
     double dW1[HIDDEN_DIM][INPUT_DIM];
@@ -60,10 +60,8 @@ Net* create_net(double learning_rate) {
 }
 
 void forward_net(Net* net, const double* input) {
-    // Copy input (with padding)
-    memcpy(net->h[0], input, 6 * sizeof(double));
-    net->h[0][6] = 0.0;  // Padding
-    net->h[0][7] = 0.0;  // Padding
+    // Copy input
+    memcpy(net->h[0], input, INPUT_DIM * sizeof(double));
 
     // Hidden layer
     memset(net->h[1], 0, HIDDEN_DIM * sizeof(double));

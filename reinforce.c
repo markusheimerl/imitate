@@ -55,6 +55,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     Quad quad = create_quad(0.0, 1.0, 0.0);
     double t_control = 0.0;
     rollout->length = 0;
+    double input[12] = {0};
 
     while(rollout->length < MAX_STEPS) {
         if (sqrt(
@@ -73,7 +74,9 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
-            forward_net(policy, rollout->states[step]);
+            memcpy(input, rollout->states[step], 6 * sizeof(double));
+            if (step > 0) memcpy(input + 6, rollout->states[step-1], 6 * sizeof(double));
+            forward_net(policy, input);
             
             for(int i = 0; i < 4; i++) {
                 double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
@@ -108,9 +111,12 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
     double output_gradient[ACTION_DIM];
+    double input[12] = {0};
     
     for(int t = 0; t < rollout->length; t++) {
-        forward_net(policy, rollout->states[t]);
+        memcpy(input, rollout->states[t], 6 * sizeof(double));
+        if (t > 0) memcpy(input + 6, rollout->states[t-1], 6 * sizeof(double));
+        forward_net(policy, input);
         
         for(int i = 0; i < 4; i++) {
             // Network outputs raw parameters before squashing
@@ -165,7 +171,7 @@ void* collection_thread(void* arg) {
         
         unsigned long long local_count = 0;
         while(atomic_load(sync)) local_count++;
-        printf("Collector waited: %lld\n", local_count);
+        //printf("Collector waited: %lld\n", local_count);
         
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         atomic_store(sync, true);
@@ -194,7 +200,7 @@ void* update_thread(void* arg) {
 
         unsigned long long local_count = 0;
         while(!atomic_load(sync)) local_count++;
-        printf("Updater waited: %lld\n", local_count);
+        //printf("Updater waited: %lld\n", local_count);
 
         memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         memcpy(shared_net, local_net, sizeof(Net));
