@@ -6,7 +6,6 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <stdatomic.h>
 #include "net.h"
 #include "quad.h"
 
@@ -168,7 +167,7 @@ void* collection_thread(void* arg) {
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
-    atomic_bool* sync = (atomic_bool*)args[2];
+    volatile bool* sync = (volatile bool*)args[2];
     
     Rollout local_rollouts[NUM_ROLLOUTS];
     
@@ -176,11 +175,10 @@ void* collection_thread(void* arg) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(shared_net, &local_rollouts[r]);
         
         unsigned long long local_count = 0;
-        while(atomic_load(sync)) local_count++;
-        //printf("Collector waited: %lld\n", local_count);
+        while(*sync) local_count++;
         
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
-        atomic_store(sync, true);
+        *sync = true;
     }
     return NULL;
 }
@@ -191,7 +189,7 @@ void* update_thread(void* arg) {
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
-    atomic_bool* sync = (atomic_bool*)args[2];
+    volatile bool* sync = (volatile bool*)args[2];
     double* shared_mean_return = (double*)args[3];
 
     Net* local_net = create_net(shared_net->lr);
@@ -205,13 +203,12 @@ void* update_thread(void* arg) {
         local_mean_return /= NUM_ROLLOUTS;
 
         unsigned long long local_count = 0;
-        while(!atomic_load(sync)) local_count++;
-        //printf("Updater waited: %lld\n", local_count);
+        while(!(*sync)) local_count++;
 
         memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         memcpy(shared_net, local_net, sizeof(Net));
         memcpy(shared_mean_return, &local_mean_return, sizeof(double));
-        atomic_store(sync, false);
+        *sync = false;
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             zero_gradients(local_net);
@@ -234,11 +231,11 @@ int main(int argc, char** argv) {
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
     Rollout shared_rollouts[NUM_ROLLOUTS];
-    atomic_bool sync = false;
+    volatile bool sync = false;
     double shared_mean_return = 0.0;
     
-    void* collection_args[] = {net, shared_rollouts, &sync};
-    void* update_args[] = {net, shared_rollouts, &sync, &shared_mean_return};
+    void* collection_args[] = {net, shared_rollouts, (void*)&sync};
+    void* update_args[] = {net, shared_rollouts, (void*)&sync, &shared_mean_return};
     
     pthread_t collector, updater;
     pthread_create(&collector, NULL, collection_thread, collection_args);
@@ -252,7 +249,7 @@ int main(int argc, char** argv) {
     
     for(int timestep = 0; timestep < timesteps; timestep++) {
         sleep(1);
-        while(atomic_load(&sync));
+        while(sync);
         
         double local_mean_return;
         memcpy(&local_mean_return, &shared_mean_return, sizeof(double));
