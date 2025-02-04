@@ -162,8 +162,11 @@ void* collection_thread(void* arg) {
     
     while(1) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(shared_net, &local_rollouts[r]);
-
-        while(atomic_load(sync));
+        
+        unsigned long long local_count = 0;
+        while(atomic_load(sync)) local_count++;
+        printf("Collector waited: %lld\n", local_count);
+        
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         atomic_store(sync, true);
     }
@@ -189,7 +192,10 @@ void* update_thread(void* arg) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) local_mean_return += local_rollouts[r].returns[0];
         local_mean_return /= NUM_ROLLOUTS;
 
-        while(!atomic_load(sync));
+        unsigned long long local_count = 0;
+        while(!atomic_load(sync)) local_count++;
+        printf("Updater waited: %lld\n", local_count);
+
         memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         memcpy(shared_net, local_net, sizeof(Net));
         memcpy(shared_mean_return, &local_mean_return, sizeof(double));
