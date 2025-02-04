@@ -74,9 +74,9 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             
             // Fill input array with history using exponential decay
-            for(int i = 0; i < 16 && step - i >= 0; i++)
-                for(int j = 0; j < 6; j++) 
-                    input[i * 6 + j] = rollout->states[step - i][j] * pow(0.85, i);
+            for(int i = 0; i < HISTORY_LENGTH && step - i >= 0; i++)
+                for(int j = 0; j < STATE_DIM; j++) 
+                    input[i * STATE_DIM + j] = rollout->states[step - i][j] * pow(0.85, i);
                 
             forward_net(policy, input);
             
@@ -117,9 +117,9 @@ void update_policy(Net* policy, Rollout* rollout) {
     
     for(int step = 0; step < rollout->length; step++) {
         // Fill input array with history using exponential decay
-        for(int i = 0; i < 16 && step - i >= 0; i++) 
-            for(int j = 0; j < 6; j++) 
-                input[i * 6 + j] = rollout->states[step - i][j] * pow(0.85, i);
+        for(int i = 0; i < HISTORY_LENGTH && step - i >= 0; i++)
+            for(int j = 0; j < STATE_DIM; j++) 
+                input[i * STATE_DIM + j] = rollout->states[step - i][j] * pow(0.85, i);
             
         forward_net(policy, input);
         

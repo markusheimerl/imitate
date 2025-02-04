@@ -5,9 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define INPUT_DIM 96   // 6 states * 16 history length
-#define HIDDEN_DIM 91  // About halfway work split between collector and updater threads
-#define OUTPUT_DIM 8   // Padded from 4 (4 means + 4 stds)
+#define HISTORY_LENGTH 3
+#define STATE_DIM 6     // 3 accel + 3 gyro
+#define INPUT_DIM (STATE_DIM * HISTORY_LENGTH)  // 6 states * 16 history length
+#define HIDDEN_DIM 64
+#define OUTPUT_DIM 8    // 4 means + 4 stds
 
 typedef struct {
     // Weight matrices
