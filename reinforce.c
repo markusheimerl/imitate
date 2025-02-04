@@ -151,6 +151,8 @@ void update_policy(Net* policy, Rollout* rollout) {
 }
 
 void* collection_thread(void* arg) {
+    srand(time(NULL) ^ getpid());
+    
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
@@ -175,6 +177,8 @@ void* collection_thread(void* arg) {
 }
 
 void* update_thread(void* arg) {
+    srand(time(NULL) ^ getpid());
+
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
