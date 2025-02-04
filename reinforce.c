@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
     
     for(int timestep = 0; timestep < timesteps; timestep++) {
         sleep(1);
-        while(!atomic_load(&sync));
+        while(atomic_load(&sync));
         
         double local_mean_return;
         memcpy(&local_mean_return, &shared_mean_return, sizeof(double));
