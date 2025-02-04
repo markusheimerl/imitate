@@ -112,7 +112,10 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
-    double output_gradient[ACTION_DIM];
+    // Allocate buffers for gradients and activations across all timesteps
+    double* output_gradients = malloc(rollout->length * ACTION_DIM * sizeof(double));
+    double* stored_inputs = malloc(rollout->length * INPUT_DIM * sizeof(double));
+    double* stored_hidden = malloc(rollout->length * HIDDEN_DIM * sizeof(double));
     double input[INPUT_DIM] = {0};
     
     for(int step = 0; step < rollout->length; step++) {
@@ -121,7 +124,10 @@ void update_policy(Net* policy, Rollout* rollout) {
             for(int j = 0; j < STATE_DIM; j++) 
                 input[i * STATE_DIM + j] = rollout->states[step - i][j] * pow(0.85, i);
             
+        // Store input and forward pass
+        memcpy(&stored_inputs[step * INPUT_DIM], input, INPUT_DIM * sizeof(double));
         forward_net(policy, input);
+        memcpy(&stored_hidden[step * HIDDEN_DIM], policy->h[1], HIDDEN_DIM * sizeof(double));
         
         for(int i = 0; i < 4; i++) {
             // Network outputs raw parameters before squashing
@@ -142,7 +148,8 @@ void update_policy(Net* policy, Rollout* rollout) {
             // Where:
             // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
             // dμ/dμ_raw = derivative of squashing function (dsquash)
-            output_gradient[i] = -(delta / (std_val * std_val)) * 
+            output_gradients[step * ACTION_DIM + i] = 
+                -(delta / (std_val * std_val)) * 
                 dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
                 rollout->returns[step];
 
@@ -151,14 +158,19 @@ void update_policy(Net* policy, Rollout* rollout) {
             // Where:
             // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
             // dσ/dσ_raw = derivative of squashing function (dsquash)
-            output_gradient[i + 4] = -((delta * delta - std_val * std_val) / 
+            output_gradients[step * ACTION_DIM + i + 4] = 
+                -((delta * delta - std_val * std_val) / 
                 (std_val * std_val * std_val)) * 
                 dsquash(std_raw, MIN_STD, MAX_STD) * 
                 rollout->returns[step];
         }
-
-        backward_net(policy, output_gradient);
     }
+
+    backward_net(policy, output_gradients, stored_inputs, stored_hidden, rollout->length);
+    
+    free(output_gradients);
+    free(stored_inputs);
+    free(stored_hidden);
 }
 
 void* collection_thread(void* arg) {
