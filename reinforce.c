@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
         double elapsed = (now.tv_sec - start_time.tv_sec) + 
                         (now.tv_usec - start_time.tv_usec) / 1e6;
         
-        printf("timestep %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
+        printf("Timestep %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
             timestep+1, timesteps,
             local_mean_return, theoretical_max, 
             (local_mean_return/theoretical_max) * 100.0, best_return,
