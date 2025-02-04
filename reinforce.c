@@ -154,7 +154,7 @@ void* collection_thread(void* arg) {
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
-    atomic_bool* done = (atomic_bool*)args[2];
+    atomic_bool* sync = (atomic_bool*)args[2];
     double* shared_mean_return = (double*)args[3];
     
     Rollout local_rollouts[NUM_ROLLOUTS];
@@ -166,10 +166,10 @@ void* collection_thread(void* arg) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) local_mean_return += local_rollouts[r].returns[0];
         local_mean_return /= NUM_ROLLOUTS;
 
-        while(atomic_load(done));
+        while(atomic_load(sync));
         memcpy(shared_mean_return, &local_mean_return, sizeof(double));
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
-        atomic_store(done, true);
+        atomic_store(sync, true);
     }
     return NULL;
 }
@@ -178,7 +178,7 @@ void* update_thread(void* arg) {
     void** args = (void**)arg;
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
-    atomic_bool* done = (atomic_bool*)args[2];
+    atomic_bool* sync = (atomic_bool*)args[2];
     
     Net* local_net = create_net(shared_net->lr);
     memcpy(local_net, shared_net, sizeof(Net));
@@ -186,16 +186,16 @@ void* update_thread(void* arg) {
     Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {    
+        while(!atomic_load(sync));
+        memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        memcpy(shared_net, local_net, sizeof(Net));
+        atomic_store(sync, false);
+
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             zero_gradients(local_net);
             update_policy(local_net, &local_rollouts[r]);
             update_net(local_net);
         }
-
-        while(!atomic_load(done));
-        memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
-        memcpy(shared_net, local_net, sizeof(Net));
-        atomic_store(done, false);
     }
     
     free_net(local_net);
@@ -204,7 +204,7 @@ void* update_thread(void* arg) {
 
 int main(int argc, char** argv) {
     if(argc != 2 && argc != 3) {
-        printf("Usage: %s <num_epochs> [initial_weights.bin]\n", argv[0]);
+        printf("Usage: %s <num_timesteps> [initial_weights.bin]\n", argv[0]);
         return 1;
     }
 
@@ -212,25 +212,25 @@ int main(int argc, char** argv) {
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
     Rollout shared_rollouts[NUM_ROLLOUTS];
-    atomic_bool done = false;
+    atomic_bool sync = false;
     double shared_mean_return = 0.0;
     
-    void* collection_args[] = {net, shared_rollouts, &done, &shared_mean_return};
-    void* update_args[] = {net, shared_rollouts, &done};
+    void* collection_args[] = {net, shared_rollouts, &sync, &shared_mean_return};
+    void* update_args[] = {net, shared_rollouts, &sync};
     
     pthread_t collector, updater;
     pthread_create(&collector, NULL, collection_thread, collection_args);
     pthread_create(&updater, NULL, update_thread, update_args);
 
-    int epochs = atoi(argv[1]);
+    int timesteps = atoi(argv[1]);
     double best_return = -1e30;
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
     struct timeval start_time;
     gettimeofday(&start_time, NULL);
     
-    for(int epoch = 0; epoch < epochs; epoch++) {
+    for(int timestep = 0; timestep < timesteps; timestep++) {
         sleep(1);
-        while(!atomic_load(&done));
+        while(!atomic_load(&sync));
         
         double local_mean_return;
         memcpy(&local_mean_return, &shared_mean_return, sizeof(double));
@@ -242,8 +242,8 @@ int main(int argc, char** argv) {
         double elapsed = (now.tv_sec - start_time.tv_sec) + 
                         (now.tv_usec - start_time.tv_usec) / 1e6;
         
-        printf("epoch %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
-            epoch+1, epochs,
+        printf("timestep %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
+            timestep+1, timesteps,
             local_mean_return, theoretical_max, 
             (local_mean_return/theoretical_max) * 100.0, best_return,
             ((best_return/theoretical_max) * 100.0 / elapsed));
