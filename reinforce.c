@@ -16,7 +16,7 @@
 #define STATE_DIM 6      // 3 accel + 3 gyro
 #define ACTION_DIM 8     // 4 means + 4 stds
 #define MAX_STEPS 256
-#define NUM_ROLLOUTS 512
+#define NUM_ROLLOUTS 128
 
 #define GAMMA 0.999
 #define MAX_STD 3.0
@@ -113,9 +113,9 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
     // Allocate buffers for gradients and activations across all timesteps
-    double* output_gradients = (double*)malloc(rollout->length * ACTION_DIM * sizeof(double));
-    double* stored_inputs = (double*)malloc(rollout->length * INPUT_DIM * sizeof(double));
-    double* stored_hidden = (double*)malloc(rollout->length * HIDDEN_DIM * sizeof(double));
+    double* output_gradients = malloc(rollout->length * ACTION_DIM * sizeof(double));
+    double* stored_inputs = malloc(rollout->length * INPUT_DIM * sizeof(double));
+    double* stored_hidden = malloc(rollout->length * HIDDEN_DIM * sizeof(double));
     double input[INPUT_DIM] = {0};
     
     for(int step = 0; step < rollout->length; step++) {
@@ -181,14 +181,14 @@ void* collection_thread(void* arg) {
     Rollout* shared_rollouts = (Rollout*)args[1];
     volatile bool* sync = (volatile bool*)args[2];
     
-    Rollout* local_rollouts = (Rollout*)malloc(NUM_ROLLOUTS * sizeof(Rollout));
+    Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(shared_net, &local_rollouts[r]);
         
         unsigned long long local_count = 0;
         while(*sync) local_count++;
-        printf("Collection thread waited %llu times\n", local_count);
+        //printf("Collection thread waited %llu times\n", local_count);
         
         memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         *sync = true;
@@ -208,7 +208,7 @@ void* update_thread(void* arg) {
     Net* local_net = create_net(shared_net->lr);
     memcpy(local_net, shared_net, sizeof(Net));
     
-    Rollout* local_rollouts = (Rollout*)malloc(NUM_ROLLOUTS * sizeof(Rollout));
+    Rollout local_rollouts[NUM_ROLLOUTS];
     
     while(1) {
         double local_mean_return = 0.0;
@@ -217,7 +217,7 @@ void* update_thread(void* arg) {
 
         unsigned long long local_count = 0;
         while(!(*sync)) local_count++;
-        printf("Update thread waited %llu times\n", local_count);
+        //printf("Update thread waited %llu times\n", local_count);
 
         memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
         memcpy(shared_net, local_net, sizeof(Net));
@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
-    Rollout* shared_rollouts = (Rollout*)malloc(NUM_ROLLOUTS * sizeof(Rollout));
+    Rollout shared_rollouts[NUM_ROLLOUTS];
     volatile bool sync = false;
     double shared_mean_return = 0.0;
     

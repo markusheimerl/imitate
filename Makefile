@@ -1,14 +1,12 @@
 CC = clang
-NVCC = nvcc
 CFLAGS = -O3 -march=native -ffast-math -Wall -Wextra
-CUDAFLAGS = -O3 -arch=sm_60
-LDFLAGS = -lm -lpthread
+LDFLAGS = -static -lm -lpthread -flto
 
-reinforce.out: %.out: %.cu
-	$(NVCC) $(CUDAFLAGS) $< $(LDFLAGS) -lcudart -o $@
+reinforce.out: %.out: %.c
+	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
 
 visualize.out: %.out: %.c
-	$(CC) $(CFLAGS) -Iraytracer $< -static $(LDFLAGS) -lwebp -lwebpmux -flto -o $@
+	$(CC) $(CFLAGS) -Iraytracer $< $(LDFLAGS) -lwebp -lwebpmux -o $@
 
 run: reinforce.out
 	@time ./reinforce.out 100

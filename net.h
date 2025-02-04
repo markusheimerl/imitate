@@ -4,7 +4,6 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <cuda_runtime.h>
 
 #define HISTORY_LENGTH 3
 #define STATE_DIM 6     // 3 accel + 3 gyro
@@ -27,11 +26,11 @@ typedef struct {
     double lr;
 } Net;
 
-__device__ __host__ inline double gelu(double x) {
+static double gelu(double x) {
     return 0.5 * x * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
 }
 
-__device__ __host__ inline double gelu_derivative(double x) {
+static double gelu_derivative(double x) {
     double cdf = 0.5 * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
     double pdf = exp(-0.5 * x * x) / sqrt(2 * M_PI);
     return cdf + x * pdf;
@@ -84,105 +83,36 @@ void forward_net(Net* net, const double* input) {
     }
 }
 
-__global__ void backward_kernel(
-    double* d_W1, double* d_W2,
-    const double* d_output_gradients, 
-    const double* d_stored_inputs,
-    const double* d_stored_hidden,
-    int num_steps)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    // Each thread handles one weight update
-    if (idx < HIDDEN_DIM * INPUT_DIM) {
-        int i = idx / INPUT_DIM;
-        int j = idx % INPUT_DIM;
-        double grad = 0.0;
-        
-        for(int step = 0; step < num_steps; step++) {
-            double delta = 0.0;
-            const double* output_gradient = &d_output_gradients[step * OUTPUT_DIM];
-            const double* step_hidden = &d_stored_hidden[step * HIDDEN_DIM];
-            const double* step_input = &d_stored_inputs[step * INPUT_DIM];
-            
-            // Compute hidden layer delta
-            for (int k = 0; k < OUTPUT_DIM; k++) {
-                delta += output_gradient[k] * d_W2[k * HIDDEN_DIM + i];
-            }
-            delta *= gelu_derivative(step_hidden[i]);
-            
-            grad += delta * step_input[j];
-        }
-        d_W1[idx] = grad;
-    }
-    else if (idx < (HIDDEN_DIM * INPUT_DIM + OUTPUT_DIM * HIDDEN_DIM)) {
-        // Handle W2 gradients
-        idx -= HIDDEN_DIM * INPUT_DIM;
-        int i = idx / HIDDEN_DIM;
-        int j = idx % HIDDEN_DIM;
-        double grad = 0.0;
-        
-        for(int step = 0; step < num_steps; step++) {
-            const double* output_gradient = &d_output_gradients[step * OUTPUT_DIM];
-            const double* step_hidden = &d_stored_hidden[step * HIDDEN_DIM];
-            grad += output_gradient[i] * step_hidden[j];
-        }
-        d_W2[idx] = grad;
-    }
-}
-
 void backward_net(Net* net, const double* output_gradients, 
                  const double* stored_inputs, const double* stored_hidden,
-                 int num_steps) 
-{
-    // Allocate device memory
-    double *d_W1, *d_W2;
-    double *d_output_gradients, *d_stored_inputs, *d_stored_hidden;
-    
-    cudaMalloc(&d_W1, HIDDEN_DIM * INPUT_DIM * sizeof(double));
-    cudaMalloc(&d_W2, OUTPUT_DIM * HIDDEN_DIM * sizeof(double));
-    cudaMalloc(&d_output_gradients, num_steps * OUTPUT_DIM * sizeof(double));
-    cudaMalloc(&d_stored_inputs, num_steps * INPUT_DIM * sizeof(double));
-    cudaMalloc(&d_stored_hidden, num_steps * HIDDEN_DIM * sizeof(double));
-    
-    // Copy data to device
-    cudaMemcpy(d_output_gradients, output_gradients, 
-               num_steps * OUTPUT_DIM * sizeof(double), 
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(d_stored_inputs, stored_inputs,
-               num_steps * INPUT_DIM * sizeof(double),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(d_stored_hidden, stored_hidden,
-               num_steps * HIDDEN_DIM * sizeof(double),
-               cudaMemcpyHostToDevice);
-    
-    // Launch kernel
-    int total_weights = HIDDEN_DIM * INPUT_DIM + OUTPUT_DIM * HIDDEN_DIM;
-    int block_size = 256;
-    int num_blocks = (total_weights + block_size - 1) / block_size;
-    
-    backward_kernel<<<num_blocks, block_size>>>(
-        d_W1, d_W2,
-        d_output_gradients,
-        d_stored_inputs,
-        d_stored_hidden,
-        num_steps
-    );
-    
-    // Copy results back
-    cudaMemcpy(net->dW1, d_W1, 
-               HIDDEN_DIM * INPUT_DIM * sizeof(double),
-               cudaMemcpyDeviceToHost);
-    cudaMemcpy(net->dW2, d_W2,
-               OUTPUT_DIM * HIDDEN_DIM * sizeof(double), 
-               cudaMemcpyDeviceToHost);
-    
-    // Free device memory
-    cudaFree(d_W1);
-    cudaFree(d_W2);
-    cudaFree(d_output_gradients);
-    cudaFree(d_stored_inputs);
-    cudaFree(d_stored_hidden);
+                 int num_steps) {
+    double delta[HIDDEN_DIM];
+
+    for(int step = 0; step < num_steps; step++) {
+        const double* output_gradient = &output_gradients[step * OUTPUT_DIM];
+        const double* step_input = &stored_inputs[step * INPUT_DIM];
+        const double* step_hidden = &stored_hidden[step * HIDDEN_DIM];
+        
+        // Output layer gradients
+        for (int i = 0; i < OUTPUT_DIM; i++) {
+            for (int j = 0; j < HIDDEN_DIM; j++) {
+                net->dW2[i][j] += output_gradient[i] * step_hidden[j];
+            }
+        }
+
+        // Hidden layer gradients
+        memset(delta, 0, HIDDEN_DIM * sizeof(double));
+        for (int i = 0; i < HIDDEN_DIM; i++) {
+            for (int j = 0; j < OUTPUT_DIM; j++) {
+                delta[i] += output_gradient[j] * net->W2[j][i];
+            }
+            delta[i] *= gelu_derivative(step_hidden[i]);
+
+            for (int j = 0; j < INPUT_DIM; j++) {
+                net->dW1[i][j] += delta[i] * step_input[j];
+            }
+        }
+    }
 }
 
 void zero_gradients(Net* net) {
