@@ -21,16 +21,19 @@ typedef struct {
     double dW1[HIDDEN_DIM][INPUT_DIM];
     double dW2[OUTPUT_DIM][HIDDEN_DIM];
     
-    // Adam parameters
-    double m1[HIDDEN_DIM][INPUT_DIM];
+    // Sophia parameters
+    double m1[HIDDEN_DIM][INPUT_DIM];  // Momentum
     double m2[OUTPUT_DIM][HIDDEN_DIM];
-    double v1[HIDDEN_DIM][INPUT_DIM];
-    double v2[OUTPUT_DIM][HIDDEN_DIM];
+    double h1[HIDDEN_DIM][INPUT_DIM];  // Hessian estimates
+    double h2[OUTPUT_DIM][HIDDEN_DIM];
+    double prev_dW1[HIDDEN_DIM][INPUT_DIM];  // Previous gradients
+    double prev_dW2[OUTPUT_DIM][HIDDEN_DIM];
     unsigned long long t;
     
     double lr;
-    double beta1;
-    double beta2;
+    double beta1;    // Momentum decay
+    double beta2;    // Hessian decay
+    double rho;      // Hessian clipping
     double epsilon;
 } Net;
 
@@ -49,8 +52,9 @@ Net* create_net(double learning_rate) {
     if (!net) return NULL;
 
     net->lr = learning_rate;
-    net->beta1 = 0.9;
-    net->beta2 = 0.999;
+    net->beta1 = 0.9;     // Momentum decay
+    net->beta2 = 0.999;   // Hessian decay
+    net->rho = 0.01;      // Hessian clipping
     net->epsilon = 1e-8;
     net->t = 0;
 
@@ -127,28 +131,49 @@ void zero_gradients(Net* net) {
 void update_net(Net* net) {
     net->t++;
     
-    double beta1_t = pow(net->beta1, net->t);
-    double beta2_t = pow(net->beta2, net->t);
-    
-    // Update first layer weights
+    // Update first layer weights using Sophia
     for (int i = 0; i < HIDDEN_DIM; i++) {
         for (int j = 0; j < INPUT_DIM; j++) {
+            // Update momentum
             net->m1[i][j] = net->beta1 * net->m1[i][j] + (1.0 - net->beta1) * net->dW1[i][j];
-            net->v1[i][j] = net->beta2 * net->v1[i][j] + (1.0 - net->beta2) * net->dW1[i][j] * net->dW1[i][j];
-            double m_hat = net->m1[i][j] / (1.0 - beta1_t);
-            double v_hat = net->v1[i][j] / (1.0 - beta2_t);
-            net->W1[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
+            
+            // Approximate second derivative using consecutive gradients
+            double grad_diff = net->dW1[i][j] - net->prev_dW1[i][j];
+            double hessian_approx = fabs(grad_diff / (net->lr + net->epsilon));
+            
+            // Update and clip Hessian estimate
+            net->h1[i][j] = fmax(net->rho, 
+                                net->beta2 * net->h1[i][j] + 
+                                (1.0 - net->beta2) * hessian_approx);
+            
+            // Store current gradient for next iteration
+            net->prev_dW1[i][j] = net->dW1[i][j];
+            
+            // Update weights using Sophia rule
+            net->W1[i][j] -= net->lr * net->m1[i][j] / sqrt(net->h1[i][j] + net->epsilon);
         }
     }
 
-    // Update second layer weights
+    // Update second layer weights using Sophia
     for (int i = 0; i < OUTPUT_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
+            // Update momentum
             net->m2[i][j] = net->beta1 * net->m2[i][j] + (1.0 - net->beta1) * net->dW2[i][j];
-            net->v2[i][j] = net->beta2 * net->v2[i][j] + (1.0 - net->beta2) * net->dW2[i][j] * net->dW2[i][j];
-            double m_hat = net->m2[i][j] / (1.0 - beta1_t);
-            double v_hat = net->v2[i][j] / (1.0 - beta2_t);
-            net->W2[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
+            
+            // Approximate second derivative using consecutive gradients
+            double grad_diff = net->dW2[i][j] - net->prev_dW2[i][j];
+            double hessian_approx = fabs(grad_diff / (net->lr + net->epsilon));
+            
+            // Update and clip Hessian estimate
+            net->h2[i][j] = fmax(net->rho, 
+                                net->beta2 * net->h2[i][j] + 
+                                (1.0 - net->beta2) * hessian_approx);
+            
+            // Store current gradient for next iteration
+            net->prev_dW2[i][j] = net->dW2[i][j];
+            
+            // Update weights using Sophia rule
+            net->W2[i][j] -= net->lr * net->m2[i][j] / sqrt(net->h2[i][j] + net->epsilon);
         }
     }
 }
@@ -161,16 +186,19 @@ bool save_net(const char* filename, const Net* net) {
     fwrite(&net->lr, sizeof(double), 1, file);
     fwrite(&net->beta1, sizeof(double), 1, file);
     fwrite(&net->beta2, sizeof(double), 1, file);
+    fwrite(&net->rho, sizeof(double), 1, file);
     fwrite(&net->epsilon, sizeof(double), 1, file);
     fwrite(&net->t, sizeof(unsigned long long), 1, file);
     
-    // Save weights and Adam states
+    // Save weights and Sophia states
     fwrite(net->W1, sizeof(net->W1), 1, file);
     fwrite(net->W2, sizeof(net->W2), 1, file);
     fwrite(net->m1, sizeof(net->m1), 1, file);
     fwrite(net->m2, sizeof(net->m2), 1, file);
-    fwrite(net->v1, sizeof(net->v1), 1, file);
-    fwrite(net->v2, sizeof(net->v2), 1, file);
+    fwrite(net->h1, sizeof(net->h1), 1, file);
+    fwrite(net->h2, sizeof(net->h2), 1, file);
+    fwrite(net->prev_dW1, sizeof(net->prev_dW1), 1, file);
+    fwrite(net->prev_dW2, sizeof(net->prev_dW2), 1, file);
     
     fclose(file);
     return true;
@@ -190,16 +218,19 @@ Net* load_net(const char* filename) {
     if (fread(&net->lr, sizeof(double), 1, file) != 1 ||
         fread(&net->beta1, sizeof(double), 1, file) != 1 ||
         fread(&net->beta2, sizeof(double), 1, file) != 1 ||
+        fread(&net->rho, sizeof(double), 1, file) != 1 ||
         fread(&net->epsilon, sizeof(double), 1, file) != 1 ||
         fread(&net->t, sizeof(unsigned long long), 1, file) != 1 ||
         
-        // Load weights and Adam states
+        // Load weights and Sophia states
         fread(net->W1, sizeof(net->W1), 1, file) != 1 ||
         fread(net->W2, sizeof(net->W2), 1, file) != 1 ||
         fread(net->m1, sizeof(net->m1), 1, file) != 1 ||
         fread(net->m2, sizeof(net->m2), 1, file) != 1 ||
-        fread(net->v1, sizeof(net->v1), 1, file) != 1 ||
-        fread(net->v2, sizeof(net->v2), 1, file) != 1) {
+        fread(net->h1, sizeof(net->h1), 1, file) != 1 ||
+        fread(net->h2, sizeof(net->h2), 1, file) != 1 ||
+        fread(net->prev_dW1, sizeof(net->prev_dW1), 1, file) != 1 ||
+        fread(net->prev_dW2, sizeof(net->prev_dW2), 1, file) != 1) {
         
         free(net);
         fclose(file);
