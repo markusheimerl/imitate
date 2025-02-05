@@ -103,47 +103,54 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // J(θ) - Policy objective function
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
-void update_policy(Net* policy, Rollout* rollout) {
+void update_policy(Net* policy, Rollout* rollouts) {
     double output_gradients[ACTION_DIM];
     
-    for(int step = 0; step < rollout->length; step++) {
-        forward_net(policy, rollout->states[step]);
-        
-        for(int i = 0; i < 4; i++) {
-            // Network outputs raw parameters before squashing
-            double mean_raw = policy->h[2][i];
-            double std_raw = policy->h[2][i + 4];
-            
-            // Squashed parameters using tanh-based scaling
-            // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
-            // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
-            double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
-            double std_val = squash(std_raw, MIN_STD, MAX_STD);
-            
-            // Sampled action and its deviation from mean
-            double delta = rollout->actions[step][i] - mean;
-
-            // Gradient for mean parameter:
-            // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
-            // Where:
-            // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
-            // dμ/dμ_raw = derivative of squashing function (dsquash)
-            output_gradients[i] = -(delta / (std_val * std_val)) * 
-                dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
-                rollout->returns[step];
-
-            // Gradient for standard deviation parameter:
-            // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
-            // Where:
-            // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
-            // dσ/dσ_raw = derivative of squashing function (dsquash)
-            output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
-                (std_val * std_val * std_val)) * 
-                dsquash(std_raw, MIN_STD, MAX_STD) * 
-                rollout->returns[step];
-        }
+    // Process all rollouts for each timestep
+    for(int step = 0; step < MAX_STEPS; step++) {
         zero_gradients(policy);
-        backward_net(policy, output_gradients);
+        
+        // Process all rollouts for this timestep
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            if(step >= rollouts[r].length) continue;
+            
+            forward_net(policy, rollouts[r].states[step]);
+            
+            for(int i = 0; i < 4; i++) {
+                // Network outputs raw parameters before squashing
+                double mean_raw = policy->h[2][i];
+                double std_raw = policy->h[2][i + 4];
+                
+                // Squashed parameters using tanh-based scaling
+                // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
+                // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
+                double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
+                double std_val = squash(std_raw, MIN_STD, MAX_STD);
+                
+                // Sampled action and its deviation from mean
+                double delta = rollouts[r].actions[step][i] - mean;
+
+                // Gradient for mean parameter:
+                // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
+                // Where:
+                // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
+                // dμ/dμ_raw = derivative of squashing function (dsquash)
+                output_gradients[i] = -(delta / (std_val * std_val)) * 
+                    dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
+                    rollouts[r].returns[step];
+
+                // Gradient for standard deviation parameter:
+                // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
+                // Where:
+                // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
+                // dσ/dσ_raw = derivative of squashing function (dsquash)
+                output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
+                    (std_val * std_val * std_val)) * 
+                    dsquash(std_raw, MIN_STD, MAX_STD) * 
+                    rollouts[r].returns[step];
+            }
+            backward_net(policy, output_gradients);
+        }
         update_net(policy);
     }
 }
@@ -199,9 +206,7 @@ void* update_thread(void* arg) {
         memcpy(shared_mean_return, &local_mean_return, sizeof(double));
         *sync = false;
 
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            update_policy(local_net, &local_rollouts[r]);
-        }
+        update_policy(local_net, local_rollouts);
     }
     
     free_net(local_net);
@@ -216,7 +221,7 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(2e-7);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-4);
     Rollout shared_rollouts[NUM_ROLLOUTS];
     volatile bool sync = false;
     double shared_mean_return = 0.0;

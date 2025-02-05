@@ -21,7 +21,17 @@ typedef struct {
     double dW1[HIDDEN_DIM][INPUT_DIM];
     double dW2[OUTPUT_DIM][HIDDEN_DIM];
     
+    // Adam parameters
+    double m1[HIDDEN_DIM][INPUT_DIM];
+    double m2[OUTPUT_DIM][HIDDEN_DIM];
+    double v1[HIDDEN_DIM][INPUT_DIM];
+    double v2[OUTPUT_DIM][HIDDEN_DIM];
+    unsigned long long t;
+    
     double lr;
+    double beta1;
+    double beta2;
+    double epsilon;
 } Net;
 
 static double gelu(double x) {
@@ -39,6 +49,10 @@ Net* create_net(double learning_rate) {
     if (!net) return NULL;
 
     net->lr = learning_rate;
+    net->beta1 = 0.9;
+    net->beta2 = 0.999;
+    net->epsilon = 1e-8;
+    net->t = 0;
 
     // Xavier initialization
     double scale1 = sqrt(2.0 / (INPUT_DIM + HIDDEN_DIM));
@@ -111,17 +125,30 @@ void zero_gradients(Net* net) {
 }
 
 void update_net(Net* net) {
+    net->t++;
+    
+    double beta1_t = pow(net->beta1, net->t);
+    double beta2_t = pow(net->beta2, net->t);
+    
     // Update first layer weights
     for (int i = 0; i < HIDDEN_DIM; i++) {
         for (int j = 0; j < INPUT_DIM; j++) {
-            net->W1[i][j] -= net->lr * net->dW1[i][j];
+            net->m1[i][j] = net->beta1 * net->m1[i][j] + (1.0 - net->beta1) * net->dW1[i][j];
+            net->v1[i][j] = net->beta2 * net->v1[i][j] + (1.0 - net->beta2) * net->dW1[i][j] * net->dW1[i][j];
+            double m_hat = net->m1[i][j] / (1.0 - beta1_t);
+            double v_hat = net->v1[i][j] / (1.0 - beta2_t);
+            net->W1[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
         }
     }
 
     // Update second layer weights
     for (int i = 0; i < OUTPUT_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
-            net->W2[i][j] -= net->lr * net->dW2[i][j];
+            net->m2[i][j] = net->beta1 * net->m2[i][j] + (1.0 - net->beta1) * net->dW2[i][j];
+            net->v2[i][j] = net->beta2 * net->v2[i][j] + (1.0 - net->beta2) * net->dW2[i][j] * net->dW2[i][j];
+            double m_hat = net->m2[i][j] / (1.0 - beta1_t);
+            double v_hat = net->v2[i][j] / (1.0 - beta2_t);
+            net->W2[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
         }
     }
 }
@@ -130,10 +157,20 @@ bool save_net(const char* filename, const Net* net) {
     FILE* file = fopen(filename, "wb");
     if (!file) return false;
     
-    // Save learning rate and weights
+    // Save parameters
     fwrite(&net->lr, sizeof(double), 1, file);
+    fwrite(&net->beta1, sizeof(double), 1, file);
+    fwrite(&net->beta2, sizeof(double), 1, file);
+    fwrite(&net->epsilon, sizeof(double), 1, file);
+    fwrite(&net->t, sizeof(unsigned long long), 1, file);
+    
+    // Save weights and Adam states
     fwrite(net->W1, sizeof(net->W1), 1, file);
     fwrite(net->W2, sizeof(net->W2), 1, file);
+    fwrite(net->m1, sizeof(net->m1), 1, file);
+    fwrite(net->m2, sizeof(net->m2), 1, file);
+    fwrite(net->v1, sizeof(net->v1), 1, file);
+    fwrite(net->v2, sizeof(net->v2), 1, file);
     
     fclose(file);
     return true;
@@ -149,10 +186,21 @@ Net* load_net(const char* filename) {
         return NULL;
     }
     
-    // Load learning rate and weights
+    // Load parameters
     if (fread(&net->lr, sizeof(double), 1, file) != 1 ||
+        fread(&net->beta1, sizeof(double), 1, file) != 1 ||
+        fread(&net->beta2, sizeof(double), 1, file) != 1 ||
+        fread(&net->epsilon, sizeof(double), 1, file) != 1 ||
+        fread(&net->t, sizeof(unsigned long long), 1, file) != 1 ||
+        
+        // Load weights and Adam states
         fread(net->W1, sizeof(net->W1), 1, file) != 1 ||
-        fread(net->W2, sizeof(net->W2), 1, file) != 1) {
+        fread(net->W2, sizeof(net->W2), 1, file) != 1 ||
+        fread(net->m1, sizeof(net->m1), 1, file) != 1 ||
+        fread(net->m2, sizeof(net->m2), 1, file) != 1 ||
+        fread(net->v1, sizeof(net->v1), 1, file) != 1 ||
+        fread(net->v2, sizeof(net->v2), 1, file) != 1) {
+        
         free(net);
         fclose(file);
         return NULL;
