@@ -4,32 +4,30 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
+
+#define INPUT_DIM 6 // STATE_DIM
+#define HIDDEN_DIM 64
+#define OUTPUT_DIM 8 // ACTION_DIM
 
 typedef struct {
-    // Dimensions
-    int input_dim;
-    int hidden_dim;
-    int output_dim;
-    
     // Weight matrices
-    double* W1;    // hidden_dim x input_dim
-    double* W2;    // output_dim x hidden_dim
+    double W1[HIDDEN_DIM][INPUT_DIM];
+    double W2[OUTPUT_DIM][HIDDEN_DIM];
     
     // Layer activations
-    double* h;     // 3 x hidden_dim
+    double h[3][HIDDEN_DIM];  // h[0] is input, h[1] is hidden, h[2] is output
     
     // Gradient accumulation
-    double* dW1;   // hidden_dim x input_dim
-    double* dW2;   // output_dim x hidden_dim
+    double dW1[HIDDEN_DIM][INPUT_DIM];
+    double dW2[OUTPUT_DIM][HIDDEN_DIM];
     
     // Adam parameters
-    double* m1;    // hidden_dim x input_dim
-    double* m2;    // output_dim x hidden_dim
-    double* v1;    // hidden_dim x input_dim
-    double* v2;    // output_dim x hidden_dim
-    
+    double m1[HIDDEN_DIM][INPUT_DIM];
+    double m2[OUTPUT_DIM][HIDDEN_DIM];
+    double v1[HIDDEN_DIM][INPUT_DIM];
+    double v2[OUTPUT_DIM][HIDDEN_DIM];
     unsigned long long t;
+    
     double lr;
     double beta1;
     double beta2;
@@ -46,48 +44,9 @@ static double gelu_derivative(double x) {
     return cdf + x * pdf;
 }
 
-void free_net(Net* net) {
-    if (!net) return;
-    free(net->W1);
-    free(net->W2);
-    free(net->h);
-    free(net->dW1);
-    free(net->dW2);
-    free(net->m1);
-    free(net->m2);
-    free(net->v1);
-    free(net->v2);
-    free(net);
-}
-
-Net* create_net(int input_dim, int hidden_dim, int output_dim, double learning_rate) {
+Net* create_net(double learning_rate) {
     Net* net = (Net*)calloc(1, sizeof(Net));
     if (!net) return NULL;
-
-    net->input_dim = input_dim;
-    net->hidden_dim = hidden_dim;
-    net->output_dim = output_dim;
-
-    // Allocate memory
-    size_t w1_size = hidden_dim * input_dim;
-    size_t w2_size = output_dim * hidden_dim;
-    size_t h_size = 3 * hidden_dim;
-
-    net->W1 = calloc(w1_size, sizeof(double));
-    net->W2 = calloc(w2_size, sizeof(double));
-    net->h = calloc(h_size, sizeof(double));
-    net->dW1 = calloc(w1_size, sizeof(double));
-    net->dW2 = calloc(w2_size, sizeof(double));
-    net->m1 = calloc(w1_size, sizeof(double));
-    net->m2 = calloc(w2_size, sizeof(double));
-    net->v1 = calloc(w1_size, sizeof(double));
-    net->v2 = calloc(w2_size, sizeof(double));
-
-    if (!net->W1 || !net->W2 || !net->h || !net->dW1 || !net->dW2 || 
-        !net->m1 || !net->m2 || !net->v1 || !net->v2) {
-        free_net(net);
-        return NULL;
-    }
 
     net->lr = learning_rate;
     net->beta1 = 0.9;
@@ -96,18 +55,18 @@ Net* create_net(int input_dim, int hidden_dim, int output_dim, double learning_r
     net->t = 0;
 
     // Xavier initialization
-    double scale1 = sqrt(2.0 / (input_dim + hidden_dim));
-    double scale2 = sqrt(2.0 / (hidden_dim + output_dim));
+    double scale1 = sqrt(2.0 / (INPUT_DIM + HIDDEN_DIM));
+    double scale2 = sqrt(2.0 / (HIDDEN_DIM + OUTPUT_DIM));
 
-    for (int i = 0; i < hidden_dim; i++) {
-        for (int j = 0; j < input_dim; j++) {
-            net->W1[i * input_dim + j] = ((double)rand()/RAND_MAX * 2 - 1) * scale1;
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        for (int j = 0; j < INPUT_DIM; j++) {
+            net->W1[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale1;
         }
     }
 
-    for (int i = 0; i < output_dim; i++) {
-        for (int j = 0; j < hidden_dim; j++) {
-            net->W2[i * hidden_dim + j] = ((double)rand()/RAND_MAX * 2 - 1) * scale2;
+    for (int i = 0; i < OUTPUT_DIM; i++) {
+        for (int j = 0; j < HIDDEN_DIM; j++) {
+            net->W2[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale2;
         }
     }
 
@@ -116,55 +75,53 @@ Net* create_net(int input_dim, int hidden_dim, int output_dim, double learning_r
 
 void forward_net(Net* net, const double* input) {
     // Copy input
-    memcpy(net->h, input, net->input_dim * sizeof(double));
+    memcpy(net->h[0], input, INPUT_DIM * sizeof(double));
 
     // Hidden layer
-    memset(net->h + net->hidden_dim, 0, net->hidden_dim * sizeof(double));
-    for (int i = 0; i < net->hidden_dim; i++) {
-        for (int j = 0; j < net->input_dim; j++) {
-            net->h[net->hidden_dim + i] += net->W1[i * net->input_dim + j] * net->h[j];
+    memset(net->h[1], 0, HIDDEN_DIM * sizeof(double));
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        for (int j = 0; j < INPUT_DIM; j++) {
+            net->h[1][i] += net->W1[i][j] * net->h[0][j];
         }
-        net->h[net->hidden_dim + i] = gelu(net->h[net->hidden_dim + i]);
+        net->h[1][i] = gelu(net->h[1][i]);
     }
 
     // Output layer
-    memset(net->h + 2 * net->hidden_dim, 0, net->output_dim * sizeof(double));
-    for (int i = 0; i < net->output_dim; i++) {
-        for (int j = 0; j < net->hidden_dim; j++) {
-            net->h[2 * net->hidden_dim + i] += net->W2[i * net->hidden_dim + j] * net->h[net->hidden_dim + j];
+    memset(net->h[2], 0, OUTPUT_DIM * sizeof(double));
+    for (int i = 0; i < OUTPUT_DIM; i++) {
+        for (int j = 0; j < HIDDEN_DIM; j++) {
+            net->h[2][i] += net->W2[i][j] * net->h[1][j];
         }
     }
 }
 
 void backward_net(Net* net, const double* output_gradients) {
-    double* delta = malloc(net->hidden_dim * sizeof(double));
+    double delta[HIDDEN_DIM];
     
     // Output layer gradients
-    for (int i = 0; i < net->output_dim; i++) {
-        for (int j = 0; j < net->hidden_dim; j++) {
-            net->dW2[i * net->hidden_dim + j] = output_gradients[i] * net->h[net->hidden_dim + j];
+    for (int i = 0; i < OUTPUT_DIM; i++) {
+        for (int j = 0; j < HIDDEN_DIM; j++) {
+            net->dW2[i][j] = output_gradients[i] * net->h[1][j];
         }
     }
 
     // Hidden layer gradients
-    memset(delta, 0, net->hidden_dim * sizeof(double));
-    for (int i = 0; i < net->hidden_dim; i++) {
-        for (int j = 0; j < net->output_dim; j++) {
-            delta[i] += output_gradients[j] * net->W2[j * net->hidden_dim + i];
+    memset(delta, 0, HIDDEN_DIM * sizeof(double));
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        for (int j = 0; j < OUTPUT_DIM; j++) {
+            delta[i] += output_gradients[j] * net->W2[j][i];
         }
-        delta[i] *= gelu_derivative(net->h[net->hidden_dim + i]);
+        delta[i] *= gelu_derivative(net->h[1][i]);
 
-        for (int j = 0; j < net->input_dim; j++) {
-            net->dW1[i * net->input_dim + j] = delta[i] * net->h[j];
+        for (int j = 0; j < INPUT_DIM; j++) {
+            net->dW1[i][j] = delta[i] * net->h[0][j];
         }
     }
-
-    free(delta);
 }
 
 void zero_gradients(Net* net) {
-    memset(net->dW1, 0, net->hidden_dim * net->input_dim * sizeof(double));
-    memset(net->dW2, 0, net->output_dim * net->hidden_dim * sizeof(double));
+    memset(net->dW1, 0, sizeof(net->dW1));
+    memset(net->dW2, 0, sizeof(net->dW2));
 }
 
 void update_net(Net* net) {
@@ -174,26 +131,24 @@ void update_net(Net* net) {
     double beta2_t = pow(net->beta2, net->t);
     
     // Update first layer weights
-    for (int i = 0; i < net->hidden_dim; i++) {
-        for (int j = 0; j < net->input_dim; j++) {
-            int idx = i * net->input_dim + j;
-            net->m1[idx] = net->beta1 * net->m1[idx] + (1.0 - net->beta1) * net->dW1[idx];
-            net->v1[idx] = net->beta2 * net->v1[idx] + (1.0 - net->beta2) * net->dW1[idx] * net->dW1[idx];
-            double m_hat = net->m1[idx] / (1.0 - beta1_t);
-            double v_hat = net->v1[idx] / (1.0 - beta2_t);
-            net->W1[idx] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        for (int j = 0; j < INPUT_DIM; j++) {
+            net->m1[i][j] = net->beta1 * net->m1[i][j] + (1.0 - net->beta1) * net->dW1[i][j];
+            net->v1[i][j] = net->beta2 * net->v1[i][j] + (1.0 - net->beta2) * net->dW1[i][j] * net->dW1[i][j];
+            double m_hat = net->m1[i][j] / (1.0 - beta1_t);
+            double v_hat = net->v1[i][j] / (1.0 - beta2_t);
+            net->W1[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
         }
     }
 
     // Update second layer weights
-    for (int i = 0; i < net->output_dim; i++) {
-        for (int j = 0; j < net->hidden_dim; j++) {
-            int idx = i * net->hidden_dim + j;
-            net->m2[idx] = net->beta1 * net->m2[idx] + (1.0 - net->beta1) * net->dW2[idx];
-            net->v2[idx] = net->beta2 * net->v2[idx] + (1.0 - net->beta2) * net->dW2[idx] * net->dW2[idx];
-            double m_hat = net->m2[idx] / (1.0 - beta1_t);
-            double v_hat = net->v2[idx] / (1.0 - beta2_t);
-            net->W2[idx] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
+    for (int i = 0; i < OUTPUT_DIM; i++) {
+        for (int j = 0; j < HIDDEN_DIM; j++) {
+            net->m2[i][j] = net->beta1 * net->m2[i][j] + (1.0 - net->beta1) * net->dW2[i][j];
+            net->v2[i][j] = net->beta2 * net->v2[i][j] + (1.0 - net->beta2) * net->dW2[i][j] * net->dW2[i][j];
+            double m_hat = net->m2[i][j] / (1.0 - beta1_t);
+            double v_hat = net->v2[i][j] / (1.0 - beta2_t);
+            net->W2[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
         }
     }
 }
@@ -202,10 +157,7 @@ bool save_net(const char* filename, const Net* net) {
     FILE* file = fopen(filename, "wb");
     if (!file) return false;
     
-    // Save dimensions and parameters
-    fwrite(&net->input_dim, sizeof(int), 1, file);
-    fwrite(&net->hidden_dim, sizeof(int), 1, file);
-    fwrite(&net->output_dim, sizeof(int), 1, file);
+    // Save parameters
     fwrite(&net->lr, sizeof(double), 1, file);
     fwrite(&net->beta1, sizeof(double), 1, file);
     fwrite(&net->beta2, sizeof(double), 1, file);
@@ -213,15 +165,12 @@ bool save_net(const char* filename, const Net* net) {
     fwrite(&net->t, sizeof(unsigned long long), 1, file);
     
     // Save weights and Adam states
-    size_t w1_size = net->hidden_dim * net->input_dim;
-    size_t w2_size = net->output_dim * net->hidden_dim;
-    
-    fwrite(net->W1, sizeof(double), w1_size, file);
-    fwrite(net->W2, sizeof(double), w2_size, file);
-    fwrite(net->m1, sizeof(double), w1_size, file);
-    fwrite(net->m2, sizeof(double), w2_size, file);
-    fwrite(net->v1, sizeof(double), w1_size, file);
-    fwrite(net->v2, sizeof(double), w2_size, file);
+    fwrite(net->W1, sizeof(net->W1), 1, file);
+    fwrite(net->W2, sizeof(net->W2), 1, file);
+    fwrite(net->m1, sizeof(net->m1), 1, file);
+    fwrite(net->m2, sizeof(net->m2), 1, file);
+    fwrite(net->v1, sizeof(net->v1), 1, file);
+    fwrite(net->v2, sizeof(net->v2), 1, file);
     
     fclose(file);
     return true;
@@ -231,51 +180,38 @@ Net* load_net(const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
     
-    int input_dim, hidden_dim, output_dim;
-    double learning_rate;
-    
-    // Read dimensions
-    if (fread(&input_dim, sizeof(int), 1, file) != 1 ||
-        fread(&hidden_dim, sizeof(int), 1, file) != 1 ||
-        fread(&output_dim, sizeof(int), 1, file) != 1 ||
-        fread(&learning_rate, sizeof(double), 1, file) != 1) {
-        fclose(file);
-        return NULL;
-    }
-    
-    Net* net = create_net(input_dim, hidden_dim, output_dim, learning_rate);
+    Net* net = (Net*)calloc(1, sizeof(Net));
     if (!net) {
         fclose(file);
         return NULL;
     }
     
-    // Read parameters
-    if (fread(&net->beta1, sizeof(double), 1, file) != 1 ||
+    // Load parameters
+    if (fread(&net->lr, sizeof(double), 1, file) != 1 ||
+        fread(&net->beta1, sizeof(double), 1, file) != 1 ||
         fread(&net->beta2, sizeof(double), 1, file) != 1 ||
         fread(&net->epsilon, sizeof(double), 1, file) != 1 ||
-        fread(&net->t, sizeof(unsigned long long), 1, file) != 1) {
-        free_net(net);
-        fclose(file);
-        return NULL;
-    }
-    
-    // Read weights and Adam states
-    size_t w1_size = hidden_dim * input_dim;
-    size_t w2_size = output_dim * hidden_dim;
-    
-    if (fread(net->W1, sizeof(double), w1_size, file) != w1_size ||
-        fread(net->W2, sizeof(double), w2_size, file) != w2_size ||
-        fread(net->m1, sizeof(double), w1_size, file) != w1_size ||
-        fread(net->m2, sizeof(double), w2_size, file) != w2_size ||
-        fread(net->v1, sizeof(double), w1_size, file) != w1_size ||
-        fread(net->v2, sizeof(double), w2_size, file) != w2_size) {
-        free_net(net);
+        fread(&net->t, sizeof(unsigned long long), 1, file) != 1 ||
+        
+        // Load weights and Adam states
+        fread(net->W1, sizeof(net->W1), 1, file) != 1 ||
+        fread(net->W2, sizeof(net->W2), 1, file) != 1 ||
+        fread(net->m1, sizeof(net->m1), 1, file) != 1 ||
+        fread(net->m2, sizeof(net->m2), 1, file) != 1 ||
+        fread(net->v1, sizeof(net->v1), 1, file) != 1 ||
+        fread(net->v2, sizeof(net->v2), 1, file) != 1) {
+        
+        free(net);
         fclose(file);
         return NULL;
     }
     
     fclose(file);
     return net;
+}
+
+void free_net(Net* net) {
+    free(net);
 }
 
 #endif // NET_H

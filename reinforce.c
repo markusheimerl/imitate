@@ -73,8 +73,8 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             forward_net(policy, rollout->states[step]);
             
             for(int i = 0; i < 4; i++) {
-                double mean = squash(policy->h[2 * policy->hidden_dim + i], MIN_MEAN, MAX_MEAN);
-                double std = squash(policy->h[2 * policy->hidden_dim + i + 4], MIN_STD, MAX_STD);
+                double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                double std = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
 
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
@@ -118,8 +118,8 @@ void update_policy(Net* policy, Rollout* rollouts) {
             
             for(int i = 0; i < 4; i++) {
                 // Network outputs raw parameters before squashing
-                double mean_raw = policy->h[2 * policy->hidden_dim + i];
-                double std_raw = policy->h[2 * policy->hidden_dim + i + 4];
+                double mean_raw = policy->h[2][i];
+                double std_raw = policy->h[2][i + 4];
                 
                 // Squashed parameters using tanh-based scaling
                 // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
@@ -187,8 +187,7 @@ void* update_thread(void* arg) {
     volatile bool* sync = (volatile bool*)args[2];
     double* shared_mean_return = (double*)args[3];
 
-    Net* local_net = create_net(shared_net->input_dim, 
-        shared_net->hidden_dim, shared_net->output_dim, shared_net->lr);
+    Net* local_net = create_net(shared_net->lr);
     memcpy(local_net, shared_net, sizeof(Net));
     
     Rollout local_rollouts[NUM_ROLLOUTS];
@@ -222,7 +221,7 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(STATE_DIM, 64, ACTION_DIM, 5e-5);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-4);
     Rollout shared_rollouts[NUM_ROLLOUTS];
     volatile bool sync = false;
     double shared_mean_return = 0.0;
