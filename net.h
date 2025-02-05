@@ -5,11 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define HISTORY_LENGTH 3
-#define STATE_DIM 6     // 3 accel + 3 gyro
-#define INPUT_DIM (STATE_DIM * HISTORY_LENGTH)  // 6 states * 16 history length
+#define INPUT_DIM 6 // STATE_DIM
 #define HIDDEN_DIM 64
-#define OUTPUT_DIM 8    // 4 means + 4 stds
+#define OUTPUT_DIM 8 // ACTION_DIM
 
 typedef struct {
     // Weight matrices
@@ -83,34 +81,26 @@ void forward_net(Net* net, const double* input) {
     }
 }
 
-void backward_net(Net* net, const double* output_gradients, 
-                 const double* stored_inputs, const double* stored_hidden,
-                 int num_steps) {
+void backward_net(Net* net, const double* output_gradients) {
     double delta[HIDDEN_DIM];
-
-    for(int step = 0; step < num_steps; step++) {
-        const double* output_gradient = &output_gradients[step * OUTPUT_DIM];
-        const double* step_input = &stored_inputs[step * INPUT_DIM];
-        const double* step_hidden = &stored_hidden[step * HIDDEN_DIM];
-        
-        // Output layer gradients
-        for (int i = 0; i < OUTPUT_DIM; i++) {
-            for (int j = 0; j < HIDDEN_DIM; j++) {
-                net->dW2[i][j] += output_gradient[i] * step_hidden[j];
-            }
+    
+    // Output layer gradients
+    for (int i = 0; i < OUTPUT_DIM; i++) {
+        for (int j = 0; j < HIDDEN_DIM; j++) {
+            net->dW2[i][j] = output_gradients[i] * net->h[1][j];
         }
+    }
 
-        // Hidden layer gradients
-        memset(delta, 0, HIDDEN_DIM * sizeof(double));
-        for (int i = 0; i < HIDDEN_DIM; i++) {
-            for (int j = 0; j < OUTPUT_DIM; j++) {
-                delta[i] += output_gradient[j] * net->W2[j][i];
-            }
-            delta[i] *= gelu_derivative(step_hidden[i]);
+    // Hidden layer gradients
+    memset(delta, 0, HIDDEN_DIM * sizeof(double));
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        for (int j = 0; j < OUTPUT_DIM; j++) {
+            delta[i] += output_gradients[j] * net->W2[j][i];
+        }
+        delta[i] *= gelu_derivative(net->h[1][i]);
 
-            for (int j = 0; j < INPUT_DIM; j++) {
-                net->dW1[i][j] += delta[i] * step_input[j];
-            }
+        for (int j = 0; j < INPUT_DIM; j++) {
+            net->dW1[i][j] = delta[i] * net->h[0][j];
         }
     }
 }

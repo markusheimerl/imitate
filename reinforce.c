@@ -11,12 +11,11 @@
 
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
-#define DT_RENDER (1.0/24.0)
 
 #define STATE_DIM 6      // 3 accel + 3 gyro
 #define ACTION_DIM 8     // 4 means + 4 stds
 #define MAX_STEPS 256
-#define NUM_ROLLOUTS 128
+#define NUM_ROLLOUTS 64
 
 #define GAMMA 0.999
 #define MAX_STD 3.0
@@ -43,9 +42,9 @@ double dsquash(double x, double min, double max) {
 
 double compute_reward(const Quad* q) {
     double distance = sqrt(
-        pow(q->linear_position_W[0] - 0.0, 2) +  // x distance from 0
-        pow(q->linear_position_W[1] - 1.0, 2) +  // y distance from 1
-        pow(q->linear_position_W[2] - 0.0, 2)    // z distance from 0
+        pow(q->linear_position_W[0] - 0.0, 2) +
+        pow(q->linear_position_W[1] - 1.0, 2) +
+        pow(q->linear_position_W[2] - 0.0, 2)
     );
     return exp(-4.0 * distance);
 }
@@ -54,7 +53,6 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     Quad quad = create_quad(0.0, 1.0, 0.0);
     double t_control = 0.0;
     rollout->length = 0;
-    double input[INPUT_DIM] = {0};
 
     while(rollout->length < MAX_STEPS) {
         if (sqrt(
@@ -72,13 +70,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             
             memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
-            
-            // Fill input array with history using exponential decay
-            for(int i = 0; i < HISTORY_LENGTH && step - i >= 0; i++)
-                for(int j = 0; j < STATE_DIM; j++) 
-                    input[i * STATE_DIM + j] = rollout->states[step - i][j] * pow(0.85, i);
-                
-            forward_net(policy, input);
+            forward_net(policy, rollout->states[step]);
             
             for(int i = 0; i < 4; i++) {
                 double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
@@ -112,22 +104,10 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollout) {
-    // Allocate buffers for gradients and activations across all timesteps
-    double* output_gradients = malloc(rollout->length * ACTION_DIM * sizeof(double));
-    double* stored_inputs = malloc(rollout->length * INPUT_DIM * sizeof(double));
-    double* stored_hidden = malloc(rollout->length * HIDDEN_DIM * sizeof(double));
-    double input[INPUT_DIM] = {0};
+    double output_gradients[ACTION_DIM];
     
     for(int step = 0; step < rollout->length; step++) {
-        // Fill input array with history using exponential decay
-        for(int i = 0; i < HISTORY_LENGTH && step - i >= 0; i++)
-            for(int j = 0; j < STATE_DIM; j++) 
-                input[i * STATE_DIM + j] = rollout->states[step - i][j] * pow(0.85, i);
-            
-        // Store input and forward pass
-        memcpy(&stored_inputs[step * INPUT_DIM], input, INPUT_DIM * sizeof(double));
-        forward_net(policy, input);
-        memcpy(&stored_hidden[step * HIDDEN_DIM], policy->h[1], HIDDEN_DIM * sizeof(double));
+        forward_net(policy, rollout->states[step]);
         
         for(int i = 0; i < 4; i++) {
             // Network outputs raw parameters before squashing
@@ -148,8 +128,7 @@ void update_policy(Net* policy, Rollout* rollout) {
             // Where:
             // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
             // dμ/dμ_raw = derivative of squashing function (dsquash)
-            output_gradients[step * ACTION_DIM + i] = 
-                -(delta / (std_val * std_val)) * 
+            output_gradients[i] = -(delta / (std_val * std_val)) * 
                 dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
                 rollout->returns[step];
 
@@ -158,19 +137,15 @@ void update_policy(Net* policy, Rollout* rollout) {
             // Where:
             // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
             // dσ/dσ_raw = derivative of squashing function (dsquash)
-            output_gradients[step * ACTION_DIM + i + 4] = 
-                -((delta * delta - std_val * std_val) / 
+            output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
                 (std_val * std_val * std_val)) * 
                 dsquash(std_raw, MIN_STD, MAX_STD) * 
                 rollout->returns[step];
         }
+        zero_gradients(policy);
+        backward_net(policy, output_gradients);
+        update_net(policy);
     }
-
-    backward_net(policy, output_gradients, stored_inputs, stored_hidden, rollout->length);
-    
-    free(output_gradients);
-    free(stored_inputs);
-    free(stored_hidden);
 }
 
 void* collection_thread(void* arg) {
@@ -225,9 +200,7 @@ void* update_thread(void* arg) {
         *sync = false;
 
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            zero_gradients(local_net);
             update_policy(local_net, &local_rollouts[r]);
-            update_net(local_net);
         }
     }
     
