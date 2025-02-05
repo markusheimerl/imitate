@@ -112,11 +112,6 @@ void orthonormalize_rotation_matrix(double* R) {
 #define OMEGA_MIN 30.0
 #define OMEGA_MAX 70.0
 
-#define ACCEL_NOISE_STDDEV 0.1
-#define GYRO_NOISE_STDDEV 0.01
-#define ACCEL_BIAS 0.05
-#define GYRO_BIAS 0.005
-
 typedef struct {
     // State variables
     double omega[4];
@@ -130,8 +125,6 @@ typedef struct {
     // Sensor variables
     double linear_acceleration_B_s[3]; // Accelerometer
     double angular_velocity_B_s[3]; // Gyroscope
-    double accel_bias[3];
-    double gyro_bias[3];
 } Quad;
 
 Quad create_quad(double x, double y, double z) {
@@ -152,10 +145,6 @@ Quad create_quad(double x, double y, double z) {
     memcpy(q.linear_acceleration_B_s, zero3, 3 * sizeof(double));
     memcpy(q.angular_velocity_B_s, zero3, 3 * sizeof(double));
     
-    for(int i = 0; i < 3; i++) {
-        q.accel_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * ACCEL_BIAS;
-        q.gyro_bias[i] = (2.0*((double)rand()/RAND_MAX) - 1.0) * GYRO_BIAS;
-    }
     return q;
 }
 
@@ -166,11 +155,6 @@ void get_quad_state(Quad q, double* state) {
     state[9] = q.R_W_B[0];
     state[10] = q.R_W_B[4];
     state[11] = q.R_W_B[8];
-}
-
-static double gaussian_noise(double stddev) {
-    double u1 = (double)rand() / RAND_MAX, u2 = (double)rand() / RAND_MAX;
-    return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2) * stddev;
 }
 
 void update_quad(Quad* q, double dt) {
@@ -256,7 +240,7 @@ void update_quad(Quad* q, double dt) {
     // 9. Ensure rotation matrix stays orthonormal
     orthonormalize_rotation_matrix(q->R_W_B);
 
-    // 10. Calculate sensor readings with noise
+    // 10. Calculate sensor readings
     double linear_acceleration_B[3], R_B_W[9];
     static const double gravity_vec[3] = {0, GRAVITY, 0};
     
@@ -267,8 +251,8 @@ void update_quad(Quad* q, double dt) {
     subVec3f(linear_acceleration_B, gravity_B, linear_acceleration_B);
     
     for(int i = 0; i < 3; i++) {
-        q->linear_acceleration_B_s[i] = linear_acceleration_B[i] + gaussian_noise(ACCEL_NOISE_STDDEV) + q->accel_bias[i];
-        q->angular_velocity_B_s[i] = q->angular_velocity_B[i] + gaussian_noise(GYRO_NOISE_STDDEV) + q->gyro_bias[i];
+        q->linear_acceleration_B_s[i] = linear_acceleration_B[i];
+        q->angular_velocity_B_s[i] = q->angular_velocity_B[i];
     }
 
     // 11. Update rotor speeds
