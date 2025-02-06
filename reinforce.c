@@ -163,7 +163,7 @@ void* collection_thread(void* arg) {
     Rollout* shared_rollouts = (Rollout*)args[1];
     volatile bool* sync = (volatile bool*)args[2];
     
-    Rollout local_rollouts[NUM_ROLLOUTS];
+    Rollout* local_rollouts = (Rollout*)malloc(NUM_ROLLOUTS * sizeof(Rollout));
     
     while(1) {
         for(int r = 0; r < NUM_ROLLOUTS; r++) collect_rollout(shared_net, &local_rollouts[r]);
@@ -172,9 +172,11 @@ void* collection_thread(void* arg) {
         while(*sync) local_count++;
         //printf("Collection thread waited %llu times\n", local_count);
         
-        memcpy(shared_rollouts, local_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        memcpy(shared_rollouts, local_rollouts, NUM_ROLLOUTS * sizeof(Rollout));
         *sync = true;
     }
+
+    free(local_rollouts);
     return NULL;
 }
 
@@ -190,7 +192,7 @@ void* update_thread(void* arg) {
     Net* local_net = create_net(shared_net->lr);
     memcpy(local_net, shared_net, sizeof(Net));
     
-    Rollout local_rollouts[NUM_ROLLOUTS];
+    Rollout* local_rollouts = (Rollout*)malloc(NUM_ROLLOUTS * sizeof(Rollout));
     
     while(1) {
         double local_mean_return = 0.0;
@@ -201,7 +203,7 @@ void* update_thread(void* arg) {
         while(!(*sync)) local_count++;
         //printf("Update thread waited %llu times\n", local_count);
 
-        memcpy(local_rollouts, shared_rollouts, sizeof(Rollout) * NUM_ROLLOUTS);
+        memcpy(local_rollouts, shared_rollouts, NUM_ROLLOUTS * sizeof(Rollout));
         memcpy(shared_net, local_net, sizeof(Net));
         memcpy(shared_mean_return, &local_mean_return, sizeof(double));
         *sync = false;
@@ -209,6 +211,7 @@ void* update_thread(void* arg) {
         update_policy(local_net, local_rollouts);
     }
     
+    free(local_rollouts);
     free_net(local_net);
     return NULL;
 }
@@ -222,7 +225,7 @@ int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-4);
-    Rollout shared_rollouts[NUM_ROLLOUTS];
+    Rollout* shared_rollouts = (Rollout*)malloc(NUM_ROLLOUTS * sizeof(Rollout));
     volatile bool sync = false;
     double shared_mean_return = 0.0;
     
@@ -266,6 +269,7 @@ int main(int argc, char** argv) {
              localtime(&current_time));
     save_net(filename, net);
 
+    free(shared_rollouts);
     free_net(net);
     return 0;
 }
