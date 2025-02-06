@@ -36,14 +36,13 @@ typedef struct {
     unsigned long step;  // Number of optimization steps
 } Net;
 
-__device__ __host__ double gelu(double x) {
-    return 0.5 * x * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
+__device__ __host__ double swish(double x) {
+    return x / (1.0 + exp(-x));
 }
 
-__device__ __host__ double gelu_derivative(double x) {
-    double cdf = 0.5 * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
-    double pdf = exp(-0.5 * x * x) / sqrt(2 * M_PI);
-    return cdf + x * pdf;
+__device__ __host__ double swish_derivative(double x) {
+    double sigmoid = 1.0 / (1.0 + exp(-x));
+    return sigmoid + x * sigmoid * (1.0 - sigmoid);
 }
 
 Net* create_net(double learning_rate) {
@@ -91,7 +90,7 @@ void forward_net(Net* net, const double* input) {
         for (int j = 0; j < INPUT_DIM; j++) {
             net->h[1][i] += net->W1[i][j] * net->h[0][j];
         }
-        net->h[1][i] = gelu(net->h[1][i]);
+        net->h[1][i] = swish(net->h[1][i]);
     }
 
     // Output layer
@@ -119,7 +118,7 @@ void backward_net(Net* net, const double* output_gradients) {
         for (int j = 0; j < OUTPUT_DIM; j++) {
             delta[i] += output_gradients[j] * net->W2[j][i];
         }
-        delta[i] *= gelu_derivative(net->h[1][i]);
+        delta[i] *= swish_derivative(net->h[1][i]);
 
         for (int j = 0; j < INPUT_DIM; j++) {
             net->dW1[i][j] = delta[i] * net->h[0][j];
