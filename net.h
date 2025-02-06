@@ -34,6 +34,10 @@ typedef struct {
     double epsilon;   // Small constant for numerical stability
     double weight_decay; // L2 regularization
     unsigned long step;  // Number of optimization steps
+
+    // State normalization parameters
+    double state_mean[INPUT_DIM];
+    double state_var[INPUT_DIM];
 } Net;
 
 __device__ __host__ double swish(double x) {
@@ -43,6 +47,19 @@ __device__ __host__ double swish(double x) {
 __device__ __host__ double swish_derivative(double x) {
     double sigmoid = 1.0 / (1.0 + exp(-x));
     return sigmoid + x * sigmoid * (1.0 - sigmoid);
+}
+
+void normalize_state(Net* net, const double* input, double* normalized) {
+    for (int i = 0; i < INPUT_DIM; i++) {
+        // Update running statistics
+        net->state_mean[i] = 0.99 * net->state_mean[i] + 0.01 * input[i];
+        double delta = input[i] - net->state_mean[i];
+        net->state_var[i] = 0.99 * net->state_var[i] + 0.01 * delta * delta;
+        
+        // Normalize input
+        normalized[i] = (input[i] - net->state_mean[i]) / 
+                       (sqrt(net->state_var[i] + 1e-8));
+    }
 }
 
 Net* create_net(double learning_rate) {
@@ -77,12 +94,22 @@ Net* create_net(double learning_rate) {
         }
     }
 
+    // Initialize normalization parameters
+    for (int i = 0; i < INPUT_DIM; i++) {
+        net->state_mean[i] = 0.0;
+        net->state_var[i] = 1.0;
+    }
+
     return net;
 }
 
 void forward_net(Net* net, const double* input) {
-    // Copy input
-    memcpy(net->h[0], input, INPUT_DIM * sizeof(double));
+    // Normalize input
+    double normalized_input[INPUT_DIM];
+    normalize_state(net, input, normalized_input);
+    
+    // Copy normalized input
+    memcpy(net->h[0], normalized_input, INPUT_DIM * sizeof(double));
 
     // Hidden layer
     memset(net->h[1], 0, HIDDEN_DIM * sizeof(double));
@@ -195,6 +222,10 @@ bool save_net(const char* filename, const Net* net) {
     fwrite(net->v1, sizeof(net->v1), 1, file);
     fwrite(net->v2, sizeof(net->v2), 1, file);
     
+    // Save normalization parameters
+    fwrite(net->state_mean, sizeof(double), INPUT_DIM, file);
+    fwrite(net->state_var, sizeof(double), INPUT_DIM, file);
+    
     fclose(file);
     return true;
 }
@@ -228,6 +259,14 @@ Net* load_net(const char* filename) {
         fread(net->m2, sizeof(net->m2), 1, file) != 1 ||
         fread(net->v1, sizeof(net->v1), 1, file) != 1 ||
         fread(net->v2, sizeof(net->v2), 1, file) != 1) {
+        free(net);
+        fclose(file);
+        return NULL;
+    }
+    
+    // Load normalization parameters
+    if (fread(net->state_mean, sizeof(double), INPUT_DIM, file) != INPUT_DIM ||
+        fread(net->state_var, sizeof(double), INPUT_DIM, file) != INPUT_DIM) {
         free(net);
         fclose(file);
         return NULL;

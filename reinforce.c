@@ -190,7 +190,7 @@ void update_policy(Net* policy, Rollout* rollouts) {
         grad_norm = sqrt(grad_norm);
 
         if (grad_norm > 10.0) {
-            printf("Warning: Large gradient norm at step %d: %.6f\n", step, grad_norm);
+            //printf("Warning: Large gradient norm at step %d: %.6f\n", step, grad_norm);
         }
 
         update_net(policy);
