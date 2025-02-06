@@ -48,7 +48,8 @@ static double gelu_derivative(double x) {
 }
 
 Net* create_net(double learning_rate) {
-    Net* net = (Net*)calloc(1, sizeof(Net));
+    Net* net;
+    cudaMallocManaged(&net, sizeof(Net));
     if (!net) return NULL;
 
     net->lr = learning_rate;
