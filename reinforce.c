@@ -142,11 +142,12 @@ void* collection_thread(void* arg) {
     }
 }
 
-// ∇J(θ) = E[∇_θ log π_θ(a|s) * R] ≈ 1/N Σ_t [∇_θ log π_θ(a_t|s_t) * R_t]
+// ∇J(θ) = E[∇_θ log π_θ(a|s) * (R - b)] ≈ 1/N Σ_t [∇_θ log π_θ(a_t|s_t) * (R_t - b_t)]
 // Where:
 // J(θ) - Policy objective function
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
+// b_t - Baseline (average return at time t)
 void update_policy(Net* policy, Rollout* rollouts) {
     double output_gradients[ACTION_DIM];
     
@@ -154,11 +155,25 @@ void update_policy(Net* policy, Rollout* rollouts) {
     for(int step = 0; step < MAX_STEPS; step++) {
         zero_gradients(policy);
         
+        // Calculate baseline (average return) for this timestep
+        double baseline = 0.0;
+        int valid_rollouts = 0;
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            if(step < rollouts[r].length) {
+                baseline += rollouts[r].returns[step];
+                valid_rollouts++;
+            }
+        }
+        baseline = valid_rollouts > 0 ? baseline / valid_rollouts : 0.0;
+        
         // Process all rollouts for this timestep
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             if(step >= rollouts[r].length) continue;
             
             forward_net(policy, rollouts[r].states[step]);
+            
+            // Calculate advantage: A_t = R_t - b_t
+            double advantage = rollouts[r].returns[step] - baseline;
             
             for(int i = 0; i < 4; i++) {
                 // Network outputs raw parameters before squashing
@@ -181,7 +196,7 @@ void update_policy(Net* policy, Rollout* rollouts) {
                 // dμ/dμ_raw = derivative of squashing function (dsquash)
                 output_gradients[i] = -(delta / (std_val * std_val)) * 
                     dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
-                    rollouts[r].returns[step];
+                    advantage;
 
                 // Gradient for standard deviation parameter:
                 // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
@@ -191,7 +206,7 @@ void update_policy(Net* policy, Rollout* rollouts) {
                 output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
                     (std_val * std_val * std_val)) * 
                     dsquash(std_raw, MIN_STD, MAX_STD) * 
-                    rollouts[r].returns[step];
+                    advantage;
             }
             backward_net(policy, output_gradients);
         }
