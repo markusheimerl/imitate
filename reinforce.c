@@ -25,23 +25,23 @@
 #define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
 
 typedef struct {
-    float states[MAX_STEPS][STATE_DIM];
-    float actions[MAX_STEPS][ACTION_DIM];
-    float rewards[MAX_STEPS];
-    float returns[MAX_STEPS];
+    double states[MAX_STEPS][STATE_DIM];
+    double actions[MAX_STEPS][ACTION_DIM];
+    double rewards[MAX_STEPS];
+    double returns[MAX_STEPS];
     int length;
 } Rollout;
 
-float squash(float x, float min, float max) { 
+double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
 }
 
-float dsquash(float x, float min, float max) { 
+double dsquash(double x, double min, double max) { 
     return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
 }
 
-float compute_reward(const Quad* q) {
-    float distance = sqrt(
+double compute_reward(const Quad* q) {
+    double distance = sqrt(
         pow(q->linear_position_W[0] - 0.0, 2) +
         pow(q->linear_position_W[1] - 1.0, 2) +
         pow(q->linear_position_W[2] - 0.0, 2)
@@ -51,7 +51,7 @@ float compute_reward(const Quad* q) {
 
 void collect_rollout(Net* policy, Rollout* rollout) {
     Quad quad = create_quad(0.0, 1.0, 0.0);
-    float t_control = 0.0;
+    double t_control = 0.0;
     rollout->length = 0;
 
     while(rollout->length < MAX_STEPS) {
@@ -68,17 +68,17 @@ void collect_rollout(Net* policy, Rollout* rollout) {
         if (t_control >= DT_CONTROL) {
             int step = rollout->length;
             
-            memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(float));
-            memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(float));
+            memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
+            memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
             forward_net(policy, rollout->states[step]);
             
             for(int i = 0; i < 4; i++) {
-                float mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
-                float std = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
+                double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                double std = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
 
-                float u1 = (float)rand()/RAND_MAX;
-                float u2 = (float)rand()/RAND_MAX;
-                float noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+                double u1 = (double)rand()/RAND_MAX;
+                double u2 = (double)rand()/RAND_MAX;
+                double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
                 rollout->actions[step][i] = mean + std * noise;
                 quad.omega_next[i] = rollout->actions[step][i];
@@ -91,7 +91,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     }
     
     // Compute discounted returns
-    float G = 0.0;
+    double G = 0.0;
     for(int i = rollout->length-1; i >= 0; i--) {
         G = rollout->rewards[i] + GAMMA * G;
         rollout->returns[i] = G;
@@ -104,7 +104,7 @@ void collect_rollout(Net* policy, Rollout* rollout) {
 // π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
 // R_t - Discounted return from time step t
 void update_policy(Net* policy, Rollout* rollouts) {
-    float output_gradients[ACTION_DIM];
+    double output_gradients[ACTION_DIM];
     
     // Process all rollouts for each timestep
     for(int step = 0; step < MAX_STEPS; step++) {
@@ -118,17 +118,17 @@ void update_policy(Net* policy, Rollout* rollouts) {
             
             for(int i = 0; i < 4; i++) {
                 // Network outputs raw parameters before squashing
-                float mean_raw = policy->h[2][i];
-                float std_raw = policy->h[2][i + 4];
+                double mean_raw = policy->h[2][i];
+                double std_raw = policy->h[2][i + 4];
                 
                 // Squashed parameters using tanh-based scaling
                 // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
                 // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
-                float mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
-                float std_val = squash(std_raw, MIN_STD, MAX_STD);
+                double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
+                double std_val = squash(std_raw, MIN_STD, MAX_STD);
                 
                 // Sampled action and its deviation from mean
-                float delta = rollouts[r].actions[step][i] - mean;
+                double delta = rollouts[r].actions[step][i] - mean;
 
                 // Gradient for mean parameter:
                 // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
@@ -185,7 +185,7 @@ void* update_thread(void* arg) {
     Net* shared_net = (Net*)args[0];
     Rollout* shared_rollouts = (Rollout*)args[1];
     volatile bool* sync = (volatile bool*)args[2];
-    float* shared_mean_return = (float*)args[3];
+    double* shared_mean_return = (double*)args[3];
 
     Net* local_net = create_net(shared_net->lr);
     memcpy(local_net, shared_net, sizeof(Net));
@@ -193,7 +193,7 @@ void* update_thread(void* arg) {
     Rollout* local_rollouts = (Rollout*)calloc(1, NUM_ROLLOUTS * sizeof(Rollout));
     
     while(1) {
-        float local_mean_return = 0.0;
+        double local_mean_return = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) local_mean_return += local_rollouts[r].returns[0];
         local_mean_return /= NUM_ROLLOUTS;
 
@@ -204,7 +204,7 @@ void* update_thread(void* arg) {
         memset(local_rollouts, 0, NUM_ROLLOUTS * sizeof(Rollout));
         memcpy(local_rollouts, shared_rollouts, NUM_ROLLOUTS * sizeof(Rollout));
         memcpy(shared_net, local_net, sizeof(Net));
-        memcpy(shared_mean_return, &local_mean_return, sizeof(float));
+        memcpy(shared_mean_return, &local_mean_return, sizeof(double));
         *sync = false;
 
         update_policy(local_net, local_rollouts);
@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-4);
     Rollout* shared_rollouts = (Rollout*)calloc(1, NUM_ROLLOUTS * sizeof(Rollout));
     volatile bool sync = false;
-    float shared_mean_return = 0.0;
+    double shared_mean_return = 0.0;
     
     void* collection_args[] = {net, shared_rollouts, (void*)&sync};
     void* update_args[] = {net, shared_rollouts, (void*)&sync, &shared_mean_return};
@@ -232,8 +232,8 @@ int main(int argc, char** argv) {
     pthread_create(&updater, NULL, update_thread, update_args);
 
     int timesteps = atoi(argv[1]);
-    float best_return = -1e30;
-    float theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
+    double best_return = -1e30;
+    double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
     struct timeval start_time;
     gettimeofday(&start_time, NULL);
     
@@ -241,14 +241,14 @@ int main(int argc, char** argv) {
         sleep(1);
         while(sync);
         
-        float local_mean_return;
-        memcpy(&local_mean_return, &shared_mean_return, sizeof(float));
+        double local_mean_return;
+        memcpy(&local_mean_return, &shared_mean_return, sizeof(double));
         
         best_return = fmax(local_mean_return, best_return);
 
         struct timeval now;
         gettimeofday(&now, NULL);
-        float elapsed = (now.tv_sec - start_time.tv_sec) + 
+        double elapsed = (now.tv_sec - start_time.tv_sec) + 
                         (now.tv_usec - start_time.tv_usec) / 1e6;
         
         printf("Timestep %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
