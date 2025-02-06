@@ -210,10 +210,6 @@ void* update_thread(void* arg) {
 
         update_policy(local_net, local_rollouts);
     }
-    
-    free(local_rollouts);
-    free_net(local_net);
-    return NULL;
 }
 
 int main(int argc, char** argv) {
@@ -265,11 +261,8 @@ int main(int argc, char** argv) {
 
     char filename[64];
     time_t current_time = time(NULL);
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", 
-             localtime(&current_time));
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&current_time));
     save_net(filename, net);
 
-    free(shared_rollouts);
-    free_net(net);
     return 0;
 }

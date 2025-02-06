@@ -241,8 +241,4 @@ Net* load_net(const char* filename) {
     return net;
 }
 
-void free_net(Net* net) {
-    free(net);
-}
-
 #endif // NET_H
