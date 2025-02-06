@@ -55,11 +55,8 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     double t_control = 0.0;
     rollout->length = 0;
 
-    // Terminate episode if:
-    // 1. Max timesteps reached (T = MAX_STEPS)
-    // 2. Terminal state reached (quadcopter too far from goal)
     while(rollout->length < MAX_STEPS) {
-        // Check if terminal state reached
+        // Terminal condition: quadcopter too far from goal
         if (sqrt(
             pow(quad.linear_position_W[0], 2) +
             pow(quad.linear_position_W[1] - 1.0, 2) +
@@ -67,52 +64,53 @@ void collect_rollout(Net* policy, Rollout* rollout) {
             break;
         }
 
-        // Environment step with physics simulation
+        // Physics simulation steps
         update_quad(&quad, DT_PHYSICS);
         t_control += DT_PHYSICS;
         
-        // Control at lower frequency than physics simulation
+        // Control at lower frequency
         if (t_control >= DT_CONTROL) {
             int step = rollout->length;
             
-            // Get state s_t (accelerometer and gyroscope readings)
+            // Get state s_t (sensor readings)
             memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
             memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
 
-            // Get policy distribution parameters μ(s_t), σ(s_t)
+            // Forward pass through policy network
             forward_net(policy, rollout->states[step]);
             
-            // Sample actions a_t ~ π_θ(a|s) for each rotor
-            // Using Gaussian policy: a_t = μ(s_t) + σ(s_t) * ε, where ε ~ N(0,1)
+            // Sample actions from Gaussian policy
+            // π_θ(a|s) = N(μ_θ(s), σ_θ(s)²)
+            // Where μ_θ, σ_θ are neural network outputs
             for(int i = 0; i < 4; i++) {
-                // Get μ(s_t) and σ(s_t) for this action dimension
+                // Get policy parameters
                 double mu = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
                 double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
 
-                // Sample ε ~ N(0,1) using Box-Muller transform
+                // Sample from N(0,1) using Box-Muller transform
                 double u1 = (double)rand()/RAND_MAX;
                 double u2 = (double)rand()/RAND_MAX;
                 double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                 
-                // Sample action: a_t = μ(s_t) + σ(s_t) * ε
+                // Transform to N(μ, σ²): a = μ + σε
                 rollout->actions[step][i] = mu + sigma * epsilon;
                 
-                // Apply action to environment
+                // Execute action
                 quad.omega_next[i] = rollout->actions[step][i];
             }
             
-            // Get reward r_t from environment
+            // Get reward
             rollout->rewards[step] = compute_reward(&quad);
             rollout->length++;
             t_control = 0.0;
         }
     }
     
-    // Compute returns (discounted sum of rewards)
-    // R_t = Σ_{k=t}^T γ^{k-t} * r_k
-    double G = 0.0;  // G represents R_t (return)
+    // Compute discounted returns
+    // R_t = r_t + γr_{t+1} + γ²r_{t+2} + ...
+    // Computed recursively backwards: R_t = r_t + γR_{t+1}
+    double G = 0.0;
     for(int i = rollout->length-1; i >= 0; i--) {
-        // G = r_t + γ * G
         G = rollout->rewards[i] + GAMMA * G;
         rollout->returns[i] = G;
     }
@@ -142,12 +140,14 @@ void* collection_thread(void* arg) {
     }
 }
 
-// ∇J(θ) = E[∇_θ log π_θ(a|s) * (R - b)] ≈ 1/N Σ_t [∇_θ log π_θ(a_t|s_t) * (R_t - b_t)]
-// Where:
-// J(θ) - Policy objective function
-// π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
-// R_t - Discounted return from time step t
-// b_t - Baseline (average return at time t)
+// Policy gradient update using vanilla REINFORCE
+// For Gaussian policy π_θ(a|s) = N(μ_θ(s), σ_θ(s)²):
+// ∇J(θ) = E_τ[Σ_t ∇_θ log π_θ(a_t|s_t) * R_t]
+// Where for Gaussian policy:
+// ∇_θ log π_θ(a|s) = [
+//   ∇_θ μ * (a-μ)/σ² +    (mean gradient)
+//   ∇_θ σ * ((a-μ)²-σ²)/σ³ (std gradient)
+// ]
 void update_policy(Net* policy, Rollout* rollouts) {
     double output_gradients[ACTION_DIM];
     
@@ -155,58 +155,41 @@ void update_policy(Net* policy, Rollout* rollouts) {
     for(int step = 0; step < MAX_STEPS; step++) {
         zero_gradients(policy);
         
-        // Calculate baseline (average return) for this timestep
-        double baseline = 0.0;
-        int valid_rollouts = 0;
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            if(step < rollouts[r].length) {
-                baseline += rollouts[r].returns[step];
-                valid_rollouts++;
-            }
-        }
-        baseline = valid_rollouts > 0 ? baseline / valid_rollouts : 0.0;
-        
         // Process all rollouts for this timestep
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             if(step >= rollouts[r].length) continue;
             
             forward_net(policy, rollouts[r].states[step]);
             
-            // Calculate advantage: A_t = R_t - b_t
-            double advantage = rollouts[r].returns[step] - baseline;
-            
             for(int i = 0; i < 4; i++) {
                 // Network outputs raw parameters before squashing
                 double mean_raw = policy->h[2][i];
                 double std_raw = policy->h[2][i + 4];
                 
-                // Squashed parameters using tanh-based scaling
+                // Squashed parameters using tanh-based scaling:
                 // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
                 // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
                 double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
                 double std_val = squash(std_raw, MIN_STD, MAX_STD);
                 
-                // Sampled action and its deviation from mean
+                // Action deviation from mean
                 double delta = rollouts[r].actions[step][i] - mean;
 
-                // Gradient for mean parameter:
-                // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
-                // Where:
-                // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
-                // dμ/dμ_raw = derivative of squashing function (dsquash)
+                // Mean gradient:
+                // ∂/∂θ log π = (a-μ)/σ² * ∂μ/∂θ
+                // Where ∂μ/∂θ includes squashing function derivative
                 output_gradients[i] = -(delta / (std_val * std_val)) * 
                     dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
-                    advantage;
+                    rollouts[r].returns[step];
 
-                // Gradient for standard deviation parameter:
-                // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
-                // Where:
-                // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
-                // dσ/dσ_raw = derivative of squashing function (dsquash)
+                // Standard deviation gradient:
+                // ∂/∂θ log π = ((a-μ)²-σ²)/σ³ * ∂σ/∂θ
+                // This term comes from differentiating the log probability
+                // of a Gaussian w.r.t. its standard deviation
                 output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
                     (std_val * std_val * std_val)) * 
                     dsquash(std_raw, MIN_STD, MAX_STD) * 
-                    advantage;
+                    rollouts[r].returns[step];
             }
             backward_net(policy, output_gradients);
         }
