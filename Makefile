@@ -1,9 +1,11 @@
 CC = clang
 CFLAGS = -O3 -march=native -ffast-math -Wall -Wextra
-LDFLAGS = -static -lm -lpthread -flto
+CUDAFLAGS = --cuda-gpu-arch=sm_86 -x cuda -Wno-unknown-cuda-version
+LDFLAGS = -lm -lpthread -flto
+CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -ldl -lrt
 
 reinforce.out: %.out: %.c
-	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(LDFLAGS) $(CUDALIBS) -o $@
 
 visualize.out: %.out: %.c
 	$(CC) $(CFLAGS) -Iraytracer $< $(LDFLAGS) -lwebp -lwebpmux -o $@
