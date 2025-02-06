@@ -175,9 +175,6 @@ void* collection_thread(void* arg) {
         memcpy(shared_rollouts, local_rollouts, NUM_ROLLOUTS * sizeof(Rollout));
         *sync = true;
     }
-
-    free(local_rollouts);
-    return NULL;
 }
 
 void* update_thread(void* arg) {
