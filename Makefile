@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -O3 -march=native -ffast-math -Wall -Wextra -Wno-unused-but-set-variable
+CFLAGS = -O3 -march=native -ffast-math -Wall -Wextra
 CUDAFLAGS = --cuda-gpu-arch=sm_86 -x cuda -Wno-unknown-cuda-version
 LDFLAGS = -lm -lpthread -flto
 CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -ldl -lrt
