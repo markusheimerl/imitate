@@ -135,7 +135,7 @@ void update_policy(Net* policy, Rollout* rollouts) {
                 // Where:
                 // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
                 // dμ/dμ_raw = derivative of squashing function (dsquash)
-                output_gradients[i] = -(delta / (std_val * std_val)) * 
+                output_gradients[i] = (delta / (std_val * std_val)) * 
                     dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
                     rollouts[r].returns[step];
 
@@ -144,7 +144,7 @@ void update_policy(Net* policy, Rollout* rollouts) {
                 // Where:
                 // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
                 // dσ/dσ_raw = derivative of squashing function (dsquash)
-                output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
+                output_gradients[i + 4] = ((delta * delta - std_val * std_val) / 
                     (std_val * std_val * std_val)) * 
                     dsquash(std_raw, MIN_STD, MAX_STD) * 
                     rollouts[r].returns[step];
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
 
     srand(time(NULL) ^ getpid());
     
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-4);
+    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-7);
     Rollout* shared_rollouts;
     cudaMallocManaged(&shared_rollouts, NUM_ROLLOUTS * sizeof(Rollout));
     volatile bool sync = false;

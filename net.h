@@ -21,20 +21,7 @@ typedef struct {
     double dW1[HIDDEN_DIM][INPUT_DIM];
     double dW2[OUTPUT_DIM][HIDDEN_DIM];
     
-    // Sophia parameters
-    double m1[HIDDEN_DIM][INPUT_DIM];  // Momentum
-    double m2[OUTPUT_DIM][HIDDEN_DIM];
-    double h1[HIDDEN_DIM][INPUT_DIM];  // Hessian estimates
-    double h2[OUTPUT_DIM][HIDDEN_DIM];
-    double prev_dW1[HIDDEN_DIM][INPUT_DIM];  // Previous gradients
-    double prev_dW2[OUTPUT_DIM][HIDDEN_DIM];
-    unsigned long long t;
-    
-    double lr;
-    double beta1;    // Momentum decay
-    double beta2;    // Hessian decay
-    double rho;      // Hessian clipping
-    double epsilon;
+    double lr;  // Learning rate
 } Net;
 
 __device__ __host__ double gelu(double x) {
@@ -53,11 +40,6 @@ Net* create_net(double learning_rate) {
     if (!net) return NULL;
 
     net->lr = learning_rate;
-    net->beta1 = 0.9;     // Momentum decay
-    net->beta2 = 0.999;   // Hessian decay
-    net->rho = 0.01;      // Hessian clipping
-    net->epsilon = 1e-8;
-    net->t = 0;
 
     // Xavier initialization
     double scale1 = sqrt(2.0 / (INPUT_DIM + HIDDEN_DIM));
@@ -130,51 +112,15 @@ void zero_gradients(Net* net) {
 }
 
 void update_net(Net* net) {
-    net->t++;
-    
-    // Update first layer weights using Sophia
     for (int i = 0; i < HIDDEN_DIM; i++) {
         for (int j = 0; j < INPUT_DIM; j++) {
-            // Update momentum
-            net->m1[i][j] = net->beta1 * net->m1[i][j] + (1.0 - net->beta1) * net->dW1[i][j];
-            
-            // Approximate second derivative using consecutive gradients
-            double grad_diff = net->dW1[i][j] - net->prev_dW1[i][j];
-            double hessian_approx = fabs(grad_diff / (net->lr + net->epsilon));
-            
-            // Update and clip Hessian estimate
-            net->h1[i][j] = fmax(net->rho, 
-                                net->beta2 * net->h1[i][j] + 
-                                (1.0 - net->beta2) * hessian_approx);
-            
-            // Store current gradient for next iteration
-            net->prev_dW1[i][j] = net->dW1[i][j];
-            
-            // Update weights using Sophia rule
-            net->W1[i][j] -= net->lr * net->m1[i][j] / sqrt(net->h1[i][j] + net->epsilon);
+            net->W1[i][j] += net->lr * net->dW1[i][j];
         }
     }
 
-    // Update second layer weights using Sophia
     for (int i = 0; i < OUTPUT_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
-            // Update momentum
-            net->m2[i][j] = net->beta1 * net->m2[i][j] + (1.0 - net->beta1) * net->dW2[i][j];
-            
-            // Approximate second derivative using consecutive gradients
-            double grad_diff = net->dW2[i][j] - net->prev_dW2[i][j];
-            double hessian_approx = fabs(grad_diff / (net->lr + net->epsilon));
-            
-            // Update and clip Hessian estimate
-            net->h2[i][j] = fmax(net->rho, 
-                                net->beta2 * net->h2[i][j] + 
-                                (1.0 - net->beta2) * hessian_approx);
-            
-            // Store current gradient for next iteration
-            net->prev_dW2[i][j] = net->dW2[i][j];
-            
-            // Update weights using Sophia rule
-            net->W2[i][j] -= net->lr * net->m2[i][j] / sqrt(net->h2[i][j] + net->epsilon);
+            net->W2[i][j] += net->lr * net->dW2[i][j];
         }
     }
 }
@@ -183,23 +129,12 @@ bool save_net(const char* filename, const Net* net) {
     FILE* file = fopen(filename, "wb");
     if (!file) return false;
     
-    // Save parameters
+    // Save learning rate
     fwrite(&net->lr, sizeof(double), 1, file);
-    fwrite(&net->beta1, sizeof(double), 1, file);
-    fwrite(&net->beta2, sizeof(double), 1, file);
-    fwrite(&net->rho, sizeof(double), 1, file);
-    fwrite(&net->epsilon, sizeof(double), 1, file);
-    fwrite(&net->t, sizeof(unsigned long long), 1, file);
     
-    // Save weights and Sophia states
+    // Save weights
     fwrite(net->W1, sizeof(net->W1), 1, file);
     fwrite(net->W2, sizeof(net->W2), 1, file);
-    fwrite(net->m1, sizeof(net->m1), 1, file);
-    fwrite(net->m2, sizeof(net->m2), 1, file);
-    fwrite(net->h1, sizeof(net->h1), 1, file);
-    fwrite(net->h2, sizeof(net->h2), 1, file);
-    fwrite(net->prev_dW1, sizeof(net->prev_dW1), 1, file);
-    fwrite(net->prev_dW2, sizeof(net->prev_dW2), 1, file);
     
     fclose(file);
     return true;
@@ -215,24 +150,16 @@ Net* load_net(const char* filename) {
         return NULL;
     }
     
-    // Load parameters
-    if (fread(&net->lr, sizeof(double), 1, file) != 1 ||
-        fread(&net->beta1, sizeof(double), 1, file) != 1 ||
-        fread(&net->beta2, sizeof(double), 1, file) != 1 ||
-        fread(&net->rho, sizeof(double), 1, file) != 1 ||
-        fread(&net->epsilon, sizeof(double), 1, file) != 1 ||
-        fread(&net->t, sizeof(unsigned long long), 1, file) != 1 ||
-        
-        // Load weights and Sophia states
-        fread(net->W1, sizeof(net->W1), 1, file) != 1 ||
-        fread(net->W2, sizeof(net->W2), 1, file) != 1 ||
-        fread(net->m1, sizeof(net->m1), 1, file) != 1 ||
-        fread(net->m2, sizeof(net->m2), 1, file) != 1 ||
-        fread(net->h1, sizeof(net->h1), 1, file) != 1 ||
-        fread(net->h2, sizeof(net->h2), 1, file) != 1 ||
-        fread(net->prev_dW1, sizeof(net->prev_dW1), 1, file) != 1 ||
-        fread(net->prev_dW2, sizeof(net->prev_dW2), 1, file) != 1) {
-        
+    // Load learning rate
+    if (fread(&net->lr, sizeof(double), 1, file) != 1) {
+        free(net);
+        fclose(file);
+        return NULL;
+    }
+    
+    // Load weights
+    if (fread(net->W1, sizeof(net->W1), 1, file) != 1 ||
+        fread(net->W2, sizeof(net->W2), 1, file) != 1) {
         free(net);
         fclose(file);
         return NULL;
