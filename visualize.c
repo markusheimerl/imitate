@@ -24,7 +24,7 @@
 #define MAX_MEAN (OMEGA_MAX - 4.0 * MAX_STD)
 #define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
 
-double squash(double x, double min, double max) { 
+float squash(float x, float min, float max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
 }
 
@@ -70,13 +70,13 @@ int main(int argc, char** argv) {
     add_mesh_to_scene(&scene, ground);
 
     // Initialize timers
-    double t_physics = 0.0;
-    double t_control = 0.0;
-    double t_render = 0.0;
+    float t_physics = 0.0;
+    float t_control = 0.0;
+    float t_render = 0.0;
     int frame = 0;
     
     // State buffer for neural network (only sensor readings)
-    double state[STATE_DIM];  // 6D: 3 accel + 3 gyro
+    float state[STATE_DIM];  // 6D: 3 accel + 3 gyro
 
     // Main simulation loop
     while (frame < scene.frame_count) {
@@ -89,28 +89,28 @@ int main(int argc, char** argv) {
         // Control update
         if (t_control >= DT_CONTROL) {
             // Get current sensor readings
-            memcpy(state, quad.linear_acceleration_B_s, 3 * sizeof(double));
-            memcpy(state + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+            memcpy(state, quad.linear_acceleration_B_s, 3 * sizeof(float));
+            memcpy(state + 3, quad.angular_velocity_B_s, 3 * sizeof(float));
             
             // Forward pass through network
             forward_net(policy, state);
             
             // Extract actions from network output (means only)
             for(int i = 0; i < 4; i++) {
-                double mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                float mean = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
                 quad.omega_next[i] = mean;
             }
             
             t_control = 0.0;
             
             // Print current status with more detailed stability metrics
-            double accel_magnitude = sqrt(
+            float accel_magnitude = sqrt(
                 quad.linear_acceleration_B_s[0] * quad.linear_acceleration_B_s[0] +
                 quad.linear_acceleration_B_s[1] * quad.linear_acceleration_B_s[1] +
                 quad.linear_acceleration_B_s[2] * quad.linear_acceleration_B_s[2]
             );
             
-            double angvel_magnitude = sqrt(
+            float angvel_magnitude = sqrt(
                 quad.angular_velocity_B_s[0] * quad.angular_velocity_B_s[0] +
                 quad.angular_velocity_B_s[1] * quad.angular_velocity_B_s[1] +
                 quad.angular_velocity_B_s[2] * quad.angular_velocity_B_s[2]
