@@ -40,11 +40,11 @@ __device__ __host__ double dsquash(double x, double min, double max) {
 
 double compute_reward(const Quad* q) {
     double distance = sqrt(
-        pow(q->linear_position_W[0] - 0.0, 2) +
-        pow(q->linear_position_W[1] - 1.0, 2) +
-        pow(q->linear_position_W[2] - 0.0, 2)
+        pow(q->linear_position_W[0] - 1.0, 2) +
+        pow(q->linear_position_W[1] - 2.0, 2) +
+        pow(q->linear_position_W[2] - 1.0, 2)
     );
-    return exp(-4.0 * distance);
+    return exp(-1.0 * distance);
 }
 
 void collect_rollout(Net* policy, Rollout* rollout) {
@@ -56,9 +56,9 @@ void collect_rollout(Net* policy, Rollout* rollout) {
     while(rollout->length < MAX_STEPS) {
         // Terminal condition: quadcopter too far from goal
         if (sqrt(
-            pow(quad.linear_position_W[0], 2) +
-            pow(quad.linear_position_W[1] - 1.0, 2) +
-            pow(quad.linear_position_W[2], 2)) > 1.0) {
+            pow(quad.linear_position_W[0] - 1.0, 2) +
+            pow(quad.linear_position_W[1] - 2.0, 2) +
+            pow(quad.linear_position_W[2] - 1.0, 2)) > 4.0) {
             break;
         }
 
