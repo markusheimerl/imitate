@@ -193,6 +193,26 @@ void update_policy(Net* policy, Rollout* rollouts) {
             }
             backward_net(policy, output_gradients);
         }
+
+        // Monitor gradients
+        double grad_norm = 0.0;
+        for (int i = 0; i < HIDDEN_DIM; i++) {
+            for (int j = 0; j < INPUT_DIM; j++) {
+                grad_norm += policy->dW1[i][j] * policy->dW1[i][j];
+            }
+        }
+        for (int i = 0; i < OUTPUT_DIM; i++) {
+            for (int j = 0; j < HIDDEN_DIM; j++) {
+                grad_norm += policy->dW2[i][j] * policy->dW2[i][j];
+            }
+        }
+        grad_norm = sqrt(grad_norm);
+
+        // Only print if gradient norm is suspiciously large
+        if (grad_norm > 10.0) {  // threshold can be adjusted
+            printf("Warning: Large gradient norm at step %d: %.6f\n", step, grad_norm);
+        }
+
         update_net(policy);
     }
 }
