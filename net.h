@@ -37,11 +37,11 @@ typedef struct {
     double epsilon;
 } Net;
 
-static double gelu(double x) {
+__device__ __host__ double gelu(double x) {
     return 0.5 * x * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
 }
 
-static double gelu_derivative(double x) {
+__device__ __host__ double gelu_derivative(double x) {
     double cdf = 0.5 * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
     double pdf = exp(-0.5 * x * x) / sqrt(2 * M_PI);
     return cdf + x * pdf;

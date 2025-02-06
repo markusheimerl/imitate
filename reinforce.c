@@ -32,11 +32,11 @@ typedef struct {
     int length;
 } Rollout;
 
-double squash(double x, double min, double max) { 
+__device__ __host__ double squash(double x, double min, double max) { 
     return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
 }
 
-double dsquash(double x, double min, double max) { 
+__device__ __host__ double dsquash(double x, double min, double max) { 
     return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
 }
 
