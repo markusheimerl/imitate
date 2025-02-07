@@ -9,148 +9,199 @@
 #include "quad.h"
 
 typedef struct {
-    double states[MAX_STEPS][STATE_DIM];
-    double actions[MAX_STEPS][ACTION_DIM];
-    double rewards[MAX_STEPS];
-    double returns[MAX_STEPS];
+    double** states;    // [MAX_STEPS][STATE_DIM]
+    double** actions;   // [MAX_STEPS][NUM_ROTORS]
+    double* rewards;    // [MAX_STEPS]
     int length;
 } Rollout;
 
-__device__ __host__ double compute_reward(const Quad* q) {
-    double distance = sqrt(
-        pow(q->linear_position_W[0] - 1.0, 2) +
-        pow(q->linear_position_W[1] - 2.0, 2) +
-        pow(q->linear_position_W[2] - 1.0, 2)
-    );
-    return exp(-1.0 * distance);
+Rollout* create_rollout() {
+    Rollout* r = (Rollout*)malloc(sizeof(Rollout));
+    r->states = (double**)malloc(MAX_STEPS * sizeof(double*));
+    r->actions = (double**)malloc(MAX_STEPS * sizeof(double*));
+    r->rewards = (double*)malloc(MAX_STEPS * sizeof(double));
+    
+    for(int i = 0; i < MAX_STEPS; i++) {
+        r->states[i] = (double*)malloc(STATE_DIM * sizeof(double));
+        r->actions[i] = (double*)malloc(4 * sizeof(double));
+    }
+    return r;
 }
 
-void collect_rollouts(Net* policy, Rollout* rollouts, uint32_t* rng_state) {
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        // Initialize environment (quadcopter) with starting state s_0
-        Quad quad = create_quad(0.0, 1.0, 0.0);
-        double t_control = 0.0;
-        rollouts[r].length = 0;
+void free_rollout(Rollout* r) {
+    for(int i = 0; i < MAX_STEPS; i++) {
+        free(r->states[i]);
+        free(r->actions[i]);
+    }
+    free(r->states);
+    free(r->actions);
+    free(r->rewards);
+    free(r);
+}
 
-        while(rollouts[r].length < MAX_STEPS) {
-            // Terminal condition: quadcopter too far from goal
-            if (sqrt(
-                pow(quad.linear_position_W[0] - 1.0, 2) +
-                pow(quad.linear_position_W[1] - 2.0, 2) +
-                pow(quad.linear_position_W[2] - 1.0, 2)) > 4.0) {
-                break;
-            }
+double squash(double x, double min, double max) { 
+    return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
+}
 
-            // Physics simulation steps
-            update_quad(&quad, DT_PHYSICS);
-            t_control += DT_PHYSICS;
+double dsquash(double x, double min, double max) { 
+    return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
+}
+
+double compute_reward(Quad q, double* target_pos) {
+    double pos_error = 0.0;
+    for(int i = 0; i < 3; i++) {
+        pos_error += pow(q.linear_position_W[i] - target_pos[i], 2);
+    }
+    pos_error = sqrt(pos_error);
+    
+    double vel_magnitude = 0.0;
+    for(int i = 0; i < 3; i++) {
+        vel_magnitude += pow(q.linear_velocity_W[i], 2);
+    }
+    vel_magnitude = sqrt(vel_magnitude);
+    
+    double ang_vel_magnitude = 0.0;
+    for(int i = 0; i < 3; i++) {
+        ang_vel_magnitude += pow(q.angular_velocity_B[i], 2);
+    }
+    ang_vel_magnitude = sqrt(ang_vel_magnitude);
+    
+    double orientation_error = fabs(1.0 - q.R_W_B[4]);
+    
+    double total_error = (pos_error * 2.0) + 
+                        (vel_magnitude * 1.0) + 
+                        (ang_vel_magnitude * 0.5) + 
+                        (orientation_error * 2.0);
+    
+    return exp(-total_error);
+}
+
+void collect_rollout(Net* policy, Rollout* rollout, int epoch, int epochs) {
+    // Linear curriculum learning: increase max distance over time
+    double max_current_distance = MIN_DISTANCE + 
+        (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs);
+    
+    // Generate two random positions within a sphere of radius max_current_distance
+    double positions[2][3];
+    for(int i = 0; i < 2; i++) {
+        double r = max_current_distance * ((double)rand() / RAND_MAX);
+        double theta = 2 * M_PI * ((double)rand() / RAND_MAX);
+        double phi = acos(2 * ((double)rand() / RAND_MAX) - 1);
+        
+        positions[i][0] = r * sin(phi) * cos(theta);
+        positions[i][1] = r * sin(phi) * sin(theta) + 1.0;
+        positions[i][2] = r * cos(phi);
+    }
+
+    double* start = positions[0];
+    double* target = positions[1];
+    
+    // Create a new quad for this rollout
+    Quad quad = create_quad(start[0], start[1], start[2]);
+    
+    // Initialize timers
+    double t_physics = 0.0;
+    double t_control = 0.0;
+    rollout->length = 0;
+
+    while(rollout->length < MAX_STEPS) {
+        if (dotVec3f(quad.linear_position_W, quad.linear_position_W) > 16.0 || // 4 meters squared
+            dotVec3f(quad.linear_velocity_W, quad.linear_velocity_W) > 25.0 || // 5 m/s squared
+            dotVec3f(quad.angular_velocity_B, quad.angular_velocity_B) > 25.0 || // ~5 rad/s squared
+            quad.R_W_B[4] < 0.0 /* more than 90° tilt */) break;
             
-            // Control at lower frequency
-            if (t_control >= DT_CONTROL) {
-                int step = rollouts[r].length;
-                
-                // Get state s_t
-                memcpy(rollouts[r].states[step], quad.linear_position_W, 3 * sizeof(double));
-                memcpy(rollouts[r].states[step] + 3, quad.angular_velocity_B, 3 * sizeof(double));
-
-                // Forward pass through policy network
-                forward_net(policy, rollouts[r].states[step]);
-                
-                // Sample actions from Gaussian policy
-                for(int i = 0; i < 4; i++) {
-                    // Get policy parameters
-                    double mu = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
-                    double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
-
-                    // Sample from N(0,1) using Box-Muller transform
-                    double u1 = random_uniform(rng_state);
-                    double u2 = random_uniform(rng_state);
-                    double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                    
-                    // Transform to N(μ, σ²): a = μ + σε
-                    rollouts[r].actions[step][i] = mu + sigma * epsilon;
-                    
-                    // Execute action
-                    quad.omega_next[i] = rollouts[r].actions[step][i];
-                }
-                
-                // Get reward
-                rollouts[r].rewards[step] = compute_reward(&quad);
-                rollouts[r].length++;
-                t_control = 0.0;
-            }
+        // Physics update
+        if (t_physics >= DT_PHYSICS) {
+            update_quad(&quad, DT_PHYSICS);
+            t_physics = 0.0;
         }
         
-        // Compute discounted returns
-        double G = 0.0;
-        for(int i = rollouts[r].length-1; i >= 0; i--) {
-            G = rollouts[r].rewards[i] + GAMMA * G;
-            rollouts[r].returns[i] = G;
+        // Control update
+        if (t_control >= DT_CONTROL) {
+            get_quad_state(quad, rollout->states[rollout->length]);
+            memcpy(rollout->states[rollout->length] + 12, target, 3 * sizeof(double));
+            
+            forward(policy, rollout->states[rollout->length]);
+            
+            for(int i = 0; i < 4; i++) {
+                double mean = squash(policy->layers[policy->n_layers-1].x[i], MIN_MEAN, MAX_MEAN);
+                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
+
+                double u1 = (double)rand()/RAND_MAX;
+                double u2 = (double)rand()/RAND_MAX;
+                double noise = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+                
+                rollout->actions[rollout->length][i] = mean + std * noise;
+                quad.omega_next[i] = rollout->actions[rollout->length][i];
+            }
+            
+            rollout->rewards[rollout->length] = compute_reward(quad, target);
+            rollout->length++;
+            t_control = 0.0;
         }
+        
+        // Increment timers
+        t_physics += DT_PHYSICS;
+        t_control += DT_PHYSICS;
+    }
+    
+    // Compute returns
+    double G = 0.0;
+    for(int i = rollout->length-1; i >= 0; i--) {
+        rollout->rewards[i] = G = rollout->rewards[i] + GAMMA * G;
     }
 }
 
-// Policy gradient update using vanilla REINFORCE algorithm
-//
-// For a Gaussian policy π_θ(a|s) = N(μ_θ(s), σ_θ(s)²):
-// The policy gradient theorem states:
-// ∇_θ J(θ) = E_τ[Σ_t ∇_θ log π_θ(a_t|s_t) * R_t]
-//
-// For a Gaussian policy, the log probability is:
-// log π_θ(a|s) = -1/2 * ((a-μ)²/σ² + 2log(σ) + log(2π))
-//
-// Taking derivatives w.r.t. θ gives two terms:
-// ∇_θ log π_θ(a|s) = [
-//   ∇_θ μ * (a-μ)/σ² +           (mean gradient)
-//   ∇_θ σ * ((a-μ)²-σ²)/σ³       (std gradient)
-// ]
-void update_policy(Net* policy, Rollout* rollouts) {
-    double output_gradients[ACTION_DIM];
+// ∇J(θ) = E[∇_θ log π_θ(a|s) * R] ≈ 1/N Σ_t [∇_θ log π_θ(a_t|s_t) * R_t]
+// Where:
+// J(θ) - Policy objective function
+// π_θ(a|s) - Gaussian policy parameterized by θ (network weights)
+// R_t - Discounted return from time step t
+void update_policy(Net* policy, Rollout* rollout, int epoch, int epochs) {
+    double output_gradient[ACTION_DIM];
     
-    for(int r = 0; r < NUM_ROLLOUTS; r++) {
-        zero_gradients(policy);
-
-        for(int step = 0; step < rollouts[r].length; step++) {
-            // Forward pass to get policy parameters
-            forward_net(policy, rollouts[r].states[step]);
+    for(int t = 0; t < rollout->length; t++) {
+        forward(policy, rollout->states[t]);
+        
+        for(int i = 0; i < 4; i++) {
+            // Network outputs raw parameters before squashing
+            double mean_raw = policy->layers[policy->n_layers-1].x[i];
+            double std_raw = policy->layers[policy->n_layers-1].x[i + 4];
             
-            for(int i = 0; i < 4; i++) {
-                // Get raw network outputs before squashing
-                double mean_raw = policy->h[2][i];
-                double std_raw = policy->h[2][i + 4];
-                
-                // Apply squashing functions to get actual policy parameters:
-                // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
-                // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
-                double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
-                double std_val = squash(std_raw, MIN_STD, MAX_STD);
-                
-                // Action deviation from mean
-                double delta = rollouts[r].actions[step][i] - mean;
+            // Squashed parameters using tanh-based scaling
+            // μ = ((MAX+MIN)/2) + ((MAX-MIN)/2)*tanh(mean_raw)
+            // σ = ((MAX_STD+MIN_STD)/2) + ((MAX_STD-MIN_STD)/2)*tanh(std_raw)
+            double mean = squash(mean_raw, MIN_MEAN, MAX_MEAN);
+            double std_val = squash(std_raw, MIN_STD, MAX_STD);
+            
+            // Sampled action and its deviation from mean
+            double action = rollout->actions[t][i];
+            double delta = action - mean;
 
-                // Mean gradient term:
-                // ∂/∂θ log π = (a-μ)/σ² * ∂μ/∂θ
-                // Where ∂μ/∂θ includes the squashing function derivative
-                // The negative sign is because we're doing gradient ascent
-                output_gradients[i] = -(delta / (std_val * std_val)) * 
-                    dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
-                    rollouts[r].returns[step];
+            // Gradient for mean parameter:
+            // ∇_{μ_raw} log π = [ (a - μ)/σ² ] * dμ/dμ_raw
+            // Where:
+            // (a - μ)/σ² = derivative of log N(a; μ, σ²) w.r.t μ
+            // dμ/dμ_raw = derivative of squashing function (dsquash)
+            output_gradient[i] = -(delta / (std_val * std_val)) * 
+                dsquash(mean_raw, MIN_MEAN, MAX_MEAN) * 
+                rollout->rewards[t];
 
-                // Standard deviation gradient term:
-                // ∂/∂θ log π = ((a-μ)²-σ²)/σ³ * ∂σ/∂θ
-                // This comes from differentiating the log probability of a 
-                // Gaussian w.r.t. its standard deviation
-                // The ((a-μ)²-σ²) term acts as a natural baseline:
-                // - If (a-μ)² > σ², increase σ to make the policy more exploratory
-                // - If (a-μ)² < σ², decrease σ to make the policy more deterministic
-                output_gradients[i + 4] = -((delta * delta - std_val * std_val) / 
-                    (std_val * std_val * std_val)) * 
-                    dsquash(std_raw, MIN_STD, MAX_STD) * 
-                    rollouts[r].returns[step];
-            }
-            backward_net(policy, output_gradients);
+            // Gradient for standard deviation parameter:
+            // ∇_{σ_raw} log π = [ ( (a-μ)^2 - σ² ) / σ³ ] * dσ/dσ_raw
+            // Where:
+            // ( (a-μ)^2 - σ² ) / σ³ = derivative of log N(a; μ, σ²) w.r.t σ
+            // dσ/dσ_raw = derivative of squashing function (dsquash)
+            output_gradient[i + 4] = -((delta * delta - std_val * std_val) / 
+                (std_val * std_val * std_val)) * 
+                dsquash(std_raw, MIN_STD, MAX_STD) * 
+                rollout->rewards[t];
         }
-        update_net(policy);
+
+        // Backpropagate gradients through network
+        // Negative sign converts gradient ascent (policy improvement) 
+        // to gradient descent (standard optimization framework)
+        bwd(policy, output_gradient, epoch, epochs);
     }
 }
 
@@ -160,52 +211,50 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    uint32_t rng_state = time(NULL) ^ getpid();
-    Net* net = (Net*)calloc(1, sizeof(Net));
-    if(argc == 3){load_net(net, argv[2]);}else{create_net(net, 3e-5, &rng_state);}
-    Rollout* rollouts = (Rollout*)calloc(NUM_ROLLOUTS, sizeof(Rollout));
+    srand(time(NULL) ^ getpid());
+    Net* net = (argc == 3) ? load_net(argv[2]) : init_net(3, (int[]){STATE_DIM, 64, ACTION_DIM}, 5e-6);
+    
+    Rollout* rollouts[NUM_ROLLOUTS];
+    for(int r = 0; r < NUM_ROLLOUTS; r++) rollouts[r] = create_rollout();
 
-    int num_epochs = atoi(argv[1]);
+    int epochs = atoi(argv[1]);
     double best_return = -1e30;
     double theoretical_max = (1.0 - pow(GAMMA + 1e-15, MAX_STEPS))/(1.0 - (GAMMA + 1e-15));
     struct timeval start_time;
     gettimeofday(&start_time, NULL);
     
-    for(int epoch = 0; epoch < num_epochs; epoch++) {
-        // Collect rollouts
-        collect_rollouts(net, rollouts, &rng_state);
-
-        // Calculate mean and best return
-        double mean_return = 0.0;
+    for(int epoch = 0; epoch < epochs; epoch++) {
+        double sum_returns = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            mean_return += rollouts[r].returns[0];
+            collect_rollout(net, rollouts[r], epoch, epochs);
+            sum_returns += rollouts[r]->rewards[0];
         }
-        mean_return /= NUM_ROLLOUTS;
-        best_return = fmax(mean_return, best_return);
         
-        // Update policy
-        update_policy(net, rollouts);
+        for(int r = 0; r < NUM_ROLLOUTS; r++) {
+            update_policy(net, rollouts[r], epoch, epochs);
+        }
 
-        // Print progress
+        double mean_return = sum_returns / NUM_ROLLOUTS;
+        best_return = fmax(mean_return, best_return);
+
         struct timeval now;
         gettimeofday(&now, NULL);
-        double elapsed = (now.tv_sec - start_time.tv_sec) + 
-                        (now.tv_usec - start_time.tv_usec) / 1e6;
+        double elapsed = (now.tv_sec - start_time.tv_sec) + (now.tv_usec - start_time.tv_usec) / 1e6;
         
-        printf("Epoch %d/%d | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
-            epoch+1, num_epochs,
-            mean_return, theoretical_max, 
-            (mean_return/theoretical_max) * 100.0, best_return,
-            ((best_return/theoretical_max) * 100.0 / elapsed));
+        printf("epoch %d/%d | Distance: %.3f | Return: %.2f/%.2f (%.1f%%) | Best: %.2f | Rate: %.3f %%/s\n", 
+               epoch+1, epochs, 
+               MIN_DISTANCE + (MAX_DISTANCE - MIN_DISTANCE) * ((double)epoch / epochs),
+               mean_return, theoretical_max, 
+               (mean_return/theoretical_max) * 100.0, best_return,
+               ((best_return/theoretical_max) * 100.0 / elapsed));
     }
 
-    // Save final policy
     char filename[64];
     time_t current_time = time(NULL);
     strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&current_time));
     save_net(filename, net);
 
-    free(rollouts);
-    free(net);
+    for(int r = 0; r < NUM_ROLLOUTS; r++) free_rollout(rollouts[r]);
+    free_net(net);
     return 0;
 }

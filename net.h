@@ -1,18 +1,14 @@
 #ifndef NET_H
 #define NET_H
 
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
-
 #define DT_PHYSICS (1.0/1000.0)
 #define DT_CONTROL (1.0/60.0)
 #define DT_RENDER (1.0/24.0)
 
-#define STATE_DIM 6      // 3 accel + 3 gyro
-#define ACTION_DIM 8     // 4 means + 4 stds
-#define MAX_STEPS 256
-#define NUM_ROLLOUTS 1024
+#define STATE_DIM 15
+#define ACTION_DIM 8
+#define MAX_STEPS 1000
+#define NUM_ROLLOUTS 128
 
 #define GAMMA 0.999
 #define MAX_STD 3.0
@@ -21,302 +17,326 @@
 #define MAX_MEAN (OMEGA_MAX - 4.0 * MAX_STD)
 #define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
 
-#define HIDDEN_DIM 64
+#define MIN_DISTANCE 0.01
+#define MAX_DISTANCE 0.5
 
 typedef struct {
-    // Weight matrices
-    double W1[HIDDEN_DIM][STATE_DIM];
-    double W2[ACTION_DIM][HIDDEN_DIM];
-    
-    // Layer activations
-    double h[3][HIDDEN_DIM];  // h[0] is input, h[1] is hidden, h[2] is output
-    
-    // AdamW parameters
-    double m1[HIDDEN_DIM][STATE_DIM];  // First moment for W1
-    double m2[ACTION_DIM][HIDDEN_DIM];  // First moment for W2
-    double v1[HIDDEN_DIM][STATE_DIM];  // Second moment for W1
-    double v2[ACTION_DIM][HIDDEN_DIM];  // Second moment for W2
-    
-    // Gradient accumulation
-    double dW1[HIDDEN_DIM][STATE_DIM];
-    double dW2[ACTION_DIM][HIDDEN_DIM];
-    
-    // Hyperparameters
-    double lr;        // Learning rate
-    double beta1;     // First moment decay
-    double beta2;     // Second moment decay
-    double epsilon;   // Small constant for numerical stability
-    double weight_decay; // L2 regularization
-    unsigned long step;  // Number of optimization steps
+    double *x;      // layer values
+    double *dx;     // gradients
+    int size;       // size of this layer
+} Layer;
 
-    // State normalization parameters
-    double state_mean[STATE_DIM];
-    double state_var[STATE_DIM];
+typedef struct {
+    Layer *layers;  // array of layers
+    double **W;     // weights between layers
+    double **dW;    // weight gradients
+    double **b;     // biases for each layer
+    double **db;    // bias gradients
+    double **m_W;   // momentum for weights (AdamW)
+    double **v_W;   // velocity for weights (AdamW)
+    double **m_b;   // momentum for biases (AdamW)
+    double **v_b;   // velocity for biases (AdamW)
+    int n_layers;   // number of layers
+    int t;          // timestep for AdamW
+    double lr;      // initial learning rate
 } Net;
 
-__device__ __host__ double swish(double x) {
-    return x / (1.0 + exp(-x));
-}
-
-__device__ __host__ double swish_derivative(double x) {
-    double sigmoid = 1.0 / (1.0 + exp(-x));
-    return sigmoid + x * sigmoid * (1.0 - sigmoid);
-}
-
-__device__ __host__ double squash(double x, double min, double max) { 
-    return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
-}
-
-__device__ __host__ double dsquash(double x, double min, double max) { 
-    return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
-}
-
-__device__ __host__ void normalize_state(Net* net, const double* input, double* normalized) {
-    // Welford's online algorithm for streaming mean/variance calculation
-    // For each new value x:
-    // δ = x - μ₍ₙ₎          (distance from current mean)
-    // μ₍ₙ₊₁₎ = μ₍ₙ₎ + α*δ    (update mean, α=0.01 learning rate)
-    // σ²₍ₙ₊₁₎ = σ²₍ₙ₎ + α*(δ*(x - μ₍ₙ₊₁₎) - σ²₍ₙ₎)
-    for (int i = 0; i < STATE_DIM; i++) {
-        // Step 1: Calculate deviation from current mean
-        double delta = input[i] - net->state_mean[i];
-
-        // Step 2: Update running mean: μ₍ₙ₊₁₎ = μ₍ₙ₎ + α*(x - μ₍ₙ₎)
-        net->state_mean[i] += 0.01 * delta;
-
-        // Step 3: Update running variance using Welford's formula
-        // Note: δ*(x - μ₍ₙ₊₁₎) is the corrected sum of squares
-        net->state_var[i] += 0.01 * (delta * (input[i] - net->state_mean[i]) - net->state_var[i]);
+// Initialize network with given architecture
+Net* init_net(int n_layers, int* sizes, double lr) {
+    Net* net = (Net*)malloc(sizeof(Net));
+    net->n_layers = n_layers;
+    net->t = 1;  // Initialize timestep
+    net->lr = lr;  // Set initial learning rate
+    net->layers = (Layer*)malloc(n_layers * sizeof(Layer));
+    
+    // Initialize layers
+    for(int i = 0; i < n_layers; i++) {
+        net->layers[i].size = sizes[i];
+        net->layers[i].x = (double*)calloc(sizes[i], sizeof(double));
+        net->layers[i].dx = (double*)calloc(sizes[i], sizeof(double));
+    }
+    
+    // Initialize weights and biases
+    net->W = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->dW = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->b = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->db = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->m_W = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->v_W = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->m_b = (double**)malloc((n_layers-1) * sizeof(double*));
+    net->v_b = (double**)malloc((n_layers-1) * sizeof(double*));
+    
+    for(int i = 0; i < n_layers-1; i++) {
+        int rows = sizes[i+1];
+        int cols = sizes[i];
+        net->W[i] = (double*)malloc(rows * cols * sizeof(double));
+        net->dW[i] = (double*)calloc(rows * cols, sizeof(double));
+        net->b[i] = (double*)malloc(rows * sizeof(double));
+        net->db[i] = (double*)calloc(rows, sizeof(double));
+        net->m_W[i] = (double*)calloc(rows * cols, sizeof(double));
+        net->v_W[i] = (double*)calloc(rows * cols, sizeof(double));
+        net->m_b[i] = (double*)calloc(rows, sizeof(double));
+        net->v_b[i] = (double*)calloc(rows, sizeof(double));
         
-        // Step 4: Standardize to N(0,1): z = (x - μ)/σ
-        // Add ε=1e-8 for numerical stability when σ ≈ 0
-        normalized[i] = (input[i] - net->state_mean[i]) / 
-                       (sqrt(net->state_var[i] + 1e-8));
+        // Xavier initialization
+        double scale = sqrt(2.0 / (sizes[i] + sizes[i+1]));
+        for(int j = 0; j < rows * cols; j++)
+            net->W[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale;
+        for(int j = 0; j < rows; j++)
+            net->b[i][j] = 0;
     }
-}
-
-__device__ __host__ static inline uint32_t xorshift32(uint32_t* state) {
-    uint32_t x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    return x;
-}
-
-__device__ __host__ static inline double random_uniform(uint32_t* state) {
-    return (double)(xorshift32(state)) / UINT32_MAX;
-}
-
-__device__ __host__ Net* create_net(Net* net, double learning_rate, uint32_t* rng_state) {
-    if (!net) return NULL;
-
-    net->lr = learning_rate;
-    net->beta1 = 0.9;
-    net->beta2 = 0.999;
-    net->epsilon = 1e-8;
-    net->weight_decay = 0.01;
-    net->step = 0;
-
-    // Xavier initialization
-    double scale1 = sqrt(2.0 / (STATE_DIM + HIDDEN_DIM));
-    double scale2 = sqrt(2.0 / (HIDDEN_DIM + ACTION_DIM));
-
-    for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < STATE_DIM; j++) {
-            net->W1[i][j] = (random_uniform(rng_state) * 2 - 1) * scale1;
-            net->m1[i][j] = 0.0;
-            net->v1[i][j] = 0.0;
-        }
-    }
-
-    for (int i = 0; i < ACTION_DIM; i++) {
-        for (int j = 0; j < HIDDEN_DIM; j++) {
-            net->W2[i][j] = (random_uniform(rng_state) * 2 - 1) * scale2;
-            net->m2[i][j] = 0.0;
-            net->v2[i][j] = 0.0;
-        }
-    }
-
-    // Initialize normalization parameters
-    for (int i = 0; i < STATE_DIM; i++) {
-        net->state_mean[i] = 0.0;
-        net->state_var[i] = 1.0;
-    }
-
     return net;
 }
 
-__device__ __host__ void forward_net(Net* net, const double* input) {
-    // Normalize input
-    double normalized_input[STATE_DIM];
-    normalize_state(net, input, normalized_input);
+double gelu(double x) {
+    return 0.5 * x * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
+}
+
+double gelu_derivative(double x) {
+    double cdf = 0.5 * (1 + tanh(sqrt(2/M_PI) * (x + 0.044715 * pow(x, 3))));
+    double pdf = exp(-0.5 * x * x) / sqrt(2 * M_PI);
+    return cdf + x * pdf;
+}
+
+// Forward pass
+void forward(Net* net, double* input) {
+    // Set input layer
+    memcpy(net->layers[0].x, input, net->layers[0].size * sizeof(double));
     
-    // Copy normalized input
-    memcpy(net->h[0], normalized_input, STATE_DIM * sizeof(double));
-
-    // Hidden layer
-    memset(net->h[1], 0, HIDDEN_DIM * sizeof(double));
-    for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < STATE_DIM; j++) {
-            net->h[1][i] += net->W1[i][j] * net->h[0][j];
-        }
-        net->h[1][i] = swish(net->h[1][i]);
-    }
-
-    // Output layer
-    memset(net->h[2], 0, ACTION_DIM * sizeof(double));
-    for (int i = 0; i < ACTION_DIM; i++) {
-        for (int j = 0; j < HIDDEN_DIM; j++) {
-            net->h[2][i] += net->W2[i][j] * net->h[1][j];
+    // Forward propagation
+    for(int i = 0; i < net->n_layers-1; i++) {
+        Layer *curr = &net->layers[i];
+        Layer *next = &net->layers[i+1];
+        
+        // Reset next layer
+        memset(next->x, 0, next->size * sizeof(double));
+        
+        // Compute weighted sum
+        for(int j = 0; j < next->size; j++) {
+            for(int k = 0; k < curr->size; k++) {
+                next->x[j] += curr->x[k] * net->W[i][j * curr->size + k];
+            }
+            next->x[j] += net->b[i][j];
+            // Apply gelu activation (except for output layer)
+            if(i < net->n_layers-2) {
+                next->x[j] = gelu(next->x[j]);
+            }
         }
     }
 }
 
-__device__ __host__ void backward_net(Net* net, const double* output_gradients) {
-    double delta[HIDDEN_DIM];
-    
-    // Output layer gradients
-    for (int i = 0; i < ACTION_DIM; i++) {
-        for (int j = 0; j < HIDDEN_DIM; j++) {
-            net->dW2[i][j] = output_gradients[i] * net->h[1][j];
-        }
-    }
-
-    // Hidden layer gradients
-    memset(delta, 0, HIDDEN_DIM * sizeof(double));
-    for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < ACTION_DIM; j++) {
-            delta[i] += output_gradients[j] * net->W2[j][i];
-        }
-        delta[i] *= swish_derivative(net->h[1][i]);
-
-        for (int j = 0; j < STATE_DIM; j++) {
-            net->dW1[i][j] = delta[i] * net->h[0][j];
-        }
-    }
+double get_learning_rate(int epoch, int total_epochs, double initial_lr) {
+    return initial_lr * (1 + cos(M_PI * epoch / total_epochs)) / 2;
 }
 
-__device__ __host__ void zero_gradients(Net* net) {
-    memset(net->dW1, 0, sizeof(net->dW1));
-    memset(net->dW2, 0, sizeof(net->dW2));
+double get_weight_decay(int epoch, int total_epochs) {
+    return 0.01 * (1 - epoch / (double)total_epochs);
 }
 
-__device__ __host__ void update_net(Net* net) {
-    net->step++;
-    double beta1_t = pow(net->beta1, net->step);
-    double beta2_t = pow(net->beta2, net->step);
+double get_warmup_lr(int epoch, int warmup_epochs, double initial_lr) {
+    if (epoch < warmup_epochs) {
+        return initial_lr * epoch / warmup_epochs;
+    }
+    return initial_lr;
+}
+
+// AdamW update function with learning rate scheduling
+void adamw_update(Net* net, int epoch, int total_epochs) {
+    const double beta1 = 0.9;    // Momentum factor
+    const double beta2 = 0.999;  // Velocity factor
+    const double eps = 1e-8;     // Small constant for numerical stability
     
-    // Update W1
-    for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < STATE_DIM; j++) {
-            // Add L2 regularization gradient
-            net->dW1[i][j] += net->weight_decay * net->W1[i][j];
-            
-            // Update moments
-            net->m1[i][j] = net->beta1 * net->m1[i][j] + (1 - net->beta1) * net->dW1[i][j];
-            net->v1[i][j] = net->beta2 * net->v1[i][j] + (1 - net->beta2) * net->dW1[i][j] * net->dW1[i][j];
+    // Adaptive learning rate and weight decay scheduling
+    const int warmup_epochs = 5;
+    double current_lr = get_warmup_lr(epoch, warmup_epochs, net->lr);
+    current_lr = get_learning_rate(epoch, total_epochs, current_lr);
+    double weight_decay = get_weight_decay(epoch, total_epochs);
+    
+    for(int i = 0; i < net->n_layers-1; i++) {
+        Layer *curr = &net->layers[i];
+        Layer *next = &net->layers[i+1];
+        int w_size = next->size * curr->size;
+        
+        // Update weights
+        for(int j = 0; j < w_size; j++) {
+            // Momentum update
+            net->m_W[i][j] = beta1 * net->m_W[i][j] + (1 - beta1) * net->dW[i][j];
+            // Velocity update
+            net->v_W[i][j] = beta2 * net->v_W[i][j] + (1 - beta2) * net->dW[i][j] * net->dW[i][j];
             
             // Bias correction
-            double m_hat = net->m1[i][j] / (1 - beta1_t);
-            double v_hat = net->v1[i][j] / (1 - beta2_t);
+            double m_hat = net->m_W[i][j] / (1 - pow(beta1, net->t));
+            double v_hat = net->v_W[i][j] / (1 - pow(beta2, net->t));
             
-            // Update weights
-            net->W1[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
+            // AdamW update (including weight decay)
+            net->W[i][j] -= current_lr * (m_hat / (sqrt(v_hat) + eps) + 
+                                        weight_decay * net->W[i][j]);
+        }
+        
+        // Update biases
+        for(int j = 0; j < next->size; j++) {
+            net->m_b[i][j] = beta1 * net->m_b[i][j] + (1 - beta1) * net->db[i][j];
+            net->v_b[i][j] = beta2 * net->v_b[i][j] + (1 - beta2) * net->db[i][j] * net->db[i][j];
+            
+            double m_hat = net->m_b[i][j] / (1 - pow(beta1, net->t));
+            double v_hat = net->v_b[i][j] / (1 - pow(beta2, net->t));
+            
+            net->b[i][j] -= current_lr * m_hat / (sqrt(v_hat) + eps);
+        }
+    }
+    net->t++;  // Increment time step
+}
+
+// Backward pass
+void bwd(Net* net, double* output_gradient, int epoch, int total_epochs) {
+    int last = net->n_layers-1;
+    
+    // Set output layer gradient
+    memcpy(net->layers[last].dx, output_gradient, net->layers[last].size * sizeof(double));
+    
+    // Backward propagation
+    for(int i = last-1; i >= 0; i--) {
+        Layer *curr = &net->layers[i];
+        Layer *next = &net->layers[i+1];
+        
+        // Compute gradients for weights and biases
+        for(int j = 0; j < next->size; j++) {
+            for(int k = 0; k < curr->size; k++) {
+                net->dW[i][j * curr->size + k] = next->dx[j] * curr->x[k];
+            }
+            net->db[i][j] = next->dx[j];
+        }
+        
+        // Compute gradients for current layer
+        if(i > 0) {
+            memset(curr->dx, 0, curr->size * sizeof(double));
+            for(int j = 0; j < curr->size; j++) {
+                for(int k = 0; k < next->size; k++) {
+                    curr->dx[j] += next->dx[k] * net->W[i][k * curr->size + j];
+                }
+                curr->dx[j] *= gelu_derivative(curr->x[j]);
+            }
         }
     }
     
-    // Update W2
-    for (int i = 0; i < ACTION_DIM; i++) {
-        for (int j = 0; j < HIDDEN_DIM; j++) {
-            // Add L2 regularization gradient
-            net->dW2[i][j] += net->weight_decay * net->W2[i][j];
-            
-            // Update moments
-            net->m2[i][j] = net->beta1 * net->m2[i][j] + (1 - net->beta1) * net->dW2[i][j];
-            net->v2[i][j] = net->beta2 * net->v2[i][j] + (1 - net->beta2) * net->dW2[i][j] * net->dW2[i][j];
-            
-            // Bias correction
-            double m_hat = net->m2[i][j] / (1 - beta1_t);
-            double v_hat = net->v2[i][j] / (1 - beta2_t);
-            
-            // Update weights
-            net->W2[i][j] -= net->lr * m_hat / (sqrt(v_hat) + net->epsilon);
-        }
-    }
+    // Update weights and biases using AdamW
+    adamw_update(net, epoch, total_epochs);
 }
 
-bool save_net(const char* filename, const Net* net) {
-    FILE* file = fopen(filename, "wb");
-    if (!file) return false;
+void backward(Net* net, double* target, int epoch, int total_epochs) {
+    int last = net->n_layers-1;
+    double output_gradient[net->layers[last].size];
     
-    // Save hyperparameters
-    fwrite(&net->lr, sizeof(double), 1, file);
-    fwrite(&net->beta1, sizeof(double), 1, file);
-    fwrite(&net->beta2, sizeof(double), 1, file);
-    fwrite(&net->epsilon, sizeof(double), 1, file);
-    fwrite(&net->weight_decay, sizeof(double), 1, file);
-    fwrite(&net->step, sizeof(unsigned long), 1, file);
+    for(int i = 0; i < net->layers[last].size; i++) {
+        output_gradient[i] = net->layers[last].x[i] - target[i];
+    }
     
-    // Save weights and optimizer state
-    fwrite(net->W1, sizeof(net->W1), 1, file);
-    fwrite(net->W2, sizeof(net->W2), 1, file);
-    fwrite(net->m1, sizeof(net->m1), 1, file);
-    fwrite(net->m2, sizeof(net->m2), 1, file);
-    fwrite(net->v1, sizeof(net->v1), 1, file);
-    fwrite(net->v2, sizeof(net->v2), 1, file);
-    
-    // Save normalization parameters
-    fwrite(net->state_mean, sizeof(double), STATE_DIM, file);
-    fwrite(net->state_var, sizeof(double), STATE_DIM, file);
-    
-    fclose(file);
-    return true;
+    bwd(net, output_gradient, epoch, total_epochs);
 }
 
-Net* load_net(Net* net, const char* filename) {
-    FILE* file = fopen(filename, "rb");
-    if (!file) return NULL;
+void save_net(const char* f, Net* net) {
+    FILE* fp = fopen(f, "wb");
+    if(!fp) return;
     
-    if (!net) {
-        fclose(file);
-        return NULL;
+    // Save network architecture, learning rate, and timestep
+    fwrite(&net->n_layers, sizeof(int), 1, fp);
+    fwrite(&net->lr, sizeof(double), 1, fp);
+    fwrite(&net->t, sizeof(int), 1, fp);
+    
+    // Save layer sizes
+    for(int i = 0; i < net->n_layers; i++) {
+        fwrite(&net->layers[i].size, sizeof(int), 1, fp);
     }
     
-    // Load hyperparameters
-    if (fread(&net->lr, sizeof(double), 1, file) != 1 ||
-        fread(&net->beta1, sizeof(double), 1, file) != 1 ||
-        fread(&net->beta2, sizeof(double), 1, file) != 1 ||
-        fread(&net->epsilon, sizeof(double), 1, file) != 1 ||
-        fread(&net->weight_decay, sizeof(double), 1, file) != 1 ||
-        fread(&net->step, sizeof(unsigned long), 1, file) != 1) {
-        free(net);
-        fclose(file);
-        return NULL;
+    // Save weights, biases, and optimizer states
+    for(int i = 0; i < net->n_layers-1; i++) {
+        int rows = net->layers[i+1].size;
+        int cols = net->layers[i].size;
+        int w_size = rows * cols;
+        
+        // Save weights and related optimizer states
+        fwrite(net->W[i], sizeof(double), w_size, fp);
+        fwrite(net->m_W[i], sizeof(double), w_size, fp);
+        fwrite(net->v_W[i], sizeof(double), w_size, fp);
+        
+        // Save biases and related optimizer states
+        fwrite(net->b[i], sizeof(double), rows, fp);
+        fwrite(net->m_b[i], sizeof(double), rows, fp);
+        fwrite(net->v_b[i], sizeof(double), rows, fp);
     }
     
-    // Load weights and optimizer state
-    if (fread(net->W1, sizeof(net->W1), 1, file) != 1 ||
-        fread(net->W2, sizeof(net->W2), 1, file) != 1 ||
-        fread(net->m1, sizeof(net->m1), 1, file) != 1 ||
-        fread(net->m2, sizeof(net->m2), 1, file) != 1 ||
-        fread(net->v1, sizeof(net->v1), 1, file) != 1 ||
-        fread(net->v2, sizeof(net->v2), 1, file) != 1) {
-        free(net);
-        fclose(file);
-        return NULL;
+    fclose(fp);
+}
+
+Net* load_net(const char* f) {
+    FILE* fp = fopen(f, "rb");
+    if(!fp) return NULL;
+    
+    // Load network architecture and learning rate
+    int n_layers;
+    double learning_rate;
+    int timestep;
+    fread(&n_layers, sizeof(int), 1, fp);
+    fread(&learning_rate, sizeof(double), 1, fp);
+    fread(&timestep, sizeof(int), 1, fp);  // Load timestep
+    
+    // Load layer sizes
+    int* sizes = (int*)malloc(n_layers * sizeof(int));
+    for(int i = 0; i < n_layers; i++) {
+        fread(&sizes[i], sizeof(int), 1, fp);
     }
     
-    // Load normalization parameters
-    if (fread(net->state_mean, sizeof(double), STATE_DIM, file) != STATE_DIM ||
-        fread(net->state_var, sizeof(double), STATE_DIM, file) != STATE_DIM) {
-        free(net);
-        fclose(file);
-        return NULL;
+    // Initialize network
+    Net* net = init_net(n_layers, sizes, learning_rate);
+    net->t = timestep;  // Restore timestep
+    free(sizes);
+    
+    // Load weights, biases, and optimizer states
+    for(int i = 0; i < n_layers-1; i++) {
+        int rows = net->layers[i+1].size;
+        int cols = net->layers[i].size;
+        int w_size = rows * cols;
+        
+        // Load weights and related optimizer states
+        fread(net->W[i], sizeof(double), w_size, fp);
+        fread(net->m_W[i], sizeof(double), w_size, fp);
+        fread(net->v_W[i], sizeof(double), w_size, fp);
+        
+        // Load biases and related optimizer states
+        fread(net->b[i], sizeof(double), rows, fp);
+        fread(net->m_b[i], sizeof(double), rows, fp);
+        fread(net->v_b[i], sizeof(double), rows, fp);
     }
     
-    fclose(file);
+    fclose(fp);
     return net;
+}
+
+void free_net(Net* net) {
+    for(int i = 0; i < net->n_layers; i++) {
+        free(net->layers[i].x);
+        free(net->layers[i].dx);
+    }
+    for(int i = 0; i < net->n_layers-1; i++) {
+        free(net->W[i]);
+        free(net->dW[i]);
+        free(net->b[i]);
+        free(net->db[i]);
+        free(net->m_W[i]);
+        free(net->v_W[i]);
+        free(net->m_b[i]);
+        free(net->v_b[i]);
+    }
+    free(net->W);
+    free(net->dW);
+    free(net->b);
+    free(net->db);
+    free(net->m_W);
+    free(net->v_W);
+    free(net->m_b);
+    free(net->v_b);
+    free(net->layers);
+    free(net);
 }
 
 #endif // NET_H
