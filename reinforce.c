@@ -47,66 +47,68 @@ double compute_reward(const Quad* q) {
     return exp(-1.0 * distance);
 }
 
-void collect_rollout(Net* policy, Rollout* rollout) {
-    // Initialize environment (quadcopter) with starting state s_0
-    Quad quad = create_quad(0.0, 1.0, 0.0);
-    double t_control = 0.0;
-    rollout->length = 0;
+void collect_rollouts(Net* policy, Rollout* rollouts) {
+    for(int r = 0; r < NUM_ROLLOUTS; r++) {
+        // Initialize environment (quadcopter) with starting state s_0
+        Quad quad = create_quad(0.0, 1.0, 0.0);
+        double t_control = 0.0;
+        rollouts[r].length = 0;
 
-    while(rollout->length < MAX_STEPS) {
-        // Terminal condition: quadcopter too far from goal
-        if (sqrt(
-            pow(quad.linear_position_W[0] - 1.0, 2) +
-            pow(quad.linear_position_W[1] - 2.0, 2) +
-            pow(quad.linear_position_W[2] - 1.0, 2)) > 4.0) {
-            break;
-        }
-
-        // Physics simulation steps
-        update_quad(&quad, DT_PHYSICS);
-        t_control += DT_PHYSICS;
-        
-        // Control at lower frequency
-        if (t_control >= DT_CONTROL) {
-            int step = rollout->length;
-            
-            // Get state s_t (sensor readings)
-            memcpy(rollout->states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
-            memcpy(rollout->states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
-
-            // Forward pass through policy network
-            forward_net(policy, rollout->states[step]);
-            
-            // Sample actions from Gaussian policy
-            for(int i = 0; i < 4; i++) {
-                // Get policy parameters
-                double mu = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
-                double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
-
-                // Sample from N(0,1) using Box-Muller transform
-                double u1 = (double)rand()/RAND_MAX;
-                double u2 = (double)rand()/RAND_MAX;
-                double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                
-                // Transform to N(μ, σ²): a = μ + σε
-                rollout->actions[step][i] = mu + sigma * epsilon;
-                
-                // Execute action
-                quad.omega_next[i] = rollout->actions[step][i];
+        while(rollouts[r].length < MAX_STEPS) {
+            // Terminal condition: quadcopter too far from goal
+            if (sqrt(
+                pow(quad.linear_position_W[0] - 1.0, 2) +
+                pow(quad.linear_position_W[1] - 2.0, 2) +
+                pow(quad.linear_position_W[2] - 1.0, 2)) > 4.0) {
+                break;
             }
+
+            // Physics simulation steps
+            update_quad(&quad, DT_PHYSICS);
+            t_control += DT_PHYSICS;
             
-            // Get reward
-            rollout->rewards[step] = compute_reward(&quad);
-            rollout->length++;
-            t_control = 0.0;
+            // Control at lower frequency
+            if (t_control >= DT_CONTROL) {
+                int step = rollouts[r].length;
+                
+                // Get state s_t (sensor readings)
+                memcpy(rollouts[r].states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
+                memcpy(rollouts[r].states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+
+                // Forward pass through policy network
+                forward_net(policy, rollouts[r].states[step]);
+                
+                // Sample actions from Gaussian policy
+                for(int i = 0; i < 4; i++) {
+                    // Get policy parameters
+                    double mu = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                    double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
+
+                    // Sample from N(0,1) using Box-Muller transform
+                    double u1 = (double)rand()/RAND_MAX;
+                    double u2 = (double)rand()/RAND_MAX;
+                    double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+                    
+                    // Transform to N(μ, σ²): a = μ + σε
+                    rollouts[r].actions[step][i] = mu + sigma * epsilon;
+                    
+                    // Execute action
+                    quad.omega_next[i] = rollouts[r].actions[step][i];
+                }
+                
+                // Get reward
+                rollouts[r].rewards[step] = compute_reward(&quad);
+                rollouts[r].length++;
+                t_control = 0.0;
+            }
         }
-    }
-    
-    // Compute discounted returns
-    double G = 0.0;
-    for(int i = rollout->length-1; i >= 0; i--) {
-        G = rollout->rewards[i] + GAMMA * G;
-        rollout->returns[i] = G;
+        
+        // Compute discounted returns
+        double G = 0.0;
+        for(int i = rollouts[r].length-1; i >= 0; i--) {
+            G = rollouts[r].rewards[i] + GAMMA * G;
+            rollouts[r].returns[i] = G;
+        }
     }
 }
 
@@ -217,20 +219,18 @@ int main(int argc, char** argv) {
     
     for(int epoch = 0; epoch < num_epochs; epoch++) {
         // Collect rollouts
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            collect_rollout(net, &rollouts[r]);
-        }
+        collect_rollouts(net, rollouts);
 
-        // Calculate mean return
+        // Calculate mean and best return
         double mean_return = 0.0;
         for(int r = 0; r < NUM_ROLLOUTS; r++) {
             mean_return += rollouts[r].returns[0];
         }
         mean_return /= NUM_ROLLOUTS;
+        best_return = fmax(mean_return, best_return);
         
         // Update policy
         update_policy(net, rollouts);
-        best_return = fmax(mean_return, best_return);
 
         // Print progress
         struct timeval now;
