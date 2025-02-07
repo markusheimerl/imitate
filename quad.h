@@ -148,15 +148,6 @@ Quad create_quad(double x, double y, double z) {
     return q;
 }
 
-void get_quad_state(Quad q, double* state) {
-    memcpy(state, q.linear_position_W, 3 * sizeof(double));
-    memcpy(state + 3, q.linear_velocity_W, 3 * sizeof(double));
-    memcpy(state + 6, q.angular_velocity_B, 3 * sizeof(double));
-    state[9] = q.R_W_B[0];
-    state[10] = q.R_W_B[4];
-    state[11] = q.R_W_B[8];
-}
-
 void update_quad(Quad* q, double dt) {
     // 1. Declare arrays and calculate rotor forces/moments
     double f[4], m[4];
