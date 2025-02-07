@@ -25,88 +25,68 @@ double compute_reward(const Quad* q) {
 }
 
 void collect_rollouts(Net* policy, Rollout* rollouts) {
-    // Create an array of quadcopter simulations (one per rollout)
-    Quad* quads = (Quad*)calloc(NUM_ROLLOUTS, sizeof(Quad));
-    double* t_controls = (double*)calloc(NUM_ROLLOUTS, sizeof(double));
-    // Active flags indicate if the rollout is still running.
-    bool* active = (bool*)calloc(NUM_ROLLOUTS, sizeof(bool));
-    
-    for (int r = 0; r < NUM_ROLLOUTS; r++) {
-        quads[r] = create_quad(0.0, 1.0, 0.0);
-        t_controls[r] = 0.0;
+    for(int r = 0; r < NUM_ROLLOUTS; r++) {
+        // Initialize environment (quadcopter) with starting state s_0
+        Quad quad = create_quad(0.0, 1.0, 0.0);
+        double t_control = 0.0;
         rollouts[r].length = 0;
-        active[r] = true;
-    }
-    
-    // Outer loop over control steps
-    for (int step = 0; step < MAX_STEPS; step++) {
-        // Inner loop over rollouts
-        for (int r = 0; r < NUM_ROLLOUTS; r++) {
-            // Skip a rollout if it has already terminated.
-            if (!active[r]) continue;
+
+        while(rollouts[r].length < MAX_STEPS) {
+            // Terminal condition: quadcopter too far from goal
+            if (sqrt(
+                pow(quad.linear_position_W[0] - 1.0, 2) +
+                pow(quad.linear_position_W[1] - 2.0, 2) +
+                pow(quad.linear_position_W[2] - 1.0, 2)) > 4.0) {
+                break;
+            }
+
+            // Physics simulation steps
+            update_quad(&quad, DT_PHYSICS);
+            t_control += DT_PHYSICS;
             
-            // Run the physics simulation until it's time for a control update.
-            while (t_controls[r] < DT_CONTROL) {
-                // Terminal condition: if quad gets too far from goal, mark rollout inactive.
-                double dist = sqrt(
-                    pow(quads[r].linear_position_W[0] - 1.0, 2) +
-                    pow(quads[r].linear_position_W[1] - 2.0, 2) +
-                    pow(quads[r].linear_position_W[2] - 1.0, 2)
-                );
-                if (dist > 4.0) {
-                    active[r] = false;
-                    break;
+            // Control at lower frequency
+            if (t_control >= DT_CONTROL) {
+                int step = rollouts[r].length;
+                
+                // Get state s_t (sensor readings)
+                memcpy(rollouts[r].states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
+                memcpy(rollouts[r].states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+
+                // Forward pass through policy network
+                forward_net(policy, rollouts[r].states[step]);
+                
+                // Sample actions from Gaussian policy
+                for(int i = 0; i < 4; i++) {
+                    // Get policy parameters
+                    double mu = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
+                    double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
+
+                    // Sample from N(0,1) using Box-Muller transform
+                    double u1 = (double)rand()/RAND_MAX;
+                    double u2 = (double)rand()/RAND_MAX;
+                    double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+                    
+                    // Transform to N(μ, σ²): a = μ + σε
+                    rollouts[r].actions[step][i] = mu + sigma * epsilon;
+                    
+                    // Execute action
+                    quad.omega_next[i] = rollouts[r].actions[step][i];
                 }
-                update_quad(&quads[r], DT_PHYSICS);
-                t_controls[r] += DT_PHYSICS;
-            }
-            
-            // If the rollout ended during the simulation loop, skip recording this step.
-            if (!active[r]) continue;
-            
-            // Save sensor readings into the rollout for control step "step"
-            memcpy(rollouts[r].states[step], quads[r].linear_acceleration_B_s, 3 * sizeof(double));
-            memcpy(rollouts[r].states[step] + 3, quads[r].angular_velocity_B_s, 3 * sizeof(double));
-            
-            // Run the policy network to get control commands.
-            forward_net(policy, rollouts[r].states[step]);
-            for (int i = 0; i < 4; i++) {
-                double mu = squash(policy->h[2][i], MIN_MEAN, MAX_MEAN);
-                double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
                 
-                // Sample action using the Box-Muller transform.
-                double u1 = (double)rand()/RAND_MAX;
-                double u2 = (double)rand()/RAND_MAX;
-                double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-                rollouts[r].actions[step][i] = mu + sigma * epsilon;
-                
-                // Set next rotor speed.
-                quads[r].omega_next[i] = rollouts[r].actions[step][i];
+                // Get reward
+                rollouts[r].rewards[step] = compute_reward(&quad);
+                rollouts[r].length++;
+                t_control = 0.0;
             }
-            
-            // Record reward.
-            rollouts[r].rewards[step] = compute_reward(&quads[r]);
-            
-            // Increment the rollout's length.
-            rollouts[r].length = step + 1;
-            
-            // Reset the control timer for this rollout.
-            t_controls[r] = 0.0;
         }
-    }
-    
-    // Postprocess: compute discounted returns for each rollout.
-    for (int r = 0; r < NUM_ROLLOUTS; r++) {
+        
+        // Compute discounted returns
         double G = 0.0;
-        for (int i = rollouts[r].length - 1; i >= 0; i--) {
+        for(int i = rollouts[r].length-1; i >= 0; i--) {
             G = rollouts[r].rewards[i] + GAMMA * G;
             rollouts[r].returns[i] = G;
         }
     }
-    
-    free(quads);
-    free(t_controls);
-    free(active);
 }
 
 // Policy gradient update using vanilla REINFORCE algorithm
