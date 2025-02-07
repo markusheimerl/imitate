@@ -97,8 +97,8 @@ void orthonormalize_rotation_matrix(double* R) {
 // Constants
 #define K_F 0.0004905
 #define K_M 0.00004905
-#define L 0.25
-#define L_SQRT2 (L / sqrtf(2.0))
+#define LEN 0.25
+#define L_SQRT2 (LEN / sqrtf(2.0))
 #define GRAVITY 9.81
 #define MASS 0.5
 #define OMEGA_MIN 30.0
@@ -150,7 +150,7 @@ void update_quad(Quad* q, double dt) {
     double tau_B[3] = {0, m[0] - m[1] + m[2] - m[3], 0};
 
     // 4. Add thrust torques
-    const double rotor_positions[4][3] = {{-L, 0,  L}, { L, 0,  L}, { L, 0, -L}, {-L, 0, -L}};
+    const double rotor_positions[4][3] = {{-LEN, 0,  LEN}, {LEN, 0,  LEN}, {LEN, 0, -LEN}, {-LEN, 0, -LEN}};
     for(int i = 0; i < 4; i++) {
         double tau_thrust[3];
         crossVec3f(rotor_positions[i], (const double[3]){0, f[i], 0}, tau_thrust);
