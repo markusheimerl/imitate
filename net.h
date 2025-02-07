@@ -5,27 +5,40 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define INPUT_DIM 6 // STATE_DIM
+#define DT_PHYSICS (1.0/1000.0)
+#define DT_CONTROL (1.0/60.0)
+
+#define STATE_DIM 6      // 3 accel + 3 gyro
+#define ACTION_DIM 8     // 4 means + 4 stds
+#define MAX_STEPS 256
+#define NUM_ROLLOUTS 1024
+
+#define GAMMA 0.999
+#define MAX_STD 3.0
+#define MIN_STD 1e-5
+
+#define MAX_MEAN (OMEGA_MAX - 4.0 * MAX_STD)
+#define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
+
 #define HIDDEN_DIM 64
-#define OUTPUT_DIM 8 // ACTION_DIM
 
 typedef struct {
     // Weight matrices
-    double W1[HIDDEN_DIM][INPUT_DIM];
-    double W2[OUTPUT_DIM][HIDDEN_DIM];
+    double W1[HIDDEN_DIM][STATE_DIM];
+    double W2[ACTION_DIM][HIDDEN_DIM];
     
     // Layer activations
     double h[3][HIDDEN_DIM];  // h[0] is input, h[1] is hidden, h[2] is output
     
     // AdamW parameters
-    double m1[HIDDEN_DIM][INPUT_DIM];  // First moment for W1
-    double m2[OUTPUT_DIM][HIDDEN_DIM];  // First moment for W2
-    double v1[HIDDEN_DIM][INPUT_DIM];  // Second moment for W1
-    double v2[OUTPUT_DIM][HIDDEN_DIM];  // Second moment for W2
+    double m1[HIDDEN_DIM][STATE_DIM];  // First moment for W1
+    double m2[ACTION_DIM][HIDDEN_DIM];  // First moment for W2
+    double v1[HIDDEN_DIM][STATE_DIM];  // Second moment for W1
+    double v2[ACTION_DIM][HIDDEN_DIM];  // Second moment for W2
     
     // Gradient accumulation
-    double dW1[HIDDEN_DIM][INPUT_DIM];
-    double dW2[OUTPUT_DIM][HIDDEN_DIM];
+    double dW1[HIDDEN_DIM][STATE_DIM];
+    double dW2[ACTION_DIM][HIDDEN_DIM];
     
     // Hyperparameters
     double lr;        // Learning rate
@@ -36,8 +49,8 @@ typedef struct {
     unsigned long step;  // Number of optimization steps
 
     // State normalization parameters
-    double state_mean[INPUT_DIM];
-    double state_var[INPUT_DIM];
+    double state_mean[STATE_DIM];
+    double state_var[STATE_DIM];
 } Net;
 
 __device__ __host__ double swish(double x) {
@@ -55,7 +68,7 @@ void normalize_state(Net* net, const double* input, double* normalized) {
     // δ = x - μ₍ₙ₎          (distance from current mean)
     // μ₍ₙ₊₁₎ = μ₍ₙ₎ + α*δ    (update mean, α=0.01 learning rate)
     // σ²₍ₙ₊₁₎ = σ²₍ₙ₎ + α*(δ*(x - μ₍ₙ₊₁₎) - σ²₍ₙ₎)
-    for (int i = 0; i < INPUT_DIM; i++) {
+    for (int i = 0; i < STATE_DIM; i++) {
         // Step 1: Calculate deviation from current mean
         double delta = input[i] - net->state_mean[i];
 
@@ -86,18 +99,18 @@ Net* create_net(double learning_rate) {
     net->step = 0;
 
     // Xavier initialization
-    double scale1 = sqrt(2.0 / (INPUT_DIM + HIDDEN_DIM));
-    double scale2 = sqrt(2.0 / (HIDDEN_DIM + OUTPUT_DIM));
+    double scale1 = sqrt(2.0 / (STATE_DIM + HIDDEN_DIM));
+    double scale2 = sqrt(2.0 / (HIDDEN_DIM + ACTION_DIM));
 
     for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < INPUT_DIM; j++) {
+        for (int j = 0; j < STATE_DIM; j++) {
             net->W1[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale1;
             net->m1[i][j] = 0.0;
             net->v1[i][j] = 0.0;
         }
     }
 
-    for (int i = 0; i < OUTPUT_DIM; i++) {
+    for (int i = 0; i < ACTION_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
             net->W2[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale2;
             net->m2[i][j] = 0.0;
@@ -106,7 +119,7 @@ Net* create_net(double learning_rate) {
     }
 
     // Initialize normalization parameters
-    for (int i = 0; i < INPUT_DIM; i++) {
+    for (int i = 0; i < STATE_DIM; i++) {
         net->state_mean[i] = 0.0;
         net->state_var[i] = 1.0;
     }
@@ -116,24 +129,24 @@ Net* create_net(double learning_rate) {
 
 void forward_net(Net* net, const double* input) {
     // Normalize input
-    double normalized_input[INPUT_DIM];
+    double normalized_input[STATE_DIM];
     normalize_state(net, input, normalized_input);
     
     // Copy normalized input
-    memcpy(net->h[0], normalized_input, INPUT_DIM * sizeof(double));
+    memcpy(net->h[0], normalized_input, STATE_DIM * sizeof(double));
 
     // Hidden layer
     memset(net->h[1], 0, HIDDEN_DIM * sizeof(double));
     for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < INPUT_DIM; j++) {
+        for (int j = 0; j < STATE_DIM; j++) {
             net->h[1][i] += net->W1[i][j] * net->h[0][j];
         }
         net->h[1][i] = swish(net->h[1][i]);
     }
 
     // Output layer
-    memset(net->h[2], 0, OUTPUT_DIM * sizeof(double));
-    for (int i = 0; i < OUTPUT_DIM; i++) {
+    memset(net->h[2], 0, ACTION_DIM * sizeof(double));
+    for (int i = 0; i < ACTION_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
             net->h[2][i] += net->W2[i][j] * net->h[1][j];
         }
@@ -144,7 +157,7 @@ void backward_net(Net* net, const double* output_gradients) {
     double delta[HIDDEN_DIM];
     
     // Output layer gradients
-    for (int i = 0; i < OUTPUT_DIM; i++) {
+    for (int i = 0; i < ACTION_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
             net->dW2[i][j] = output_gradients[i] * net->h[1][j];
         }
@@ -153,12 +166,12 @@ void backward_net(Net* net, const double* output_gradients) {
     // Hidden layer gradients
     memset(delta, 0, HIDDEN_DIM * sizeof(double));
     for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < OUTPUT_DIM; j++) {
+        for (int j = 0; j < ACTION_DIM; j++) {
             delta[i] += output_gradients[j] * net->W2[j][i];
         }
         delta[i] *= swish_derivative(net->h[1][i]);
 
-        for (int j = 0; j < INPUT_DIM; j++) {
+        for (int j = 0; j < STATE_DIM; j++) {
             net->dW1[i][j] = delta[i] * net->h[0][j];
         }
     }
@@ -176,7 +189,7 @@ void update_net(Net* net) {
     
     // Update W1
     for (int i = 0; i < HIDDEN_DIM; i++) {
-        for (int j = 0; j < INPUT_DIM; j++) {
+        for (int j = 0; j < STATE_DIM; j++) {
             // Add L2 regularization gradient
             net->dW1[i][j] += net->weight_decay * net->W1[i][j];
             
@@ -194,7 +207,7 @@ void update_net(Net* net) {
     }
     
     // Update W2
-    for (int i = 0; i < OUTPUT_DIM; i++) {
+    for (int i = 0; i < ACTION_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
             // Add L2 regularization gradient
             net->dW2[i][j] += net->weight_decay * net->W2[i][j];
@@ -234,8 +247,8 @@ bool save_net(const char* filename, const Net* net) {
     fwrite(net->v2, sizeof(net->v2), 1, file);
     
     // Save normalization parameters
-    fwrite(net->state_mean, sizeof(double), INPUT_DIM, file);
-    fwrite(net->state_var, sizeof(double), INPUT_DIM, file);
+    fwrite(net->state_mean, sizeof(double), STATE_DIM, file);
+    fwrite(net->state_var, sizeof(double), STATE_DIM, file);
     
     fclose(file);
     return true;
@@ -276,8 +289,8 @@ Net* load_net(const char* filename) {
     }
     
     // Load normalization parameters
-    if (fread(net->state_mean, sizeof(double), INPUT_DIM, file) != INPUT_DIM ||
-        fread(net->state_var, sizeof(double), INPUT_DIM, file) != INPUT_DIM) {
+    if (fread(net->state_mean, sizeof(double), STATE_DIM, file) != STATE_DIM ||
+        fread(net->state_var, sizeof(double), STATE_DIM, file) != STATE_DIM) {
         free(net);
         fclose(file);
         return NULL;

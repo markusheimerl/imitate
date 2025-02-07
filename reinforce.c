@@ -7,21 +7,6 @@
 #include "net.h"
 #include "quad.h"
 
-#define DT_PHYSICS (1.0/1000.0)
-#define DT_CONTROL (1.0/60.0)
-
-#define STATE_DIM 6      // 3 accel + 3 gyro
-#define ACTION_DIM 8     // 4 means + 4 stds
-#define MAX_STEPS 256
-#define NUM_ROLLOUTS 1024
-
-#define GAMMA 0.999
-#define MAX_STD 3.0
-#define MIN_STD 1e-5
-
-#define MAX_MEAN (OMEGA_MAX - 4.0 * MAX_STD)
-#define MIN_MEAN (OMEGA_MIN + 4.0 * MAX_STD)
-
 typedef struct {
     double states[MAX_STEPS][STATE_DIM];
     double actions[MAX_STEPS][ACTION_DIM];
@@ -180,11 +165,11 @@ void update_policy(Net* policy, Rollout* rollouts) {
         // Monitor gradients
         double grad_norm = 0.0;
         for (int i = 0; i < HIDDEN_DIM; i++) {
-            for (int j = 0; j < INPUT_DIM; j++) {
+            for (int j = 0; j < STATE_DIM; j++) {
                 grad_norm += policy->dW1[i][j] * policy->dW1[i][j];
             }
         }
-        for (int i = 0; i < OUTPUT_DIM; i++) {
+        for (int i = 0; i < ACTION_DIM; i++) {
             for (int j = 0; j < HIDDEN_DIM; j++) {
                 grad_norm += policy->dW2[i][j] * policy->dW2[i][j];
             }
