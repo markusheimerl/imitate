@@ -53,17 +53,9 @@ int main(int argc, char** argv) {
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, ((int)(DT_CONTROL * MAX_STEPS * 1000)), ((int)(1.0 / DT_RENDER)), 0.4f);
     
-    // Set up camera to view both start and target positions
-    Vec3 center = {
-        (float)(start[0] + target[0]) / 2.0f,
-        (float)(start[1] + target[1]) / 2.0f,
-        (float)(start[2] + target[2]) / 2.0f
-    };
-    
-    float max_dist = (float)MAX_DISTANCE;
     set_scene_camera(&scene,
-        (Vec3){center.x - max_dist*1.5f, center.y + max_dist, center.z - max_dist*1.5f},
-        center,
+        (Vec3){-3.0f, 3.0f, -3.0f},
+        (Vec3){0.0f, 0.0f, 0.0f},
         (Vec3){0.0f, 1.0f, 0.0f},
         60.0f
     );
