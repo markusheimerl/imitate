@@ -11,7 +11,10 @@ visualize.out: %.out: %.c
 	$(CC) $(CFLAGS) $(CUDAFLAGS) -Iraytracer $< $(LDFLAGS) -lwebp -lwebpmux -o $@
 
 run: reinforce.out
-	@time ./reinforce.out 25
+	@time ./reinforce.out 100
+
+viz: visualize.out
+	@time ./visualize.out *_policy.bin
 
 clean:
 	rm -f *.out *_policy.bin *_flight.webp

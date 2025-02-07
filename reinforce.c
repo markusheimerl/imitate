@@ -49,9 +49,9 @@ void collect_rollouts(Net* policy, Rollout* rollouts, uint32_t* rng_state) {
             if (t_control >= DT_CONTROL) {
                 int step = rollouts[r].length;
                 
-                // Get state s_t (sensor readings)
-                memcpy(rollouts[r].states[step], quad.linear_acceleration_B_s, 3 * sizeof(double));
-                memcpy(rollouts[r].states[step] + 3, quad.angular_velocity_B_s, 3 * sizeof(double));
+                // Get state s_t
+                memcpy(rollouts[r].states[step], quad.linear_position_W, 3 * sizeof(double));
+                memcpy(rollouts[r].states[step] + 3, quad.angular_velocity_B, 3 * sizeof(double));
 
                 // Forward pass through policy network
                 forward_net(policy, rollouts[r].states[step]);
