@@ -138,7 +138,6 @@ void update_quad(Quad* q, double dt) {
     // 1. Declare arrays and calculate rotor forces/moments
     double f[4], m[4];
     for(int i = 0; i < 4; i++) {
-        q->omega[i] = fmax(fmin(q->omega[i], OMEGA_MAX), OMEGA_MIN);
         double omega_sq = q->omega[i] * fabs(q->omega[i]);
         f[i] = K_F * omega_sq;
         m[i] = K_M * omega_sq;
