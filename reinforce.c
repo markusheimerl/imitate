@@ -15,7 +15,7 @@ typedef struct {
     int length;
 } Rollout;
 
-double compute_reward(const Quad* q) {
+__device__ __host__ double compute_reward(const Quad* q) {
     double distance = sqrt(
         pow(q->linear_position_W[0] - 1.0, 2) +
         pow(q->linear_position_W[1] - 2.0, 2) +

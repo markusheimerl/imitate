@@ -4,70 +4,70 @@
 #include <math.h>
 
 // 3x3 Matrix Operations
-void multMat3f(const double* a, const double* b, double* result) {
+__device__ __host__ void multMat3f(const double* a, const double* b, double* result) {
     for(int i = 0; i < 3; i++)
         for(int j = 0; j < 3; j++)
             result[i*3 + j] = a[i*3]*b[j] + a[i*3+1]*b[j+3] + a[i*3+2]*b[j+6];
 }
 
-void multMatVec3f(const double* m, const double* v, double* result) {
+__device__ __host__ void multMatVec3f(const double* m, const double* v, double* result) {
     result[0] = m[0]*v[0] + m[1]*v[1] + m[2]*v[2];
     result[1] = m[3]*v[0] + m[4]*v[1] + m[5]*v[2];
     result[2] = m[6]*v[0] + m[7]*v[1] + m[8]*v[2];
 }
 
-void vecToDiagMat3f(const double* v, double* result) {
+__device__ __host__ void vecToDiagMat3f(const double* v, double* result) {
     for(int i = 0; i < 9; i++) result[i] = 0;
     result[0] = v[0];
     result[4] = v[1];
     result[8] = v[2];
 }
 
-void transpMat3f(const double* m, double* result) {
+__device__ __host__ void transpMat3f(const double* m, double* result) {
     result[0] = m[0]; result[1] = m[3]; result[2] = m[6];
     result[3] = m[1]; result[4] = m[4]; result[5] = m[7];
     result[6] = m[2]; result[7] = m[5]; result[8] = m[8];
 }
 
-void so3hat(const double* v, double* result) {
+__device__ __host__ void so3hat(const double* v, double* result) {
     result[0]=0; result[1]=-v[2]; result[2]=v[1];
     result[3]=v[2]; result[4]=0; result[5]=-v[0];
     result[6]=-v[1]; result[7]=v[0]; result[8]=0;
 }
 
 // Matrix arithmetic
-void addMat3f(const double* a, const double* b, double* result) {
+__device__ __host__ void addMat3f(const double* a, const double* b, double* result) {
     for(int i = 0; i < 9; i++) result[i] = a[i] + b[i];
 }
 
-void multScalMat3f(double s, const double* m, double* result) {
+__device__ __host__ void multScalMat3f(double s, const double* m, double* result) {
     for(int i = 0; i < 9; i++) result[i] = s * m[i];
 }
 
 // Vector Operations
-void crossVec3f(const double* a, const double* b, double* result) {
+__device__ __host__ void crossVec3f(const double* a, const double* b, double* result) {
     result[0] = a[1]*b[2] - a[2]*b[1];
     result[1] = a[2]*b[0] - a[0]*b[2];
     result[2] = a[0]*b[1] - a[1]*b[0];
 }
 
-void multScalVec3f(double s, const double* v, double* result) {
+__device__ __host__ void multScalVec3f(double s, const double* v, double* result) {
     for(int i = 0; i < 3; i++) result[i] = s * v[i];
 }
 
-void addVec3f(const double* a, const double* b, double* result) {
+__device__ __host__ void addVec3f(const double* a, const double* b, double* result) {
     for(int i = 0; i < 3; i++) result[i] = a[i] + b[i];
 }
 
-void subVec3f(const double* a, const double* b, double* result) {
+__device__ __host__ void subVec3f(const double* a, const double* b, double* result) {
     for(int i = 0; i < 3; i++) result[i] = a[i] - b[i];
 }
 
-double dotVec3f(const double* a, const double* b) {
+__device__ __host__ double dotVec3f(const double* a, const double* b) {
     return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
 
-void orthonormalize_rotation_matrix(double* R) {
+__device__ __host__ void orthonormalize_rotation_matrix(double* R) {
     // Extract columns into x, y, z vectors
     double x[3] = {R[0], R[1], R[2]};
     double y[3] = {R[3], R[4], R[5]};
@@ -118,7 +118,7 @@ typedef struct {
     double angular_velocity_B_s[3]; // Gyroscope
 } Quad;
 
-Quad create_quad(double x, double y, double z) {
+__device__ __host__ Quad create_quad(double x, double y, double z) {
     Quad q;
     memcpy(q.omega, (const double[4]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
     memcpy(q.linear_position_W, (const double[3]){x, y, z}, 3 * sizeof(double));
@@ -133,7 +133,7 @@ Quad create_quad(double x, double y, double z) {
     return q;
 }
 
-void update_quad(Quad* q, double dt) {
+__device__ __host__ void update_quad(Quad* q, double dt) {
     // 1. Declare arrays and calculate rotor forces/moments
     double f[4], m[4];
     for(int i = 0; i < 4; i++) {

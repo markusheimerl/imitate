@@ -70,7 +70,7 @@ __device__ __host__ double dsquash(double x, double min, double max) {
     return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
 }
 
-void normalize_state(Net* net, const double* input, double* normalized) {
+__device__ __host__ void normalize_state(Net* net, const double* input, double* normalized) {
     // Welford's online algorithm for streaming mean/variance calculation
     // For each new value x:
     // δ = x - μ₍ₙ₎          (distance from current mean)
@@ -134,7 +134,7 @@ Net* create_net(double learning_rate) {
     return net;
 }
 
-void forward_net(Net* net, const double* input) {
+__device__ __host__ void forward_net(Net* net, const double* input) {
     // Normalize input
     double normalized_input[STATE_DIM];
     normalize_state(net, input, normalized_input);
@@ -160,7 +160,7 @@ void forward_net(Net* net, const double* input) {
     }
 }
 
-void backward_net(Net* net, const double* output_gradients) {
+__device__ __host__ void backward_net(Net* net, const double* output_gradients) {
     double delta[HIDDEN_DIM];
     
     // Output layer gradients
@@ -184,12 +184,12 @@ void backward_net(Net* net, const double* output_gradients) {
     }
 }
 
-void zero_gradients(Net* net) {
+__device__ __host__ void zero_gradients(Net* net) {
     memset(net->dW1, 0, sizeof(net->dW1));
     memset(net->dW2, 0, sizeof(net->dW2));
 }
 
-void update_net(Net* net) {
+__device__ __host__ void update_net(Net* net) {
     net->step++;
     double beta1_t = pow(net->beta1, net->step);
     double beta2_t = pow(net->beta2, net->step);
