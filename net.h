@@ -62,6 +62,14 @@ __device__ __host__ double swish_derivative(double x) {
     return sigmoid + x * sigmoid * (1.0 - sigmoid);
 }
 
+__device__ __host__ double squash(double x, double min, double max) { 
+    return ((max + min) / 2.0) + ((max - min) / 2.0) * tanh(x); 
+}
+
+__device__ __host__ double dsquash(double x, double min, double max) { 
+    return ((max - min) / 2.0) * (1.0 - tanh(x) * tanh(x)); 
+}
+
 void normalize_state(Net* net, const double* input, double* normalized) {
     // Welford's online algorithm for streaming mean/variance calculation
     // For each new value x:
