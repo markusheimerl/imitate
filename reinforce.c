@@ -185,8 +185,7 @@ int main(int argc, char** argv) {
     srand(time(NULL));
     
     Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-5);
-    Rollout* rollouts;
-    cudaMallocManaged(&rollouts, NUM_ROLLOUTS * sizeof(Rollout));
+    Rollout* rollouts = (Rollout*)calloc(NUM_ROLLOUTS, sizeof(Rollout));
 
     int num_epochs = atoi(argv[1]);
     double best_return = -1e30;
@@ -228,5 +227,7 @@ int main(int argc, char** argv) {
     strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy.bin", localtime(&current_time));
     save_net(filename, net);
 
+    free(rollouts);
+    free(net);
     return 0;
 }

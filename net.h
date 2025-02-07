@@ -95,8 +95,7 @@ void normalize_state(Net* net, const double* input, double* normalized) {
 }
 
 Net* create_net(double learning_rate) {
-    Net* net;
-    cudaMallocManaged(&net, sizeof(Net));
+    Net* net = (Net*)calloc(1, sizeof(Net));
     if (!net) return NULL;
 
     net->lr = learning_rate;
