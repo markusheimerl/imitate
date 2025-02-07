@@ -68,38 +68,30 @@ double dotVec3f(const double* a, const double* b) {
 }
 
 void orthonormalize_rotation_matrix(double* R) {
-    double x[3], y[3], z[3];
-    double temp[3];
-    
-    // Extract columns
-    for(int i = 0; i < 3; i++) {
-        x[i] = R[i];      // First column
-        y[i] = R[i + 3];  // Second column
-        z[i] = R[i + 6];  // Third column
-    }
+    // Extract columns into x, y, z vectors
+    double x[3] = {R[0], R[1], R[2]};
+    double y[3] = {R[3], R[4], R[5]};
+    double z[3] = {R[6], R[7], R[8]};
     
     // Normalize x
     double norm_x = sqrt(dotVec3f(x, x));
     multScalVec3f(1.0/norm_x, x, x);
     
-    // Make y orthogonal to x
-    double dot_xy = dotVec3f(x, y);
-    multScalVec3f(dot_xy, x, temp);
+    // Make y orthogonal to x and normalize
+    double proj_xy = dotVec3f(x, y);
+    double temp[3];
+    multScalVec3f(proj_xy, x, temp);
     subVec3f(y, temp, y);
-    // Normalize y
     double norm_y = sqrt(dotVec3f(y, y));
     multScalVec3f(1.0/norm_y, y, y);
     
-    // Make z orthogonal to x and y using cross product
+    // Get z as cross product (ensures right-handed frame)
     crossVec3f(x, y, z);
-    // z is automatically normalized since x and y are orthonormal
     
-    // Put back into matrix
-    for(int i = 0; i < 3; i++) {
-        R[i] = x[i];      // First column
-        R[i + 3] = y[i];  // Second column
-        R[i + 6] = z[i];  // Third column
-    }
+    // Pack back into matrix
+    memcpy(R,     x, 3 * sizeof(double));
+    memcpy(R + 3, y, 3 * sizeof(double));
+    memcpy(R + 6, z, 3 * sizeof(double));
 }
 
 // Constants
