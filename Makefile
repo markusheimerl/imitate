@@ -8,10 +8,10 @@ reinforce.out: %.out: %.c
 	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(LDFLAGS) $(CUDALIBS) -o $@
 
 visualize.out: %.out: %.c
-	$(CC) $(CFLAGS) -Iraytracer $< $(LDFLAGS) -lwebp -lwebpmux -o $@
+	$(CC) $(CFLAGS) $(CUDAFLAGS) -Iraytracer $< $(LDFLAGS) -lwebp -lwebpmux -o $@
 
 run: reinforce.out
-	@time ./reinforce.out 1000
+	@time ./reinforce.out 100
 
 clean:
 	rm -f *.out *_policy.bin *_flight.webp
