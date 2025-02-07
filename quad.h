@@ -98,7 +98,6 @@ void orthonormalize_rotation_matrix(double* R) {
 #define K_F 0.0004905
 #define K_M 0.00004905
 #define LEN 0.25
-#define L_SQRT2 (LEN / sqrtf(2.0))
 #define GRAVITY 9.81
 #define MASS 0.5
 #define OMEGA_MIN 30.0
