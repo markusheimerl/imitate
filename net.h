@@ -50,13 +50,24 @@ __device__ __host__ double swish_derivative(double x) {
 }
 
 void normalize_state(Net* net, const double* input, double* normalized) {
+    // Welford's online algorithm for streaming mean/variance calculation
+    // For each new value x:
+    // δ = x - μ₍ₙ₎          (distance from current mean)
+    // μ₍ₙ₊₁₎ = μ₍ₙ₎ + α*δ    (update mean, α=0.01 learning rate)
+    // σ²₍ₙ₊₁₎ = σ²₍ₙ₎ + α*(δ*(x - μ₍ₙ₊₁₎) - σ²₍ₙ₎)
     for (int i = 0; i < INPUT_DIM; i++) {
-        // Update running statistics
-        net->state_mean[i] = 0.99 * net->state_mean[i] + 0.01 * input[i];
+        // Step 1: Calculate deviation from current mean
         double delta = input[i] - net->state_mean[i];
-        net->state_var[i] = 0.99 * net->state_var[i] + 0.01 * delta * delta;
+
+        // Step 2: Update running mean: μ₍ₙ₊₁₎ = μ₍ₙ₎ + α*(x - μ₍ₙ₎)
+        net->state_mean[i] += 0.01 * delta;
+
+        // Step 3: Update running variance using Welford's formula
+        // Note: δ*(x - μ₍ₙ₊₁₎) is the corrected sum of squares
+        net->state_var[i] += 0.01 * (delta * (input[i] - net->state_mean[i]) - net->state_var[i]);
         
-        // Normalize input
+        // Step 4: Standardize to N(0,1): z = (x - μ)/σ
+        // Add ε=1e-8 for numerical stability when σ ≈ 0
         normalized[i] = (input[i] - net->state_mean[i]) / 
                        (sqrt(net->state_var[i] + 1e-8));
     }
