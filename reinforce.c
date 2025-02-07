@@ -106,14 +106,10 @@ void collect_rollouts(Net* policy, Rollout* rollouts) {
 void update_policy(Net* policy, Rollout* rollouts) {
     double output_gradients[ACTION_DIM];
     
-    // Process all rollouts for each timestep
-    for(int step = 0; step < MAX_STEPS; step++) {
+    for(int r = 0; r < NUM_ROLLOUTS; r++) {
         zero_gradients(policy);
-        
-        // Process all rollouts for this timestep
-        for(int r = 0; r < NUM_ROLLOUTS; r++) {
-            if(step >= rollouts[r].length) continue;
-            
+
+        for(int step = 0; step < rollouts[r].length; step++) {
             // Forward pass to get policy parameters
             forward_net(policy, rollouts[r].states[step]);
             
@@ -153,25 +149,6 @@ void update_policy(Net* policy, Rollout* rollouts) {
             }
             backward_net(policy, output_gradients);
         }
-
-        // Monitor gradients
-        double grad_norm = 0.0;
-        for (int i = 0; i < HIDDEN_DIM; i++) {
-            for (int j = 0; j < STATE_DIM; j++) {
-                grad_norm += policy->dW1[i][j] * policy->dW1[i][j];
-            }
-        }
-        for (int i = 0; i < ACTION_DIM; i++) {
-            for (int j = 0; j < HIDDEN_DIM; j++) {
-                grad_norm += policy->dW2[i][j] * policy->dW2[i][j];
-            }
-        }
-        grad_norm = sqrt(grad_norm);
-
-        if (grad_norm > 10.0) {
-            //printf("Warning: Large gradient norm at step %d: %.6f\n", step, grad_norm);
-        }
-
         update_net(policy);
     }
 }
