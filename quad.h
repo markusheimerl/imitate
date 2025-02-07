@@ -129,21 +129,15 @@ typedef struct {
 
 Quad create_quad(double x, double y, double z) {
     Quad q;
-    static const double zero4[4] = {0.0, 0.0, 0.0, 0.0};
-    static const double zero3[3] = {0.0, 0.0, 0.0};
-    static const double identity9[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-    static const double inertia3[3] = {0.01, 0.02, 0.01};
-    double pos3[3] = {x, y, z};
-
-    memcpy(q.omega, zero4, 4 * sizeof(double));
-    memcpy(q.linear_position_W, pos3, 3 * sizeof(double));
-    memcpy(q.linear_velocity_W, zero3, 3 * sizeof(double));
-    memcpy(q.angular_velocity_B, zero3, 3 * sizeof(double));
-    memcpy(q.R_W_B, identity9, 9 * sizeof(double));
-    memcpy(q.inertia, inertia3, 3 * sizeof(double));
-    memcpy(q.omega_next, zero4, 4 * sizeof(double));
-    memcpy(q.linear_acceleration_B_s, zero3, 3 * sizeof(double));
-    memcpy(q.angular_velocity_B_s, zero3, 3 * sizeof(double));
+    memcpy(q.omega, (const double[4]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
+    memcpy(q.linear_position_W, (const double[3]){x, y, z}, 3 * sizeof(double));
+    memcpy(q.linear_velocity_W, (const double[3]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.angular_velocity_B, (const double[3]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.R_W_B, (const double[9]){1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, 9 * sizeof(double));
+    memcpy(q.inertia, (const double[3]){0.01, 0.02, 0.01}, 3 * sizeof(double));
+    memcpy(q.omega_next, (const double[4]){0.0, 0.0, 0.0, 0.0}, 4 * sizeof(double));
+    memcpy(q.linear_acceleration_B_s, (const double[3]){0.0, 0.0, 0.0}, 3 * sizeof(double));
+    memcpy(q.angular_velocity_B_s, (const double[3]){0.0, 0.0, 0.0}, 3 * sizeof(double));
     
     return q;
 }
@@ -165,17 +159,10 @@ void update_quad(Quad* q, double dt) {
     double tau_B[3] = {0, m[0] - m[1] + m[2] - m[3], 0};
 
     // 4. Add thrust torques
-    static const double rotor_positions[4][3] = {
-        {-L, 0,  L},
-        { L, 0,  L},
-        { L, 0, -L},
-        {-L, 0, -L}
-    };
-
+    const double rotor_positions[4][3] = {{-L, 0,  L}, { L, 0,  L}, { L, 0, -L}, {-L, 0, -L}};
     for(int i = 0; i < 4; i++) {
-        double f_vector[3] = {0, f[i], 0};
         double tau_thrust[3];
-        crossVec3f(rotor_positions[i], f_vector, tau_thrust);
+        crossVec3f(rotor_positions[i], (const double[3]){0, f[i], 0}, tau_thrust);
         addVec3f(tau_B, tau_thrust, tau_B);
     }
 
@@ -233,7 +220,7 @@ void update_quad(Quad* q, double dt) {
 
     // 10. Calculate sensor readings
     double linear_acceleration_B[3], R_B_W[9];
-    static const double gravity_vec[3] = {0, GRAVITY, 0};
+    const double gravity_vec[3] = {0, GRAVITY, 0};
     
     transpMat3f(q->R_W_B, R_B_W);
     multMatVec3f(R_B_W, linear_acceleration_W, linear_acceleration_B);
