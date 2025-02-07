@@ -17,14 +17,6 @@ void visualize_rollout(Net* policy, Scene* scene) {
     int frame = 0;
     
     while(frame < scene->frame_count) {
-        // Terminal condition: quadcopter too far from goal
-        if (sqrt(
-            pow(quad.linear_position_W[0] - 1.0, 2) +
-            pow(quad.linear_position_W[1] - 2.0, 2) +
-            pow(quad.linear_position_W[2] - 1.0, 2)) > 4.0) {
-            break;
-        }
-
         // Physics simulation steps
         if (t_physics >= DT_PHYSICS) {
             update_quad(&quad, DT_PHYSICS);
