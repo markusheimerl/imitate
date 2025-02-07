@@ -94,8 +94,20 @@ __device__ __host__ void normalize_state(Net* net, const double* input, double* 
     }
 }
 
-Net* create_net(double learning_rate) {
-    Net* net = (Net*)calloc(1, sizeof(Net));
+__device__ __host__ static inline uint32_t xorshift32(uint32_t* state) {
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
+__device__ __host__ static inline double random_uniform(uint32_t* state) {
+    return (double)(xorshift32(state)) / UINT32_MAX;
+}
+
+__device__ __host__ Net* create_net(Net* net, double learning_rate, uint32_t* rng_state) {
     if (!net) return NULL;
 
     net->lr = learning_rate;
@@ -111,7 +123,7 @@ Net* create_net(double learning_rate) {
 
     for (int i = 0; i < HIDDEN_DIM; i++) {
         for (int j = 0; j < STATE_DIM; j++) {
-            net->W1[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale1;
+            net->W1[i][j] = (random_uniform(rng_state) * 2 - 1) * scale1;
             net->m1[i][j] = 0.0;
             net->v1[i][j] = 0.0;
         }
@@ -119,7 +131,7 @@ Net* create_net(double learning_rate) {
 
     for (int i = 0; i < ACTION_DIM; i++) {
         for (int j = 0; j < HIDDEN_DIM; j++) {
-            net->W2[i][j] = ((double)rand()/RAND_MAX * 2 - 1) * scale2;
+            net->W2[i][j] = (random_uniform(rng_state) * 2 - 1) * scale2;
             net->m2[i][j] = 0.0;
             net->v2[i][j] = 0.0;
         }
@@ -261,11 +273,10 @@ bool save_net(const char* filename, const Net* net) {
     return true;
 }
 
-Net* load_net(const char* filename) {
+Net* load_net(Net* net, const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
     
-    Net* net = (Net*)calloc(1, sizeof(Net));
     if (!net) {
         fclose(file);
         return NULL;

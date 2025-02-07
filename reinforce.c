@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include "net.h"
 #include "quad.h"
 
@@ -24,7 +25,7 @@ __device__ __host__ double compute_reward(const Quad* q) {
     return exp(-1.0 * distance);
 }
 
-void collect_rollouts(Net* policy, Rollout* rollouts) {
+void collect_rollouts(Net* policy, Rollout* rollouts, uint32_t* rng_state) {
     for(int r = 0; r < NUM_ROLLOUTS; r++) {
         // Initialize environment (quadcopter) with starting state s_0
         Quad quad = create_quad(0.0, 1.0, 0.0);
@@ -62,8 +63,8 @@ void collect_rollouts(Net* policy, Rollout* rollouts) {
                     double sigma = squash(policy->h[2][i + 4], MIN_STD, MAX_STD);
 
                     // Sample from N(0,1) using Box-Muller transform
-                    double u1 = (double)rand()/RAND_MAX;
-                    double u2 = (double)rand()/RAND_MAX;
+                    double u1 = random_uniform(rng_state);
+                    double u2 = random_uniform(rng_state);
                     double epsilon = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
                     
                     // Transform to N(μ, σ²): a = μ + σε
@@ -159,9 +160,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    srand(time(NULL));
-    
-    Net* net = (argc == 3) ? load_net(argv[2]) : create_net(3e-5);
+    uint32_t rng_state = time(NULL) ^ getpid();
+    Net* net = (Net*)calloc(1, sizeof(Net));
+    if(argc == 3){load_net(net, argv[2]);}else{create_net(net, 3e-5, &rng_state);}
     Rollout* rollouts = (Rollout*)calloc(NUM_ROLLOUTS, sizeof(Rollout));
 
     int num_epochs = atoi(argv[1]);
@@ -172,7 +173,7 @@ int main(int argc, char** argv) {
     
     for(int epoch = 0; epoch < num_epochs; epoch++) {
         // Collect rollouts
-        collect_rollouts(net, rollouts);
+        collect_rollouts(net, rollouts, &rng_state);
 
         // Calculate mean and best return
         double mean_return = 0.0;
