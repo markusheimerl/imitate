@@ -166,7 +166,7 @@ void forward_net(Net* net, double* input) {
     }
 }
 
-void backward_net(Net* net, double* output_gradient, int epoch, int total_epochs) {
+void backward_net(Net* net, double* output_gradient) {
     int last = net->n_layers-1;
     
     // Set output layer gradient

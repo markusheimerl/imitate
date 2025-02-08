@@ -101,16 +101,11 @@ int main(int argc, char** argv) {
             // Get current state and run through policy network
             get_quad_state(quad, state);
             memcpy(state + 12, target, 3 * sizeof(double));
-            forward(policy, state);
+            forward_net(policy, state);
             
             // Extract actions from network output
             for(int i = 0; i < 4; i++) {
-                double std = squash(policy->layers[policy->n_layers-1].x[i + 4], MIN_STD, MAX_STD);
-                double safe_margin = 4.0 * std;
-                double mean_min = OMEGA_MIN + safe_margin;
-                double mean_max = OMEGA_MAX - safe_margin;
-                double mean = squash(policy->layers[policy->n_layers-1].x[i], mean_min, mean_max);
-                
+                double mean = squash(policy->x[policy->n_layers-1][i], MIN_MEAN, MAX_MEAN);
                 quad.omega_next[i] = mean;
             }
             
