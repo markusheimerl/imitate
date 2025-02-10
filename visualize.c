@@ -14,38 +14,38 @@
 
 // Prepare state vector for policy input (no normalization)
 void prepare_state(const Quad* quad, const double* target, float* state) {
-    // Position
+    // Position (3)
     for(int i = 0; i < 3; i++) {
         state[i] = (float)quad->linear_position_W[i];
     }
     
-    // Velocity
+    // Velocity (3)
     for(int i = 0; i < 3; i++) {
         state[i+3] = (float)quad->linear_velocity_W[i];
     }
     
-    // Rotation matrix (quaternion)
-    for(int i = 0; i < 4; i++) {
+    // Rotation matrix (9)
+    for(int i = 0; i < 9; i++) {
         state[i+6] = (float)quad->R_W_B[i];
     }
     
-    // Angular velocity
+    // Angular velocity (3)
     for(int i = 0; i < 3; i++) {
-        state[i+10] = (float)quad->angular_velocity_B[i];
+        state[i+15] = (float)quad->angular_velocity_B[i];
     }
     
-    // Target position
+    // Target position (3)
     for(int i = 0; i < 3; i++) {
-        state[i+13] = (float)target[i];
+        state[i+18] = (float)target[i];
     }
     
-    // Target velocity
+    // Target velocity (3)
     for(int i = 0; i < 3; i++) {
-        state[i+16] = (float)target[i+3];
+        state[i+21] = (float)target[i+3];
     }
     
-    // Target yaw
-    state[19] = (float)target[6];
+    // Target yaw (1)
+    state[24] = (float)target[6];
 }
 
 int main(int argc, char* argv[]) {
@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
     clock_t start_time = clock();
 
     // Allocate state buffer for policy
-    float state[20];
+    float state[25];  // Updated size to match new state representation
 
     // Main simulation loop
     while (frame < scene.frame_count) {
