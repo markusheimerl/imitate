@@ -36,7 +36,7 @@ void generate_training_data(const char* filename, int num_episodes) {
         // Random initial state (y always positive)
         Quad* quad = create_quad(
             random_range(-2.0, 2.0),
-            random_range(0.5, 2.0),    // Always above ground
+            random_range(0.0, 2.0),    // Always at or above ground
             random_range(-2.0, 2.0)
         );
         

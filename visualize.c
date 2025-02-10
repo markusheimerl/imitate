@@ -10,42 +10,32 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 24.0)
-#define SIM_TIME    10.0  // 10 second flight
+#define SIM_TIME    10.0  // Simulation duration in seconds
 
-// Prepare state vector for policy input (no normalization)
+// Prepare state vector for policy input
 void prepare_state(const Quad* quad, const double* target, float* state) {
-    // Position (3)
+    // Position error (3)
     for(int i = 0; i < 3; i++) {
-        state[i] = (float)quad->linear_position_W[i];
+        state[i] = (float)(target[i] - quad->linear_position_W[i]);
     }
     
-    // Velocity (3)
+    // Velocity error (3)
     for(int i = 0; i < 3; i++) {
-        state[i+3] = (float)quad->linear_velocity_W[i];
+        state[i+3] = (float)(target[i+3] - quad->linear_velocity_W[i]);
     }
     
-    // Rotation matrix (9)
+    // Current orientation (9)
     for(int i = 0; i < 9; i++) {
         state[i+6] = (float)quad->R_W_B[i];
     }
     
-    // Angular velocity (3)
+    // Current angular velocity (3)
     for(int i = 0; i < 3; i++) {
         state[i+15] = (float)quad->angular_velocity_B[i];
     }
     
-    // Target position (3)
-    for(int i = 0; i < 3; i++) {
-        state[i+18] = (float)target[i];
-    }
-    
-    // Target velocity (3)
-    for(int i = 0; i < 3; i++) {
-        state[i+21] = (float)target[i+3];
-    }
-    
     // Target yaw (1)
-    state[24] = (float)target[6];
+    state[18] = (float)target[6];
 }
 
 int main(int argc, char* argv[]) {
@@ -61,10 +51,27 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Initialize scene
-    Scene scene = create_scene(800, 600, 240, 24, 0.4f); // 10 seconds at 24fps
+    srand(time(NULL));
     
-    // Set up camera
+    // Initialize random target position and yaw
+    double target[7] = {
+        (double)rand() / RAND_MAX * 4.0 - 2.0,    // x: [-2,2]
+        (double)rand() / RAND_MAX * 2.0 + 0.5,    // y: [0.5,2.5]
+        (double)rand() / RAND_MAX * 4.0 - 2.0,    // z: [-2,2]
+        0.0, 0.0, 0.0,                            // Zero velocity target
+        (double)rand() / RAND_MAX * 2.0 * M_PI    // yaw: [0,2π]
+    };
+    
+    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
+           target[0], target[1], target[2], target[6]);
+    
+    // Initialize quadcopter
+    Quad* quad = create_quad(0.0, 0.0, 0.0);
+    
+    // Initialize raytracer scene
+    Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
+    
+    // Set up camera and scene exactly as in sim.c
     set_scene_camera(&scene,
         (Vec3){-3.0f, 3.0f, -3.0f},
         (Vec3){0.0f, 0.0f, 0.0f},
@@ -72,47 +79,28 @@ int main(int argc, char* argv[]) {
         60.0f
     );
     
-    // Set up light
     set_scene_light(&scene,
         (Vec3){1.0f, 1.0f, -1.0f},
         (Vec3){1.4f, 1.4f, 1.4f}
     );
     
-    // Add meshes
     Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     add_mesh_to_scene(&scene, drone);
     
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
     add_mesh_to_scene(&scene, ground);
 
-    // Initialize quadcopter with random starting position
-    Quad* quad = create_quad(
-        (double)rand() / RAND_MAX * 2.0 - 1.0,  // x: [-1,1]
-        0.5,                                     // y: start at 0.5m
-        (double)rand() / RAND_MAX * 2.0 - 1.0   // z: [-1,1]
-    );
-
-    // Set random target
-    double target[7] = {
-        (double)rand() / RAND_MAX * 4.0 - 2.0,  // x: [-2,2]
-        1.5,                                     // y: fixed at 1.5m
-        (double)rand() / RAND_MAX * 4.0 - 2.0,  // z: [-2,2]
-        0.0, 0.0, 0.0,                          // zero velocity target
-        (double)rand() / RAND_MAX * 2.0 * M_PI  // random yaw
-    };
-
     // Initialize timers
     double t_physics = 0.0;
     double t_control = 0.0;
     double t_render = 0.0;
-    int frame = 0;
     clock_t start_time = clock();
-
+    
     // Allocate state buffer for policy
-    float state[25];  // Updated size to match new state representation
+    float state[19];  // Position error (3), Velocity error (3), Rotation (9), Angular velocity (3), Target yaw (1)
 
     // Main simulation loop
-    while (frame < scene.frame_count) {
+    for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
         // Physics update
         if (t_physics >= DT_PHYSICS) {
             update_quad(quad, DT_PHYSICS);
@@ -121,13 +109,11 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Prepare state input for policy
+            // Use learned policy instead of geometric controller
             prepare_state(quad, target, state);
-            
-            // Get action from policy
             forward_pass(policy, state);
             
-            // Use policy output directly as motor commands
+            // Apply policy outputs as motor commands
             for(int i = 0; i < 4; i++) {
                 quad->omega_next[i] = (double)policy->predictions[i];
             }
@@ -137,27 +123,23 @@ int main(int argc, char* argv[]) {
         
         // Render update
         if (t_render >= DT_RENDER) {
-            // Update drone position and orientation
             set_mesh_position(&scene.meshes[0], 
                 (Vec3){(float)quad->linear_position_W[0], 
                        (float)quad->linear_position_W[1], 
                        (float)quad->linear_position_W[2]});
             
-            // Convert rotation matrix to Euler angles
-            float roll = atan2f(quad->R_W_B[7], quad->R_W_B[8]);
-            float pitch = asinf(-quad->R_W_B[6]);
-            float yaw = atan2f(quad->R_W_B[3], quad->R_W_B[0]);
+            set_mesh_rotation(&scene.meshes[0], 
+                (Vec3){
+                    atan2f(quad->R_W_B[7], quad->R_W_B[8]),
+                    asinf(-quad->R_W_B[6]),
+                    atan2f(quad->R_W_B[3], quad->R_W_B[0])
+                }
+            );
             
-            set_mesh_rotation(&scene.meshes[0], (Vec3){roll, pitch, yaw});
-            
-            // Render frame
             render_scene(&scene);
             next_frame(&scene);
+            update_progress_bar((int)(t * DT_PHYSICS / DT_RENDER), (int)(SIM_TIME * 24), start_time);
             
-            // Update progress
-            update_progress_bar(frame, scene.frame_count, start_time);
-            
-            frame++;
             t_render = 0.0;
         }
         
@@ -177,7 +159,5 @@ int main(int argc, char* argv[]) {
     destroy_scene(&scene);
     free_net(policy);
     free(quad);
-    
-    printf("\nVisualization completed and saved to %s\n", filename);
     return 0;
 }
