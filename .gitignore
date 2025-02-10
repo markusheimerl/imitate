@@ -52,4 +52,4 @@ dkms.conf
 
 *_policy.bin
 *_flight.csv
-# *_flight.webp
+*_flight.webp
