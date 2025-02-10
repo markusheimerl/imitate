@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
             // Target yaw (1)
             batch_input[24] = (float)target[6];
             
-            // Forward pass with full batch (though we only care about first result)
+            // Forward pass through policy network
             forward_pass(policy, batch_input);
             
             // Apply only the first prediction as motor commands
