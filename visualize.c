@@ -10,7 +10,7 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 24.0)
-#define SIM_TIME    10.0  // Simulation duration in seconds
+#define SIM_TIME    5.0  // Simulation duration in seconds
 
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);

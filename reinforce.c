@@ -118,7 +118,7 @@ void train_policy(const char* data_file, const char* model_file) {
     
     // Initialize MLP
     const int input_dim = 25;   // 18 state + 7 target
-    const int hidden_dim = 8192;
+    const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples; // Full batch
     
@@ -204,7 +204,7 @@ int main() {
              localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 500);
+    generate_training_data(data_fname, 100);
     
     printf("Phase 2: Training policy network...\n");
     train_policy(data_fname, model_fname);
