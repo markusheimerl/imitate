@@ -34,24 +34,27 @@ int main(int argc, char* argv[]) {
 
     srand(time(NULL));
     
-    // Initialize random target position and yaw
-    double target[7] = {
-        (double)rand() / RAND_MAX * 4.0 - 2.0,    // x: [-2,2]
-        (double)rand() / RAND_MAX * 2.0 + 0.5,    // y: [0.5,2.5]
-        (double)rand() / RAND_MAX * 4.0 - 2.0,    // z: [-2,2]
-        0.0, 0.0, 0.0,                            // Zero velocity target
-        (double)rand() / RAND_MAX * 2.0 * M_PI    // yaw: [0,2π]
-    };
-    
-    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
-           target[0], target[1], target[2], target[6]);
-    
     // Initialize quadcopter
     Quad* quad = create_quad(
         random_range(-2.0, 2.0),
         random_range(0.0, 2.0),    // Always at or above ground
         random_range(-2.0, 2.0)
     );
+    
+    // Initialize random target position and yaw
+    double target[7] = {
+        random_range(-2.0, 2.0),    // x
+        random_range(1.0, 3.0),     // y: Always above ground
+        random_range(-2.0, 2.0),    // z
+        random_range(-1.0, 1.0),    // vx
+        random_range(-1.0, 1.0),    // vy
+        random_range(-1.0, 1.0),    // vz
+        random_range(0.0, 2*M_PI)   // yaw
+    };
+    
+    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
+           target[0], target[1], target[2], target[6]);
+    
     
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
