@@ -10,7 +10,7 @@ reinforce.out: reinforce.c
 visualize.out: visualize.c
 	$(CC) $(CFLAGS) $< $(LDFLAGS) -lwebp -lwebpmux -lpthread -o $@
 
-train: reinforce.out
+run: reinforce.out
 	@time ./reinforce.out
 
 viz: visualize.out

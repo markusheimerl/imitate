@@ -12,49 +12,40 @@
 #define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    10.0  // 10 second flight
 
-// Helper function to normalize state vector for policy input
-void normalize_state(const Quad* quad, const double* target, float* state) {
-    // Position (normalized to [-1,1] assuming ±3m range)
+// Prepare state vector for policy input (no normalization)
+void prepare_state(const Quad* quad, const double* target, float* state) {
+    // Position
     for(int i = 0; i < 3; i++) {
-        state[i] = (float)quad->linear_position_W[i] / 3.0f;
+        state[i] = (float)quad->linear_position_W[i];
     }
     
-    // Velocity (normalized to [-1,1] assuming ±2m/s range)
+    // Velocity
     for(int i = 0; i < 3; i++) {
-        state[i+3] = (float)quad->linear_velocity_W[i] / 2.0f;
+        state[i+3] = (float)quad->linear_velocity_W[i];
     }
     
-    // Rotation matrix (first quaternion) (already normalized)
+    // Rotation matrix (quaternion)
     for(int i = 0; i < 4; i++) {
         state[i+6] = (float)quad->R_W_B[i];
     }
     
-    // Angular velocity (normalized to [-1,1] assuming ±4rad/s range)
+    // Angular velocity
     for(int i = 0; i < 3; i++) {
-        state[i+10] = (float)quad->angular_velocity_B[i] / 4.0f;
+        state[i+10] = (float)quad->angular_velocity_B[i];
     }
     
-    // Target position (normalized same as position)
+    // Target position
     for(int i = 0; i < 3; i++) {
-        state[i+13] = (float)target[i] / 3.0f;
+        state[i+13] = (float)target[i];
     }
     
-    // Target velocity (normalized same as velocity)
+    // Target velocity
     for(int i = 0; i < 3; i++) {
-        state[i+16] = (float)target[i+3] / 2.0f;
+        state[i+16] = (float)target[i+3];
     }
     
-    // Target yaw (normalized to [-1,1])
-    state[19] = (float)(target[6] / M_PI) - 1.0f;
-}
-
-// Helper function to denormalize policy output to motor commands
-void denormalize_actions(const float* actions, double* omega) {
-    // Convert normalized actions [-1,1] to motor speed range [30,70]
-    for(int i = 0; i < 4; i++) {
-        omega[i] = 50.0 + 20.0 * (double)actions[i];
-        omega[i] = fmax(30.0, fmin(70.0, omega[i]));
-    }
+    // Target yaw
+    state[19] = (float)target[6];
 }
 
 int main(int argc, char* argv[]) {
@@ -131,13 +122,15 @@ int main(int argc, char* argv[]) {
         // Control update
         if (t_control >= DT_CONTROL) {
             // Prepare state input for policy
-            normalize_state(quad, target, state);
+            prepare_state(quad, target, state);
             
             // Get action from policy
             forward_pass(policy, state);
             
-            // Convert policy output to motor commands
-            denormalize_actions(policy->predictions, quad->omega_next);
+            // Use policy output directly as motor commands
+            for(int i = 0; i < 4; i++) {
+                quad->omega_next[i] = (double)policy->predictions[i];
+            }
             
             t_control = 0.0;
         }
