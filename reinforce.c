@@ -112,7 +112,7 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples);
+    load_csv(data_file, &X, &y, &num_samples, 25, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
