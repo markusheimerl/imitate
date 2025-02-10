@@ -12,32 +12,6 @@
 #define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    10.0  // Simulation duration in seconds
 
-// Prepare state vector for policy input
-void prepare_state(const Quad* quad, const double* target, float* state) {
-    // Position error (3)
-    for(int i = 0; i < 3; i++) {
-        state[i] = (float)(target[i] - quad->linear_position_W[i]);
-    }
-    
-    // Velocity error (3)
-    for(int i = 0; i < 3; i++) {
-        state[i+3] = (float)(target[i+3] - quad->linear_velocity_W[i]);
-    }
-    
-    // Current orientation (9)
-    for(int i = 0; i < 9; i++) {
-        state[i+6] = (float)quad->R_W_B[i];
-    }
-    
-    // Current angular velocity (3)
-    for(int i = 0; i < 3; i++) {
-        state[i+15] = (float)quad->angular_velocity_B[i];
-    }
-    
-    // Target yaw (1)
-    state[18] = (float)target[6];
-}
-
 int main(int argc, char* argv[]) {
     if(argc != 2) {
         printf("Usage: %s <policy_file>\n", argv[0]);
@@ -116,8 +90,28 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Prepare single state into first slot of batch
-            prepare_state(quad, target, batch_input);
+            // Position error (3)
+            for(int i = 0; i < 3; i++) {
+                batch_input[i] = (float)(target[i] - quad->linear_position_W[i]);
+            }
+            
+            // Velocity error (3)
+            for(int i = 0; i < 3; i++) {
+                batch_input[i+3] = (float)(target[i+3] - quad->linear_velocity_W[i]);
+            }
+            
+            // Current orientation (9)
+            for(int i = 0; i < 9; i++) {
+                batch_input[i+6] = (float)quad->R_W_B[i];
+            }
+            
+            // Current angular velocity (3)
+            for(int i = 0; i < 3; i++) {
+                batch_input[i+15] = (float)quad->angular_velocity_B[i];
+            }
+            
+            // Target yaw (1)
+            batch_input[18] = (float)target[6];
             
             // Forward pass with full batch (though we only care about first result)
             forward_pass(policy, batch_input);
