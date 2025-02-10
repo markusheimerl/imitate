@@ -5,55 +5,177 @@
 #include <time.h>
 #include <math.h>
 #include "sim/quad.h"
+#include "mlp/mlp.h"
+#include "mlp/data.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
-#define SIM_TIME    10.0
+#define SIM_TIME    5.0  // 5 seconds per episode
 
 // Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
+// Generate training data
+void generate_training_data(const char* filename, int num_episodes) {
+    FILE* f = fopen(filename, "w");
+    if (!f) {
+        printf("Error opening file: %s\n", filename);
+        return;
+    }
+    
+    // Write header
+    fprintf(f, "px,py,pz,vx,vy,vz,q0,q1,q2,q3,wx,wy,wz,"); // State (13)
+    fprintf(f, "tx,ty,tz,tvx,tvy,tvz,tyaw,"); // Target (7)
+    fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
+    
+    for (int episode = 0; episode < num_episodes; episode++) {
+        // Random initial state (y always positive)
+        Quad* quad = create_quad(
+            random_range(-2.0, 2.0),
+            random_range(0.5, 2.0),    // Always above ground
+            random_range(-2.0, 2.0)
+        );
+        
+        // Random target (y always positive)
+        double target[7] = {
+            random_range(-2.0, 2.0),    // x
+            random_range(1.0, 3.0),     // y: Always above ground
+            random_range(-2.0, 2.0),    // z
+            random_range(-1.0, 1.0),    // vx
+            random_range(-1.0, 1.0),    // vy
+            random_range(-1.0, 1.0),    // vz
+            random_range(0.0, 2*M_PI)   // yaw
+        };
+        
+        double t_physics = 0.0;
+        double t_control = 0.0;
+        
+        for(int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
+            if (t_physics >= DT_PHYSICS) {
+                update_quad(quad, DT_PHYSICS);
+                t_physics = 0.0;
+            }
+            
+            if (t_control >= DT_CONTROL) {
+                // Get motor commands from geometric controller
+                control_quad(quad, target);
+                
+                // Write state, target, and action to file
+                fprintf(f, "%.6f,%.6f,%.6f,", // Position
+                       quad->linear_position_W[0],
+                       quad->linear_position_W[1],
+                       quad->linear_position_W[2]);
+                       
+                fprintf(f, "%.6f,%.6f,%.6f,", // Velocity
+                       quad->linear_velocity_W[0],
+                       quad->linear_velocity_W[1],
+                       quad->linear_velocity_W[2]);
+                       
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Quaternion
+                       quad->R_W_B[0], quad->R_W_B[1],
+                       quad->R_W_B[2], quad->R_W_B[3]);
+                       
+                fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
+                       quad->angular_velocity_B[0],
+                       quad->angular_velocity_B[1],
+                       quad->angular_velocity_B[2]);
+                       
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Target
+                       target[0], target[1], target[2],
+                       target[3], target[4], target[5], target[6]);
+                       
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
+                       quad->omega_next[0],
+                       quad->omega_next[1],
+                       quad->omega_next[2],
+                       quad->omega_next[3]);
+                       
+                t_control = 0.0;
+            }
+            
+            t_physics += DT_PHYSICS;
+            t_control += DT_PHYSICS;
+        }
+        
+        free(quad);
+        
+        if ((episode + 1) % 10 == 0) {
+            printf("Generated %d episodes\n", episode + 1);
+        }
+    }
+    
+    fclose(f);
+}
+
+// Train MLP
+void train_policy(const char* data_file, const char* model_file) {
+    printf("Loading training data from %s...\n", data_file);
+    
+    float *X, *y;
+    int num_samples;
+    load_csv(data_file, &X, &y, &num_samples);
+    
+    printf("Training data loaded: %d samples\n", num_samples);
+    
+    // Initialize MLP
+    const int input_dim = 20;   // 13 state + 7 target
+    const int hidden_dim = 512;
+    const int output_dim = 4;   // 4 motor commands
+    const int batch_size = 32;
+    
+    Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
+    
+    // Training parameters
+    const int num_epochs = 1000;
+    const float learning_rate = 0.001f;
+    
+    printf("Starting training for %d epochs...\n", num_epochs);
+    
+    // Training loop
+    for (int epoch = 0; epoch < num_epochs; epoch++) {
+        forward_pass(net, X);
+        float loss = calculate_loss(net, y);
+        zero_gradients(net);
+        backward_pass(net, X);
+        update_weights(net, learning_rate);
+        
+        if (epoch == 0 || (epoch + 1) % 100 == 0) {
+            printf("Epoch [%d/%d], Loss: %.8f\n", 
+                   epoch + 1, num_epochs, loss);
+        }
+    }
+    
+    // Save trained model
+    save_model(net, model_file);
+    
+    // Cleanup
+    free(X);
+    free(y);
+    free_net(net);
+}
+
 int main() {
     srand(time(NULL) ^ getpid());
     
-    double target[7] = {
-        random_range(-2.0, 2.0),    // x: Range -2 to 2
-        random_range(1.0, 3.0),     // y: Range 1 to 3    
-        random_range(-2.0, 2.0),    // z: Range -2 to 2
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(0.0, 2*M_PI)}; // yaw: Range 0 to 2π
+    // Generate timestamped filenames
+    char data_fname[64], model_fname[64];
+    time_t now = time(NULL);
+    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_flight.csv", 
+             localtime(&now));
+    strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_policy.bin", 
+             localtime(&now));
     
-    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
-           target[0], target[1], target[2], target[6]);
+    printf("Phase 1: Generating training data...\n");
+    generate_training_data(data_fname, 100);
     
-    Quad* quad = create_quad(0.0, 0.0, 0.0);
-    double t_physics = 0.0;
-    double t_control = 0.0;
-
-    for(int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
-        // Physics update
-        if (t_physics >= DT_PHYSICS) {
-            update_quad(quad, DT_PHYSICS);
-            t_physics = 0.0;
-        }
-        
-        // Control update
-        if (t_control >= DT_CONTROL) {
-            control_quad(quad, target);
-            t_control = 0.0;
-        }
-        
-        // Increment timers
-        t_physics += DT_PHYSICS;
-        t_control += DT_PHYSICS;
-    }
-
-    printf("Final position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
-           quad->linear_position_W[0], quad->linear_position_W[1], 
-           quad->linear_position_W[2], atan2(quad->R_W_B[3], quad->R_W_B[0]));
-
-    free(quad);
+    printf("Phase 2: Training policy network...\n");
+    train_policy(data_fname, model_fname);
+    
+    printf("Training complete!\n");
+    printf("Data saved to: %s\n", data_fname);
+    printf("Model saved to: %s\n", model_fname);
+    
     return 0;
 }
