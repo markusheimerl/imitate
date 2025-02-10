@@ -118,9 +118,9 @@ void train_policy(const char* data_file, const char* model_file) {
     
     // Initialize MLP
     const int input_dim = 25;   // 18 state + 7 target
-    const int hidden_dim = 512;
+    const int hidden_dim = 64;
     const int output_dim = 4;   // 4 motor commands
-    const int batch_size = 32;
+    const int batch_size = num_samples; // Full batch
     
     Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
     
@@ -144,6 +144,38 @@ void train_policy(const char* data_file, const char* model_file) {
         }
     }
     
+    // After training, print some example predictions
+    printf("\nExample predictions after training:\n");
+    printf("----------------------------------------\n");
+    
+    // Do one final forward pass
+    forward_pass(net, X);
+    
+    // Print 5 random examples
+    for(int i = 0; i < 5; i++) {
+        int idx = rand() % num_samples;
+        
+        printf("\nExample %d (sample %d):\n", i+1, idx);
+        
+        printf("Input state:\n");
+        for(int j = 0; j < input_dim; j++) {
+            printf("%.6f ", X[idx * input_dim + j]);
+        }
+        printf("\n");
+        
+        printf("Predicted motors: ");
+        for(int j = 0; j < output_dim; j++) {
+            printf("%.6f ", net->predictions[idx * output_dim + j]);
+        }
+        printf("\n");
+        
+        printf("Actual motors: ");
+        for(int j = 0; j < output_dim; j++) {
+            printf("%.6f ", y[idx * output_dim + j]);
+        }
+        printf("\n");
+    }
+    
     // Save trained model
     save_model(net, model_file);
     
@@ -165,7 +197,7 @@ int main() {
              localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 100);
+    generate_training_data(data_fname, 10);
     
     printf("Phase 2: Training policy network...\n");
     train_policy(data_fname, model_fname);

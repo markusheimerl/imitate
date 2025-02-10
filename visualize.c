@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
     clock_t start_time = clock();
     
     // Allocate state buffer for policy
-    float state[19];  // Position error (3), Velocity error (3), Rotation (9), Angular velocity (3), Target yaw (1)
+    float state[25];
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -116,6 +116,7 @@ int main(int argc, char* argv[]) {
             // Apply policy outputs as motor commands
             for(int i = 0; i < 4; i++) {
                 quad->omega_next[i] = (double)policy->predictions[i];
+                printf("Motor %d: %.2f\n", i, quad->omega_next[i]);
             }
             
             t_control = 0.0;
