@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
     
     
     // Initialize raytracer scene
-    Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
+    Scene scene = create_scene(800, 600, (int)(SIM_TIME * 1000), 24, 1.0f);
     
     // Set up camera and scene
     set_scene_camera(&scene,
