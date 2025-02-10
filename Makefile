@@ -9,16 +9,16 @@ CUDAFLAGS = --cuda-gpu-arch=sm_86 \
 
 CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -lcublas
 
-all: reinforce.out visualize.out
+all: imitate.out visualize.out
 
-reinforce.out: reinforce.c
+imitate.out: imitate.c
 	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(CUDALIBS) $(LDFLAGS) -o $@
 
 visualize.out: visualize.c
 	$(CC) $(CFLAGS) $< $(LDFLAGS) -lwebp -lwebpmux -lpthread -o $@
 
-run: reinforce.out
-	@time ./reinforce.out
+run: imitate.out
+	@time ./imitate.out
 
 viz: visualize.out
 	@./visualize.out $(shell ls -t *_policy.bin | head -1)
