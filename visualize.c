@@ -116,9 +116,19 @@ int main(int argc, char* argv[]) {
             for(int i = 0; i < 3; i++) {
                 batch_input[i+15] = (float)quad->angular_velocity_B[i];
             }
+
+            // Target position (3)
+            for(int i = 0; i < 3; i++) {
+                batch_input[i+18] = (float)target[i];
+            }
+
+            // Target velocity (3)
+            for(int i = 0; i < 3; i++) {
+                batch_input[i+21] = (float)target[i+3];
+            }
             
             // Target yaw (1)
-            batch_input[18] = (float)target[6];
+            batch_input[24] = (float)target[6];
             
             // Forward pass with full batch (though we only care about first result)
             forward_pass(policy, batch_input);
