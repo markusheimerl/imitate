@@ -1,2 +1,2 @@
 # imitation
-Implementation of a learned quadcoptor controller through imitation learning
+An imitation learning implementation for quadcoptor control
