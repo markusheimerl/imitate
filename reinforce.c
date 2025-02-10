@@ -118,14 +118,14 @@ void train_policy(const char* data_file, const char* model_file) {
     
     // Initialize MLP
     const int input_dim = 25;   // 18 state + 7 target
-    const int hidden_dim = 64;
+    const int hidden_dim = 128;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples; // Full batch
     
     Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 1000;
+    const int num_epochs = 2000;
     const float learning_rate = 0.001f;
     
     printf("Starting training for %d epochs...\n", num_epochs);
@@ -197,7 +197,7 @@ int main() {
              localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 10);
+    generate_training_data(data_fname, 5);
     
     printf("Phase 2: Training policy network...\n");
     train_policy(data_fname, model_fname);

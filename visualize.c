@@ -51,6 +51,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Print network dimensions
+    printf("Loaded policy network dimensions:\n");
+    printf("Input dim: %d\n", policy->input_dim);
+    printf("Hidden dim: %d\n", policy->hidden_dim);
+    printf("Output dim: %d\n", policy->output_dim);
+    printf("Batch size: %d\n", policy->batch_size);
+
     srand(time(NULL));
     
     // Initialize random target position and yaw
@@ -71,7 +78,7 @@ int main(int argc, char* argv[]) {
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
     
-    // Set up camera and scene exactly as in sim.c
+    // Set up camera and scene
     set_scene_camera(&scene,
         (Vec3){-3.0f, 3.0f, -3.0f},
         (Vec3){0.0f, 0.0f, 0.0f},
@@ -96,8 +103,8 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Allocate state buffer for policy
-    float state[25];
+    // Preallocate batch-sized input buffer
+    float* batch_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -109,14 +116,15 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Use learned policy instead of geometric controller
-            prepare_state(quad, target, state);
-            forward_pass(policy, state);
+            // Prepare single state into first slot of batch
+            prepare_state(quad, target, batch_input);
             
-            // Apply policy outputs as motor commands
+            // Forward pass with full batch (though we only care about first result)
+            forward_pass(policy, batch_input);
+            
+            // Apply only the first prediction as motor commands
             for(int i = 0; i < 4; i++) {
                 quad->omega_next[i] = (double)policy->predictions[i];
-                printf("Motor %d: %.2f\n", i, quad->omega_next[i]);
             }
             
             t_control = 0.0;
@@ -157,6 +165,7 @@ int main(int argc, char* argv[]) {
     save_scene(&scene, filename);
 
     // Cleanup
+    free(batch_input);
     destroy_scene(&scene);
     free_net(policy);
     free(quad);
