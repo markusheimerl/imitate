@@ -120,7 +120,7 @@ void train_policy(const char* data_file, const char* model_file) {
     const int input_dim = 25;   // 18 state + 7 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
-    const int batch_size = num_samples; // Full batch
+    const int batch_size = num_samples;
     
     Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
     
@@ -144,49 +144,11 @@ void train_policy(const char* data_file, const char* model_file) {
         }
     }
     
-    // After training, print some example predictions
-    printf("\nExample predictions after training:\n");
-    printf("----------------------------------------\n");
-    
-    // Do one final forward pass
-    forward_pass(net, X);
-    
-    float* h_predictions = (float*)malloc(num_samples * output_dim * sizeof(float));
-
-    // Print first 5 examples
-    for(int i = 0; i < 5; i++) {
-        printf("\nExample %d (first samples):\n", i+1);
-        
-        printf("Input state:\n");
-        for(int j = 0; j < input_dim; j++) {
-            printf("%.6f ", X[i * input_dim + j]);
-        }
-        printf("\n");
-    
-        // Copy predictions from device to host
-        CHECK_CUDA(cudaMemcpy(h_predictions, net->d_predictions, 
-                            num_samples * output_dim * sizeof(float),
-                            cudaMemcpyDeviceToHost));
-
-        printf("Predicted motors: ");
-        for(int j = 0; j < output_dim; j++) {
-            printf("%.6f ", h_predictions[i * output_dim + j]);
-        }
-        printf("\n");
-        
-        printf("Actual motors: ");
-        for(int j = 0; j < output_dim; j++) {
-            printf("%.6f ", y[i * output_dim + j]);
-        }
-        printf("\n");
-    }
-    
     // Save trained model
     net->batch_size = 1;
     save_model(net, model_file);
     
     // Cleanup
-    free(h_predictions);
     free(X);
     free(y);
     free_net(net);
