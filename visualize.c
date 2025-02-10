@@ -97,14 +97,14 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Position error (3)
+            // Current position (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i] = (float)(target[i] - quad->linear_position_W[i]);
+                batch_input[i] = (float)quad->linear_position_W[i];
             }
             
-            // Velocity error (3)
+            // Current velocity (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i+3] = (float)(target[i+3] - quad->linear_velocity_W[i]);
+                batch_input[i+3] = (float)quad->linear_velocity_W[i];
             }
             
             // Current orientation (9)
