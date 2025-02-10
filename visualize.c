@@ -12,6 +12,10 @@
 #define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    10.0  // Simulation duration in seconds
 
+double random_range(double min, double max) {
+    return min + (double)rand() / RAND_MAX * (max - min);
+}
+
 int main(int argc, char* argv[]) {
     if(argc != 2) {
         printf("Usage: %s <policy_file>\n", argv[0]);
@@ -20,10 +24,6 @@ int main(int argc, char* argv[]) {
 
     // Load policy network
     Net* policy = load_model(argv[1]);
-    if(!policy) {
-        printf("Failed to load policy from %s\n", argv[1]);
-        return 1;
-    }
 
     // Print network dimensions
     printf("Loaded policy network dimensions:\n");
@@ -47,7 +47,11 @@ int main(int argc, char* argv[]) {
            target[0], target[1], target[2], target[6]);
     
     // Initialize quadcopter
-    Quad* quad = create_quad(0.0, 0.0, 0.0);
+    Quad* quad = create_quad(
+        random_range(-2.0, 2.0),
+        random_range(0.0, 2.0),    // Always at or above ground
+        random_range(-2.0, 2.0)
+    );
     
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -151,6 +155,9 @@ int main(int argc, char* argv[]) {
         t_control += DT_PHYSICS;
         t_render += DT_PHYSICS;
     }
+
+    printf("Final position: (%.2f, %.2f, %.2f)\n", 
+           quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2]);
 
     // Save animation
     char filename[64];
