@@ -45,9 +45,7 @@ void generate_training_data(const char* filename, int num_episodes) {
             random_range(-2.0, 2.0),    // x
             random_range(1.0, 3.0),     // y: Always above ground
             random_range(-2.0, 2.0),    // z
-            random_range(-1.0, 1.0),    // vx
-            random_range(-1.0, 1.0),    // vy
-            random_range(-1.0, 1.0),    // vz
+            0.0, 0.0, 0.0,              // vx, vy, vz
             random_range(0.0, 2*M_PI)   // yaw
         };
         
@@ -166,7 +164,7 @@ int main() {
              localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 100);
+    generate_training_data(data_fname, 500);
     
     printf("Phase 2: Training policy network...\n");
     train_policy(data_fname, model_fname);
