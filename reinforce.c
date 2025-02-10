@@ -5,7 +5,7 @@
 #include <time.h>
 #include <math.h>
 #include "sim/quad.h"
-#include "mlp/mlp.h"
+#include "mlp/gpu/mlp.h"
 #include "mlp/data.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
@@ -118,14 +118,14 @@ void train_policy(const char* data_file, const char* model_file) {
     
     // Initialize MLP
     const int input_dim = 25;   // 18 state + 7 target
-    const int hidden_dim = 128;
+    const int hidden_dim = 4096;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples; // Full batch
     
     Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 2000;
+    const int num_epochs = 10000;
     const float learning_rate = 0.001f;
     
     printf("Starting training for %d epochs...\n", num_epochs);
@@ -151,27 +151,32 @@ void train_policy(const char* data_file, const char* model_file) {
     // Do one final forward pass
     forward_pass(net, X);
     
-    // Print 5 random examples
+    float* h_predictions = (float*)malloc(num_samples * output_dim * sizeof(float));
+
+    // Print first 5 examples
     for(int i = 0; i < 5; i++) {
-        int idx = rand() % num_samples;
-        
-        printf("\nExample %d (sample %d):\n", i+1, idx);
+        printf("\nExample %d (first samples):\n", i+1);
         
         printf("Input state:\n");
         for(int j = 0; j < input_dim; j++) {
-            printf("%.6f ", X[idx * input_dim + j]);
+            printf("%.6f ", X[i * input_dim + j]);
         }
         printf("\n");
-        
+    
+        // Copy predictions from device to host
+        CHECK_CUDA(cudaMemcpy(h_predictions, net->d_predictions, 
+                            num_samples * output_dim * sizeof(float),
+                            cudaMemcpyDeviceToHost));
+
         printf("Predicted motors: ");
         for(int j = 0; j < output_dim; j++) {
-            printf("%.6f ", net->predictions[idx * output_dim + j]);
+            printf("%.6f ", h_predictions[i * output_dim + j]);
         }
         printf("\n");
         
         printf("Actual motors: ");
         for(int j = 0; j < output_dim; j++) {
-            printf("%.6f ", y[idx * output_dim + j]);
+            printf("%.6f ", y[i * output_dim + j]);
         }
         printf("\n");
     }
@@ -180,6 +185,7 @@ void train_policy(const char* data_file, const char* model_file) {
     save_model(net, model_file);
     
     // Cleanup
+    free(h_predictions);
     free(X);
     free(y);
     free_net(net);
@@ -197,7 +203,7 @@ int main() {
              localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 5);
+    generate_training_data(data_fname, 100);
     
     printf("Phase 2: Training policy network...\n");
     train_policy(data_fname, model_fname);
