@@ -1,2 +1,2 @@
-# reinforce
-Implementation of Ronald J. Williams' 1992 paper "Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning" for quadcoptor control.
+# imitation
+Implementation of machine learning a quadcoptor controller through imitation
