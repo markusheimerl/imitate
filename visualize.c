@@ -16,6 +16,27 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
+// Calculate linear acceleration in world frame from quad state
+void calculate_linear_acceleration(const Quad* q, double* linear_acceleration_W) {
+    // Calculate thrust from rotor speeds
+    double thrust = 0;
+    for(int i = 0; i < 4; i++) {
+        double omega_sq = q->omega[i] * fabs(q->omega[i]);
+        thrust += K_F * omega_sq;
+    }
+
+    // Calculate linear acceleration in world frame
+    double f_B_thrust[3] = {0, thrust, 0};
+    double f_thrust_W[3];
+    multMatVec3f(q->R_W_B, f_B_thrust, f_thrust_W);
+
+    // Convert force to acceleration
+    for(int i = 0; i < 3; i++) {
+        linear_acceleration_W[i] = f_thrust_W[i] / MASS;
+    }
+    linear_acceleration_W[1] -= GRAVITY;
+}
+
 int main(int argc, char* argv[]) {
     if(argc != 2) {
         printf("Usage: %s <policy_file>\n", argv[0]);
@@ -52,7 +73,6 @@ int main(int argc, char* argv[]) {
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
            target[0], target[1], target[2], target[6]);
-    
     
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -95,38 +115,38 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
+            // Calculate linear acceleration
+            double linear_acceleration_W[3];
+            calculate_linear_acceleration(quad, linear_acceleration_W);
+            
+            // Convert to body frame acceleration
+            double R_B_W[9];
+            transpMat3f(quad->R_W_B, R_B_W);
+            double accel_B[3];
+            multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+
             // Current position (3)
             for(int i = 0; i < 3; i++) {
                 batch_input[i] = (float)quad->linear_position_W[i];
             }
             
-            // Current velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+3] = (float)quad->linear_velocity_W[i];
-            }
-            
-            // Current orientation (9)
-            for(int i = 0; i < 9; i++) {
-                batch_input[i+6] = (float)quad->R_W_B[i];
-            }
-            
             // Current angular velocity (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i+15] = (float)quad->angular_velocity_B[i];
+                batch_input[i+3] = (float)quad->angular_velocity_B[i];
+            }
+            
+            // Current acceleration in body frame (3)
+            for(int i = 0; i < 3; i++) {
+                batch_input[i+6] = (float)accel_B[i];
             }
 
-            // Target position (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+18] = (float)target[i];
-            }
-
-            // Target velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+21] = (float)target[i+3];
+            // Target position and velocity (6)
+            for(int i = 0; i < 6; i++) {
+                batch_input[i+9] = (float)target[i];
             }
             
             // Target yaw (1)
-            batch_input[24] = (float)target[6];
+            batch_input[15] = (float)target[6];
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);
