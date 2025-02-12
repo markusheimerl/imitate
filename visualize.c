@@ -53,11 +53,6 @@ void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, 
     // Transform world acceleration to body frame
     double accel_B[3];
     multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
-
-    // Accelerometer measures proper acceleration (reaction force)
-    for(int i = 0; i < 3; i++) {
-        accel_reading[i] = -accel_B[i];  // Just negate acceleration
-    }
 }
 
 int main(int argc, char* argv[]) {
