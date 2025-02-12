@@ -38,6 +38,34 @@ void calculate_linear_acceleration(const Quad* q, double* linear_acceleration_W)
     linear_acceleration_W[1] -= GRAVITY;
 }
 
+// Simulate ideal gyroscope reading (just returns angular velocity in body frame)
+void simulate_gyro(const Quad* q, double* gyro_reading) {
+    for(int i = 0; i < 3; i++) {
+        gyro_reading[i] = q->angular_velocity_B[i];
+    }
+}
+
+// Simulate ideal accelerometer reading
+void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, double* accel_reading) {
+    // Convert world acceleration to body frame
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    
+    // Transform world acceleration to body frame
+    double accel_B[3];
+    multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+
+    // Add gravity (in body frame)
+    double gravity_W[3] = {0, -GRAVITY, 0};
+    double gravity_B[3];
+    multMatVec3f(R_B_W, gravity_W, gravity_B);
+
+    // Accelerometer measures proper acceleration (reaction force)
+    for(int i = 0; i < 3; i++) {
+        accel_reading[i] = -accel_B[i] - gravity_B[i];
+    }
+}
+
 // Generate training data
 void generate_training_data(const char* filename, int num_episodes) {
     FILE* f = fopen(filename, "w");
@@ -83,15 +111,15 @@ void generate_training_data(const char* filename, int num_episodes) {
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
                 
-                // Calculate accelerations
+                // Calculate accelerations and get sensor readings
                 double linear_acceleration_W[3];
                 calculate_linear_acceleration(quad, linear_acceleration_W);
 
-                // Convert world acceleration to body frame
-                double R_B_W[9];
-                transpMat3f(quad->R_W_B, R_B_W);
-                double accel_B[3];
-                multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+                double gyro_reading[3];
+                simulate_gyro(quad, gyro_reading);
+
+                double accel_reading[3];
+                simulate_accelerometer(quad, linear_acceleration_W, accel_reading);
                 
                 // Write state and action to file
                 fprintf(f, "%.6f,%.6f,%.6f,", // Position
@@ -99,15 +127,15 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->linear_position_W[1],
                        quad->linear_position_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
-                       quad->angular_velocity_B[0],
-                       quad->angular_velocity_B[1],
-                       quad->angular_velocity_B[2]);
+                fprintf(f, "%.6f,%.6f,%.6f,", // Gyroscope readings
+                       gyro_reading[0],
+                       gyro_reading[1],
+                       gyro_reading[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,", // Linear acceleration (body frame)
-                       accel_B[0],
-                       accel_B[1],
-                       accel_B[2]);
+                fprintf(f, "%.6f,%.6f,%.6f,", // Accelerometer readings
+                       accel_reading[0],
+                       accel_reading[1],
+                       accel_reading[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Target
                        target[0], target[1], target[2],

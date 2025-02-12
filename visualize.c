@@ -37,6 +37,34 @@ void calculate_linear_acceleration(const Quad* q, double* linear_acceleration_W)
     linear_acceleration_W[1] -= GRAVITY;
 }
 
+// Simulate ideal gyroscope reading (just returns angular velocity in body frame)
+void simulate_gyro(const Quad* q, double* gyro_reading) {
+    for(int i = 0; i < 3; i++) {
+        gyro_reading[i] = q->angular_velocity_B[i];
+    }
+}
+
+// Simulate ideal accelerometer reading
+void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, double* accel_reading) {
+    // Convert world acceleration to body frame
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    
+    // Transform world acceleration to body frame
+    double accel_B[3];
+    multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+
+    // Add gravity (in body frame)
+    double gravity_W[3] = {0, -GRAVITY, 0};
+    double gravity_B[3];
+    multMatVec3f(R_B_W, gravity_W, gravity_B);
+
+    // Accelerometer measures proper acceleration (reaction force)
+    for(int i = 0; i < 3; i++) {
+        accel_reading[i] = -accel_B[i] - gravity_B[i];
+    }
+}
+
 int main(int argc, char* argv[]) {
     if(argc != 2) {
         printf("Usage: %s <policy_file>\n", argv[0]);
@@ -115,29 +143,29 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Calculate linear acceleration
+            // Calculate accelerations and get sensor readings
             double linear_acceleration_W[3];
             calculate_linear_acceleration(quad, linear_acceleration_W);
-            
-            // Convert to body frame acceleration
-            double R_B_W[9];
-            transpMat3f(quad->R_W_B, R_B_W);
-            double accel_B[3];
-            multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
 
+            double gyro_reading[3];
+            simulate_gyro(quad, gyro_reading);
+
+            double accel_reading[3];
+            simulate_accelerometer(quad, linear_acceleration_W, accel_reading);
+            
             // Current position (3)
             for(int i = 0; i < 3; i++) {
                 batch_input[i] = (float)quad->linear_position_W[i];
             }
             
-            // Current angular velocity (3)
+            // Gyroscope readings (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i+3] = (float)quad->angular_velocity_B[i];
+                batch_input[i+3] = (float)gyro_reading[i];
             }
             
-            // Current acceleration in body frame (3)
+            // Accelerometer readings (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i+6] = (float)accel_B[i];
+                batch_input[i+6] = (float)accel_reading[i];
             }
 
             // Target position and velocity (6)
