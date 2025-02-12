@@ -17,6 +17,70 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
+// Calculate linear acceleration in world frame from quad state
+void calculate_linear_acceleration(const Quad* q, double* linear_acceleration_W) {
+    // Calculate thrust from rotor speeds
+    double thrust = 0;
+    for(int i = 0; i < 4; i++) {
+        double omega_sq = q->omega[i] * fabs(q->omega[i]);
+        thrust += K_F * omega_sq;
+    }
+
+    // Calculate linear acceleration in world frame
+    double f_B_thrust[3] = {0, thrust, 0};
+    double f_thrust_W[3];
+    multMatVec3f(q->R_W_B, f_B_thrust, f_thrust_W);
+
+    // Convert force to acceleration
+    for(int i = 0; i < 3; i++) {
+        linear_acceleration_W[i] = f_thrust_W[i] / MASS;
+    }
+    linear_acceleration_W[1] -= GRAVITY;
+}
+
+// Helper function for gyro noise simulation
+void simulate_gyro(const double* true_angular_velocity, double* gyro_reading) {
+    static double gyro_bias[3] = {0, 0, 0};  // Persistent bias
+    const double noise_std = 0.01;  // Standard deviation of noise (rad/s)
+    const double bias_std = 0.001;  // Standard deviation of bias random walk
+    
+    // Update random walk bias
+    for(int i = 0; i < 3; i++) {
+        gyro_bias[i] += random_range(-bias_std, bias_std);
+    }
+    
+    // Add bias and noise to true angular velocity
+    for(int i = 0; i < 3; i++) {
+        gyro_reading[i] = true_angular_velocity[i] + 
+                         gyro_bias[i] + 
+                         random_range(-noise_std, noise_std);
+    }
+}
+
+// Helper function for accelerometer simulation
+void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, double* accel_reading) {
+    const double noise_std = 0.1;  // m/s^2
+    
+    // Transform world acceleration to body frame
+    double R_B_W[9];  // Body to world rotation matrix
+    transpMat3f(q->R_W_B, R_B_W);
+    
+    // Transform acceleration to body frame
+    double accel_B[3];
+    multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+    
+    // Add gravity (in body frame)
+    double gravity_W[3] = {0, -GRAVITY, 0};
+    double gravity_B[3];
+    multMatVec3f(R_B_W, gravity_W, gravity_B);
+    
+    // Accelerometer measures proper acceleration (including gravity)
+    for(int i = 0; i < 3; i++) {
+        accel_reading[i] = accel_B[i] - gravity_B[i] + 
+                          random_range(-noise_std, noise_std);
+    }
+}
+
 // Generate training data
 void generate_training_data(const char* filename, int num_episodes) {
     FILE* f = fopen(filename, "w");
@@ -26,9 +90,9 @@ void generate_training_data(const char* filename, int num_episodes) {
     }
     
     // Write header
-    fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
-    fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
+    fprintf(f, "px,py,pz,"); // Position (3)
+    fprintf(f, "gx,gy,gz,"); // Gyroscope readings (3)
+    fprintf(f, "ax,ay,az,"); // Accelerometer readings (3)
     fprintf(f, "tx,ty,tz,tvx,tvy,tvz,tyaw,"); // Target (7)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
@@ -62,20 +126,31 @@ void generate_training_data(const char* filename, int num_episodes) {
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
                 
-                // Write state, target, and action to file
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                       quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
-                       quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
+                // Calculate accelerations and simulate sensors
+                double linear_acceleration_W[3];
+                calculate_linear_acceleration(quad, linear_acceleration_W);
+
+                double gyro_reading[3];
+                simulate_gyro(quad->angular_velocity_B, gyro_reading);
+
+                double accel_reading[3];
+                simulate_accelerometer(quad, linear_acceleration_W, accel_reading);
+                
+                // Write state, sensor readings, and action to file
+                fprintf(f, "%.6f,%.6f,%.6f,", // Position
+                       quad->linear_position_W[0],
+                       quad->linear_position_W[1],
+                       quad->linear_position_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                       quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
+                fprintf(f, "%.6f,%.6f,%.6f,", // Gyroscope readings
+                       gyro_reading[0],
+                       gyro_reading[1],
+                       gyro_reading[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
-                       quad->angular_velocity_B[0],
-                       quad->angular_velocity_B[1],
-                       quad->angular_velocity_B[2]);
+                fprintf(f, "%.6f,%.6f,%.6f,", // Accelerometer readings
+                       accel_reading[0],
+                       accel_reading[1],
+                       accel_reading[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Target
                        target[0], target[1], target[2],
@@ -110,12 +185,12 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 25, 4);
+    load_csv(data_file, &X, &y, &num_samples, 16, 4);  // 9 state + 7 target = 16 inputs
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 25;   // 18 state + 7 target
+    const int input_dim = 16;   // 9 state (3 pos + 3 gyro + 3 accel) + 7 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;
