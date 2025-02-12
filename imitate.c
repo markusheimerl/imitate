@@ -191,7 +191,7 @@ void train_policy(const char* data_file, const char* model_file) {
     
     // Initialize MLP
     const int input_dim = 16;   // 9 state (3 pos + 3 gyro + 3 accel) + 7 target
-    const int hidden_dim = 512;
+    const int hidden_dim = 1024;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;
     
