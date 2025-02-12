@@ -55,14 +55,9 @@ void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, 
     double accel_B[3];
     multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
 
-    // Add gravity (in body frame)
-    double gravity_W[3] = {0, -GRAVITY, 0};
-    double gravity_B[3];
-    multMatVec3f(R_B_W, gravity_W, gravity_B);
-
     // Accelerometer measures proper acceleration (reaction force)
     for(int i = 0; i < 3; i++) {
-        accel_reading[i] = -accel_B[i] - gravity_B[i];
+        accel_reading[i] = -accel_B[i];  // Just negate acceleration
     }
 }
 
