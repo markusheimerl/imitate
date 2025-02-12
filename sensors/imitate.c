@@ -4,17 +4,76 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include "sim/quad.h"
-#include "mlp/gpu/mlp.h"
-#include "mlp/data.h"
+#include "../sim/quad.h"
+#include "../mlp/gpu/mlp.h"
+#include "../mlp/data.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define SIM_TIME    5.0  // 5 seconds per episode
 
+#define HISTORY_LENGTH 10  // Number of historical readings to keep
+#define SENSOR_DIMS 6     // 3 gyro + 3 accel readings
+
 // Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
+}
+
+// Simple helper to add new reading to history buffer
+void update_sensor_history(double* history, const double* gyro, const double* accel) {
+    // Shift old readings back
+    memmove(history + SENSOR_DIMS, history, SENSOR_DIMS * (HISTORY_LENGTH - 1) * sizeof(double));
+    
+    // Add new reading at front
+    for(int i = 0; i < 3; i++) {
+        history[i] = gyro[i];
+        history[i + 3] = accel[i];
+    }
+}
+
+// Calculate linear acceleration in world frame from quad state
+void calculate_linear_acceleration(const Quad* q, double* linear_acceleration_W) {
+    // Calculate thrust from rotor speeds
+    double thrust = 0;
+    for(int i = 0; i < 4; i++) {
+        double omega_sq = q->omega[i] * fabs(q->omega[i]);
+        thrust += K_F * omega_sq;
+    }
+
+    // Calculate linear acceleration in world frame
+    double f_B_thrust[3] = {0, thrust, 0};
+    double f_thrust_W[3];
+    multMatVec3f(q->R_W_B, f_B_thrust, f_thrust_W);
+
+    // Convert force to acceleration
+    for(int i = 0; i < 3; i++) {
+        linear_acceleration_W[i] = f_thrust_W[i] / MASS;
+    }
+    linear_acceleration_W[1] -= GRAVITY;
+}
+
+// Simulate ideal gyroscope reading (just returns angular velocity in body frame)
+void simulate_gyro(const Quad* q, double* gyro_reading) {
+    for(int i = 0; i < 3; i++) {
+        gyro_reading[i] = q->angular_velocity_B[i];
+    }
+}
+
+// Simulate ideal accelerometer reading
+void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, double* accel_reading) {
+    // Convert world acceleration to body frame
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    
+    // Transform world acceleration to body frame
+    double accel_B[3];
+    multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+    
+    // Copy result
+    for(int i = 0; i < 3; i++) {
+        accel_reading[i] = accel_B[i];
+    }
 }
 
 // Generate training data
@@ -26,11 +85,15 @@ void generate_training_data(const char* filename, int num_episodes) {
     }
     
     // Write header
-    fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
-    fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
+    fprintf(f, "px,py,pz,"); // Position (3)
+    for(int t = 0; t < HISTORY_LENGTH; t++) {
+        fprintf(f, "gx%d,gy%d,gz%d,ax%d,ay%d,az%d,", t, t, t, t, t, t);
+    }
     fprintf(f, "tx,ty,tz,tvx,tvy,tvz,tyaw,"); // Target (7)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
+    
+    // Preallocate sensor history buffer
+    double sensor_history[HISTORY_LENGTH * SENSOR_DIMS] = {0};
     
     for (int episode = 0; episode < num_episodes; episode++) {
         // Random initial state (y always positive)
@@ -49,6 +112,9 @@ void generate_training_data(const char* filename, int num_episodes) {
             random_range(0.0, 2*M_PI)   // yaw
         };
         
+        // Clear history at start of episode
+        memset(sensor_history, 0, sizeof(sensor_history));
+        
         double t_physics = 0.0;
         double t_control = 0.0;
         
@@ -62,20 +128,29 @@ void generate_training_data(const char* filename, int num_episodes) {
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
                 
-                // Write state, target, and action to file
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                       quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
-                       quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
+                // Calculate accelerations and get sensor readings
+                double linear_acceleration_W[3];
+                calculate_linear_acceleration(quad, linear_acceleration_W);
+
+                double gyro_reading[3];
+                simulate_gyro(quad, gyro_reading);
+
+                double accel_reading[3];
+                simulate_accelerometer(quad, linear_acceleration_W, accel_reading);
+                
+                // Update history
+                update_sensor_history(sensor_history, gyro_reading, accel_reading);
+                
+                // Write state to file
+                fprintf(f, "%.6f,%.6f,%.6f,", // Position
+                       quad->linear_position_W[0],
+                       quad->linear_position_W[1],
+                       quad->linear_position_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                       quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
-                       
-                fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
-                       quad->angular_velocity_B[0],
-                       quad->angular_velocity_B[1],
-                       quad->angular_velocity_B[2]);
+                // Write full sensor history
+                for(int t = 0; t < HISTORY_LENGTH * SENSOR_DIMS; t++) {
+                    fprintf(f, "%.6f,", sensor_history[t]);
+                }
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Target
                        target[0], target[1], target[2],
@@ -110,13 +185,13 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 25, 4);
+    const int input_dim = 3 + (HISTORY_LENGTH * SENSOR_DIMS) + 7;  // 3 pos + (history * sensors) + 7 target
+    load_csv(data_file, &X, &y, &num_samples, input_dim, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 25;   // 18 state + 7 target
-    const int hidden_dim = 512;
+    const int hidden_dim = 1024;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;
     

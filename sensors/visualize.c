@@ -3,17 +3,76 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include "sim/quad.h"
-#include "sim/raytracer/scene.h"
-#include "mlp/mlp.h"
+#include "../sim/quad.h"
+#include "../sim/raytracer/scene.h"
+#include "../mlp/mlp.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    5.0  // Simulation duration in seconds
 
+#define HISTORY_LENGTH 10  // Number of historical readings to keep
+#define SENSOR_DIMS 6     // 3 gyro + 3 accel readings
+
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
+}
+
+// Simple helper to add new reading to history buffer
+void update_sensor_history(double* history, const double* gyro, const double* accel) {
+    // Shift old readings back
+    memmove(history + SENSOR_DIMS, history, SENSOR_DIMS * (HISTORY_LENGTH - 1) * sizeof(double));
+    
+    // Add new reading at front
+    for(int i = 0; i < 3; i++) {
+        history[i] = gyro[i];
+        history[i + 3] = accel[i];
+    }
+}
+
+// Calculate linear acceleration in world frame from quad state
+void calculate_linear_acceleration(const Quad* q, double* linear_acceleration_W) {
+    // Calculate thrust from rotor speeds
+    double thrust = 0;
+    for(int i = 0; i < 4; i++) {
+        double omega_sq = q->omega[i] * fabs(q->omega[i]);
+        thrust += K_F * omega_sq;
+    }
+
+    // Calculate linear acceleration in world frame
+    double f_B_thrust[3] = {0, thrust, 0};
+    double f_thrust_W[3];
+    multMatVec3f(q->R_W_B, f_B_thrust, f_thrust_W);
+
+    // Convert force to acceleration
+    for(int i = 0; i < 3; i++) {
+        linear_acceleration_W[i] = f_thrust_W[i] / MASS;
+    }
+    linear_acceleration_W[1] -= GRAVITY;
+}
+
+// Simulate ideal gyroscope reading (just returns angular velocity in body frame)
+void simulate_gyro(const Quad* q, double* gyro_reading) {
+    for(int i = 0; i < 3; i++) {
+        gyro_reading[i] = q->angular_velocity_B[i];
+    }
+}
+
+// Simulate ideal accelerometer reading
+void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, double* accel_reading) {
+    // Convert world acceleration to body frame
+    double R_B_W[9];
+    transpMat3f(q->R_W_B, R_B_W);
+    
+    // Transform world acceleration to body frame
+    double accel_B[3];
+    multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+    
+    // Copy result
+    for(int i = 0; i < 3; i++) {
+        accel_reading[i] = accel_B[i];
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -53,7 +112,6 @@ int main(int argc, char* argv[]) {
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
            target[0], target[1], target[2], target[6]);
     
-    
     // Initialize raytracer scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
     
@@ -82,8 +140,9 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Preallocate batch-sized input buffer
+    // Preallocate batch-sized input buffer and sensor history
     float* batch_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
+    double sensor_history[HISTORY_LENGTH * SENSOR_DIMS] = {0};
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -95,38 +154,36 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
+            // Calculate accelerations and get sensor readings
+            double linear_acceleration_W[3];
+            calculate_linear_acceleration(quad, linear_acceleration_W);
+
+            double gyro_reading[3];
+            simulate_gyro(quad, gyro_reading);
+
+            double accel_reading[3];
+            simulate_accelerometer(quad, linear_acceleration_W, accel_reading);
+            
+            // Update history
+            update_sensor_history(sensor_history, gyro_reading, accel_reading);
+            
+            // Fill network input
+            int input_idx = 0;
+            
             // Current position (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i] = (float)quad->linear_position_W[i];
+                batch_input[input_idx++] = (float)quad->linear_position_W[i];
             }
             
-            // Current velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+3] = (float)quad->linear_velocity_W[i];
+            // Full sensor history
+            for(int i = 0; i < HISTORY_LENGTH * SENSOR_DIMS; i++) {
+                batch_input[input_idx++] = (float)sensor_history[i];
             }
             
-            // Current orientation (9)
-            for(int i = 0; i < 9; i++) {
-                batch_input[i+6] = (float)quad->R_W_B[i];
+            // Target (7)
+            for(int i = 0; i < 7; i++) {
+                batch_input[input_idx++] = (float)target[i];
             }
-            
-            // Current angular velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+15] = (float)quad->angular_velocity_B[i];
-            }
-
-            // Target position (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+18] = (float)target[i];
-            }
-
-            // Target velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+21] = (float)target[i+3];
-            }
-            
-            // Target yaw (1)
-            batch_input[24] = (float)target[6];
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);
@@ -167,7 +224,7 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    printf("Final position: (%.2f, %.2f, %.2f)\n", 
+    printf("\nFinal position: (%.2f, %.2f, %.2f)\n", 
            quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2]);
 
     // Save animation
