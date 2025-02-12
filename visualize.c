@@ -12,8 +12,23 @@
 #define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    5.0  // Simulation duration in seconds
 
+#define HISTORY_LENGTH 10  // Number of historical readings to keep
+#define SENSOR_DIMS 6     // 3 gyro + 3 accel readings
+
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
+}
+
+// Simple helper to add new reading to history buffer
+void update_sensor_history(double* history, const double* gyro, const double* accel) {
+    // Shift old readings back
+    memmove(history + SENSOR_DIMS, history, SENSOR_DIMS * (HISTORY_LENGTH - 1) * sizeof(double));
+    
+    // Add new reading at front
+    for(int i = 0; i < 3; i++) {
+        history[i] = gyro[i];
+        history[i + 3] = accel[i];
+    }
 }
 
 // Calculate linear acceleration in world frame from quad state
@@ -53,6 +68,11 @@ void simulate_accelerometer(const Quad* q, const double* linear_acceleration_W, 
     // Transform world acceleration to body frame
     double accel_B[3];
     multMatVec3f(R_B_W, linear_acceleration_W, accel_B);
+    
+    // Copy result
+    for(int i = 0; i < 3; i++) {
+        accel_reading[i] = accel_B[i];
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -120,8 +140,9 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Preallocate batch-sized input buffer
+    // Preallocate batch-sized input buffer and sensor history
     float* batch_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
+    double sensor_history[HISTORY_LENGTH * SENSOR_DIMS] = {0};
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -143,28 +164,26 @@ int main(int argc, char* argv[]) {
             double accel_reading[3];
             simulate_accelerometer(quad, linear_acceleration_W, accel_reading);
             
+            // Update history
+            update_sensor_history(sensor_history, gyro_reading, accel_reading);
+            
+            // Fill network input
+            int input_idx = 0;
+            
             // Current position (3)
             for(int i = 0; i < 3; i++) {
-                batch_input[i] = (float)quad->linear_position_W[i];
+                batch_input[input_idx++] = (float)quad->linear_position_W[i];
             }
             
-            // Gyroscope readings (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+3] = (float)gyro_reading[i];
+            // Full sensor history
+            for(int i = 0; i < HISTORY_LENGTH * SENSOR_DIMS; i++) {
+                batch_input[input_idx++] = (float)sensor_history[i];
             }
             
-            // Accelerometer readings (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+6] = (float)accel_reading[i];
+            // Target (7)
+            for(int i = 0; i < 7; i++) {
+                batch_input[input_idx++] = (float)target[i];
             }
-
-            // Target position and velocity (6)
-            for(int i = 0; i < 6; i++) {
-                batch_input[i+9] = (float)target[i];
-            }
-            
-            // Target yaw (1)
-            batch_input[15] = (float)target[6];
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);
@@ -205,7 +224,7 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    printf("Final position: (%.2f, %.2f, %.2f)\n", 
+    printf("\nFinal position: (%.2f, %.2f, %.2f)\n", 
            quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2]);
 
     // Save animation
