@@ -41,17 +41,15 @@ int main(int argc, char* argv[]) {
         random_range(-2.0, 2.0)
     );
     
-    // Initialize random target position and yaw
-    double target[7] = {
+    // Initialize random target position
+    double target[3] = {
         random_range(-2.0, 2.0),    // x
         random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0),    // z
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(0.0, 2*M_PI)   // yaw
+        random_range(-2.0, 2.0)     // z
     };
     
-    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
-           target[0], target[1], target[2], target[6]);
+    printf("Target position: (%.2f, %.2f, %.2f)\n", 
+           target[0], target[1], target[2]);
     
     // Initialize scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -71,16 +69,14 @@ int main(int argc, char* argv[]) {
     add_mesh_to_scene(&scene, ground);
     add_mesh_to_scene(&scene, treasure);
 
-    // Set treasure position and rotation
+    // Set treasure position
     Vec3 treasure_pos = {
         (float)target[0],
         (float)target[1],
         (float)target[2]
     };
-    Vec3 treasure_rot = {0.0f, (float)target[6], 0.0f};  // Only apply yaw rotation
     
     set_mesh_position(&scene.meshes[2], treasure_pos);
-    set_mesh_rotation(&scene.meshes[2], treasure_rot);
 
     // Set up camera
     set_scene_camera(&scene,
