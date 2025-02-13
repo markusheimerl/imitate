@@ -176,7 +176,7 @@ int main() {
              localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 100);
+    generate_training_data(data_fname, 500);
     
     printf("Phase 2: Training policy network...\n");
     train_policy(data_fname, model_fname);
