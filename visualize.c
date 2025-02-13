@@ -198,11 +198,17 @@ int main(int argc, char* argv[]) {
                 cam_pos.z + rotated_forward.z
             };
 
-            // Update FPV camera
+            Vec3 up_offset = {0.0f, 1.0f, 0.0f};
+            Vec3 rotated_up = {
+                up_offset.x * quad->R_W_B[0] + up_offset.y * quad->R_W_B[1] + up_offset.z * quad->R_W_B[2],
+                up_offset.x * quad->R_W_B[3] + up_offset.y * quad->R_W_B[4] + up_offset.z * quad->R_W_B[5],
+                up_offset.x * quad->R_W_B[6] + up_offset.y * quad->R_W_B[7] + up_offset.z * quad->R_W_B[8]
+            };
+
             set_scene_camera(&drone_fpv,
                 cam_pos,
                 look_at,
-                (Vec3){0.0f, 1.0f, 0.0f},  // Keep world-up vector
+                rotated_up,
                 70.0f
             );
             
