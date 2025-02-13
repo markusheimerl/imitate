@@ -119,14 +119,9 @@ int main(int argc, char* argv[]) {
             for(int i = 0; i < 3; i++) {
                 batch_input[i+18] = (float)target[i];
             }
-
-            // Target velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+21] = (float)target[i+3];
-            }
             
             // Target yaw (1)
-            batch_input[24] = (float)target[6];
+            batch_input[21] = (float)target[6];
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);

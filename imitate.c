@@ -29,7 +29,7 @@ void generate_training_data(const char* filename, int num_episodes) {
     fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
     fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
-    fprintf(f, "tx,ty,tz,tvx,tvy,tvz,tyaw,"); // Target (7)
+    fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
     for (int episode = 0; episode < num_episodes; episode++) {
@@ -77,9 +77,8 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->angular_velocity_B[1],
                        quad->angular_velocity_B[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Target
-                       target[0], target[1], target[2],
-                       target[3], target[4], target[5], target[6]);
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Target
+                       target[0], target[1], target[2], target[6]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
                        quad->omega_next[0],
@@ -110,12 +109,12 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 25, 4);
+    load_csv(data_file, &X, &y, &num_samples, 22, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 25;   // 18 state + 7 target
+    const int input_dim = 22;   // 18 state + 4 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;
