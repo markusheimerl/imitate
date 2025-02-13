@@ -17,6 +17,11 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
+// Calculate yaw angle to face target position
+double calculate_target_yaw(double current_x, double current_z, double target_x, double target_z) {
+    return atan2(target_z - current_z, target_x - current_x);
+}
+
 // Generate training data
 void generate_training_data(const char* filename, int num_episodes) {
     FILE* f = fopen(filename, "w");
@@ -29,7 +34,7 @@ void generate_training_data(const char* filename, int num_episodes) {
     fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
     fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
-    fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
+    fprintf(f, "tx,ty,tz,"); // Target (3)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
     for (int episode = 0; episode < num_episodes; episode++) {
@@ -46,7 +51,7 @@ void generate_training_data(const char* filename, int num_episodes) {
             random_range(1.0, 3.0),     // y: Always above ground
             random_range(-2.0, 2.0),    // z
             0.0, 0.0, 0.0,              // vx, vy, vz
-            random_range(0.0, 2*M_PI)   // yaw
+            0.0                         // yaw (will be calculated)
         };
         
         double t_physics = 0.0;
@@ -59,6 +64,14 @@ void generate_training_data(const char* filename, int num_episodes) {
             }
             
             if (t_control >= DT_CONTROL) {
+                // Calculate yaw to face target
+                target[6] = calculate_target_yaw(
+                    quad->linear_position_W[0],
+                    quad->linear_position_W[2],
+                    target[0],
+                    target[2]
+                );
+                
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
                 
@@ -77,8 +90,8 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->angular_velocity_B[1],
                        quad->angular_velocity_B[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Target
-                       target[0], target[1], target[2], target[6]);
+                fprintf(f, "%.6f,%.6f,%.6f,", // Target
+                       target[0], target[1], target[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
                        quad->omega_next[0],
@@ -109,12 +122,12 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 22, 4);
+    load_csv(data_file, &X, &y, &num_samples, 21, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 22;   // 18 state + 4 target
+    const int input_dim = 21;   // 18 state + 3 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;

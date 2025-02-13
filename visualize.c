@@ -149,9 +149,6 @@ int main(int argc, char* argv[]) {
                 batch_input[i+18] = (float)target[i];
             }
             
-            // Target yaw (1)
-            batch_input[21] = (float)target[6];
-            
             // Forward pass through policy network
             forward_pass(policy, batch_input);
             
