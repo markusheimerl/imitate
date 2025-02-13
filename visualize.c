@@ -70,15 +70,32 @@ int main(int argc, char* argv[]) {
     // Add identical meshes to both scenes
     Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
+    Mesh treasure = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
     
     add_mesh_to_scene(&scene, drone);
     add_mesh_to_scene(&scene, ground);
+    add_mesh_to_scene(&scene, treasure);
     
     Mesh drone_fpv_model = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     Mesh ground_fpv = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
+    Mesh treasure_fpv = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
     
     add_mesh_to_scene(&drone_fpv, drone_fpv_model);
     add_mesh_to_scene(&drone_fpv, ground_fpv);
+    add_mesh_to_scene(&drone_fpv, treasure_fpv);
+
+    // Set treasure position and rotation in both scenes
+    Vec3 treasure_pos = {
+        (float)target[0],
+        (float)target[1],
+        (float)target[2]
+    };
+    Vec3 treasure_rot = {0.0f, (float)target[6], 0.0f};  // Only apply yaw rotation
+    
+    set_mesh_position(&scene.meshes[2], treasure_pos);
+    set_mesh_position(&drone_fpv.meshes[2], treasure_pos);
+    set_mesh_rotation(&scene.meshes[2], treasure_rot);
+    set_mesh_rotation(&drone_fpv.meshes[2], treasure_rot);
 
     // Set up initial camera for third-person view
     set_scene_camera(&scene,
