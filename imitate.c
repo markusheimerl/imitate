@@ -27,7 +27,7 @@ void generate_training_data(const char* filename, int num_episodes) {
     
     // Write header
     fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
+    fprintf(f, "r11,r12,r13,r31,r32,r33,"); // Important rotation elements (6)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
     fprintf(f, "tx,ty,tz,"); // Target (3)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
@@ -71,10 +71,9 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
                        quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                       quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Important rotation elements
+                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],  // x-axis
+                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]); // z-axis
                        
                 fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
                        quad->angular_velocity_B[0],
@@ -113,12 +112,12 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 21, 4);
+    load_csv(data_file, &X, &y, &num_samples, 18, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 21;   // 18 state + 3 target
+    const int input_dim = 18;   // 6 state + 6 rotation + 3 angular vel + 3 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;

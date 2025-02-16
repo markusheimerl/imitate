@@ -117,17 +117,21 @@ int main(int argc, char* argv[]) {
             for (int i = 0; i < 3; i++) {
                 batch_input[i + 3] = (float)quad->linear_velocity_W[i];
             }
-            // Current orientation (9)
-            for (int i = 0; i < 9; i++) {
-                batch_input[i + 6] = (float)quad->R_W_B[i];
-            }
+            // Important rotation matrix elements (6)
+            batch_input[6] = (float)quad->R_W_B[0];  // R11 (x-axis x)
+            batch_input[7] = (float)quad->R_W_B[1];  // R12 (x-axis y)
+            batch_input[8] = (float)quad->R_W_B[2];  // R13 (x-axis z)
+            batch_input[9] = (float)quad->R_W_B[6];  // R31 (z-axis x)
+            batch_input[10] = (float)quad->R_W_B[7]; // R32 (z-axis y)
+            batch_input[11] = (float)quad->R_W_B[8]; // R33 (z-axis z)
+            
             // Current angular velocity (3)
             for (int i = 0; i < 3; i++) {
-                batch_input[i + 15] = (float)quad->angular_velocity_B[i];
+                batch_input[i + 12] = (float)quad->angular_velocity_B[i];
             }
             // Target position (3)
             for (int i = 0; i < 3; i++) {
-                batch_input[i + 18] = (float)target[i];
+                batch_input[i + 15] = (float)target[i];
             }
             
             // Forward pass through policy network
