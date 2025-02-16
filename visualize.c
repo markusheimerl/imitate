@@ -17,7 +17,7 @@ double random_range(double min, double max) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
+    if(argc != 2) {
         printf("Usage: %s <policy_file>\n", argv[0]);
         return 1;
     }
@@ -41,19 +41,16 @@ int main(int argc, char* argv[]) {
         random_range(-2.0, 2.0)
     );
     
-    double random_yaw = random_range(0.0, 2 * M_PI);
-    double R_yaw[9] = {cos(random_yaw), 0.0, sin(random_yaw), 0.0, 1.0, 0.0, -sin(random_yaw), 0.0, cos(random_yaw)};
-    memcpy(quad->R_W_B, R_yaw, 9 * sizeof(double));
-    
-    // Initialize random target position
-    double target[3] = {
-        random_range(-2.0, 2.0),      // x
-        random_range(1.0, 3.0),       // y (always above ground)
-        random_range(-2.0, 2.0)       // z
+    // Initialize random target position and yaw
+    double target[7] = {
+        random_range(-2.0, 2.0),    // x
+        random_range(1.0, 3.0),     // y: Always above ground
+        random_range(-2.0, 2.0),    // z
+        0.0, 0.0, 0.0,              // vx, vy, vz
+        random_range(0.0, 2*M_PI)   // yaw
     };
     
-    printf("Target position: (%.2f, %.2f, %.2f)\n", 
-           target[0], target[1], target[2]);
+    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
     // Initialize scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -108,31 +105,12 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Pack state and target into batch_input:
-            // Current position (3)
-            for (int i = 0; i < 3; i++) {
-                batch_input[i] = (float)quad->linear_position_W[i];
-            }
-            // Current velocity (3)
-            for (int i = 0; i < 3; i++) {
-                batch_input[i + 3] = (float)quad->linear_velocity_W[i];
-            }
-            // Important rotation matrix elements (6)
-            batch_input[6] = (float)quad->R_W_B[0];  // R11 (x-axis x)
-            batch_input[7] = (float)quad->R_W_B[1];  // R12 (x-axis y)
-            batch_input[8] = (float)quad->R_W_B[2];  // R13 (x-axis z)
-            batch_input[9] = (float)quad->R_W_B[6];  // R31 (z-axis x)
-            batch_input[10] = (float)quad->R_W_B[7]; // R32 (z-axis y)
-            batch_input[11] = (float)quad->R_W_B[8]; // R33 (z-axis z)
-            
-            // Current angular velocity (3)
-            for (int i = 0; i < 3; i++) {
-                batch_input[i + 12] = (float)quad->angular_velocity_B[i];
-            }
-            // Target position (3)
-            for (int i = 0; i < 3; i++) {
-                batch_input[i + 15] = (float)target[i];
-            }
+            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad->linear_position_W[i];
+            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad->linear_velocity_W[i];
+            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad->R_W_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad->angular_velocity_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i+18] = (float)target[i];
+            batch_input[21] = (float)target[6];
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);
@@ -165,8 +143,7 @@ int main(int argc, char* argv[]) {
             render_scene(&scene);
             next_frame(&scene);
             
-            update_progress_bar((int)(t * DT_PHYSICS / DT_RENDER), 
-                                  (int)(SIM_TIME * 24), start_time);
+            update_progress_bar((int)(t * DT_PHYSICS / DT_RENDER), (int)(SIM_TIME * 24), start_time);
             
             t_render = 0.0;
         }
@@ -177,12 +154,12 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    printf("\nFinal position: (%.2f, %.2f, %.2f)\n", 
-           quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2]);
-
+    printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2], fmod(atan2(quad->R_W_B[3], quad->R_W_B[0]) + 2 * M_PI, 2 * M_PI));
+    
     // Save animation
     char filename[64];
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", localtime(&(time_t){time(NULL)}));
+    time_t now = time(NULL);
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", localtime(&now));  
     save_scene(&scene, filename);
 
     // Cleanup

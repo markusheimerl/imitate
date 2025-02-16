@@ -27,30 +27,26 @@ void generate_training_data(const char* filename, int num_episodes) {
     
     // Write header
     fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f, "r11,r12,r13,r31,r32,r33,"); // Important rotation elements (6)
+    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
-    fprintf(f, "tx,ty,tz,"); // Target (3)
+    fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
     for (int episode = 0; episode < num_episodes; episode++) {
-        // Random initial state (y always positive)
+        // Random initial state
         Quad* quad = create_quad(
             random_range(-2.0, 2.0),
             random_range(0.0, 2.0),    // Always at or above ground
             random_range(-2.0, 2.0)
         );
-
-        double random_yaw = random_range(0.0, 2 * M_PI);
-        double R_yaw[9] = {cos(random_yaw), 0.0, sin(random_yaw), 0.0, 1.0, 0.0, -sin(random_yaw), 0.0, cos(random_yaw)};
-        memcpy(quad->R_W_B, R_yaw, 9 * sizeof(double));
         
         // Random target
         double target[7] = {
-            random_range(-2.0, 2.0),   // x
-            random_range(1.0, 3.0),    // y: Always above ground
-            random_range(-2.0, 2.0),   // z
-            0.0, 0.0, 0.0,             // vx, vy, vz
-            random_yaw                 // yaw
+            random_range(-2.0, 2.0),    // x
+            random_range(1.0, 3.0),     // y: Always above ground
+            random_range(-2.0, 2.0),    // z
+            0.0, 0.0, 0.0,              // vx, vy, vz
+            random_range(0.0, 2*M_PI)   // yaw
         };
         
         double t_physics = 0.0;
@@ -71,17 +67,18 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
                        quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Important rotation elements
-                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],  // x-axis
-                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]); // z-axis
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
+                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
+                       quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
+                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
                        quad->angular_velocity_B[0],
                        quad->angular_velocity_B[1],
                        quad->angular_velocity_B[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,", // Target position
-                       target[0], target[1], target[2]);
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Target
+                       target[0], target[1], target[2], target[6]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
                        quad->omega_next[0],
@@ -112,12 +109,12 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 18, 4);
+    load_csv(data_file, &X, &y, &num_samples, 22, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 18;   // 6 state + 6 rotation + 3 angular vel + 3 target
+    const int input_dim = 22;   // 18 state + 4 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;
