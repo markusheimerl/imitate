@@ -17,7 +17,7 @@ double random_range(double min, double max) {
 }
 
 int main(int argc, char* argv[]) {
-    if(argc != 2) {
+    if (argc != 2) {
         printf("Usage: %s <policy_file>\n", argv[0]);
         return 1;
     }
@@ -34,18 +34,22 @@ int main(int argc, char* argv[]) {
 
     srand(time(NULL));
     
-    // Initialize quadcopter
+    // Initialize quadcopter with random position
     Quad* quad = create_quad(
         random_range(-2.0, 2.0),
         random_range(0.0, 2.0),    // Always at or above ground
         random_range(-2.0, 2.0)
     );
     
+    double random_yaw = random_range(0.0, 2 * M_PI);
+    double R_yaw[9] = {cos(random_yaw), 0.0, sin(random_yaw), 0.0, 1.0, 0.0, -sin(random_yaw), 0.0, cos(random_yaw)};
+    memcpy(quad->R_W_B, R_yaw, 9 * sizeof(double));
+    
     // Initialize random target position
     double target[3] = {
-        random_range(-2.0, 2.0),    // x
-        random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0)     // z
+        random_range(-2.0, 2.0),      // x
+        random_range(1.0, 3.0),       // y (always above ground)
+        random_range(-2.0, 2.0)       // z
     };
     
     printf("Target position: (%.2f, %.2f, %.2f)\n", 
@@ -75,7 +79,6 @@ int main(int argc, char* argv[]) {
         (float)target[1],
         (float)target[2]
     };
-    
     set_mesh_position(&scene.meshes[2], treasure_pos);
 
     // Set up camera
@@ -105,36 +108,33 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
+            // Pack state and target into batch_input:
             // Current position (3)
-            for(int i = 0; i < 3; i++) {
+            for (int i = 0; i < 3; i++) {
                 batch_input[i] = (float)quad->linear_position_W[i];
             }
-            
             // Current velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+3] = (float)quad->linear_velocity_W[i];
+            for (int i = 0; i < 3; i++) {
+                batch_input[i + 3] = (float)quad->linear_velocity_W[i];
             }
-            
             // Current orientation (9)
-            for(int i = 0; i < 9; i++) {
-                batch_input[i+6] = (float)quad->R_W_B[i];
+            for (int i = 0; i < 9; i++) {
+                batch_input[i + 6] = (float)quad->R_W_B[i];
             }
-            
             // Current angular velocity (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+15] = (float)quad->angular_velocity_B[i];
+            for (int i = 0; i < 3; i++) {
+                batch_input[i + 15] = (float)quad->angular_velocity_B[i];
             }
-
             // Target position (3)
-            for(int i = 0; i < 3; i++) {
-                batch_input[i+18] = (float)target[i];
+            for (int i = 0; i < 3; i++) {
+                batch_input[i + 18] = (float)target[i];
             }
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);
             
             // Apply predicted motor commands
-            for(int i = 0; i < 4; i++) {
+            for (int i = 0; i < 4; i++) {
                 quad->omega_next[i] = (double)policy->predictions[i];
             }
             
@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
             next_frame(&scene);
             
             update_progress_bar((int)(t * DT_PHYSICS / DT_RENDER), 
-                              (int)(SIM_TIME * 24), start_time);
+                                  (int)(SIM_TIME * 24), start_time);
             
             t_render = 0.0;
         }
@@ -178,9 +178,7 @@ int main(int argc, char* argv[]) {
 
     // Save animation
     char filename[64];
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", 
-             localtime(&(time_t){time(NULL)}));
-             
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", localtime(&(time_t){time(NULL)}));
     save_scene(&scene, filename);
 
     // Cleanup

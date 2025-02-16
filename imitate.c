@@ -44,34 +44,30 @@ void generate_training_data(const char* filename, int num_episodes) {
             random_range(0.0, 2.0),    // Always at or above ground
             random_range(-2.0, 2.0)
         );
+
+        double random_yaw = random_range(0.0, 2 * M_PI);
+        double R_yaw[9] = {cos(random_yaw), 0.0, sin(random_yaw), 0.0, 1.0, 0.0, -sin(random_yaw), 0.0, cos(random_yaw)};
+        memcpy(quad->R_W_B, R_yaw, 9 * sizeof(double));
         
-        // Random target (y always positive)
+        // Random target
         double target[7] = {
-            random_range(-2.0, 2.0),    // x
-            random_range(1.0, 3.0),     // y: Always above ground
-            random_range(-2.0, 2.0),    // z
-            0.0, 0.0, 0.0,              // vx, vy, vz
-            0.0                         // yaw (will be calculated)
+            random_range(-2.0, 2.0),   // x
+            random_range(1.0, 3.0),    // y: Always above ground
+            random_range(-2.0, 2.0),   // z
+            0.0, 0.0, 0.0,             // vx, vy, vz
+            random_yaw                 // yaw
         };
         
         double t_physics = 0.0;
         double t_control = 0.0;
         
-        for(int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
+        for (int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
             if (t_physics >= DT_PHYSICS) {
                 update_quad(quad, DT_PHYSICS);
                 t_physics = 0.0;
             }
             
             if (t_control >= DT_CONTROL) {
-                // Calculate yaw to face target
-                target[6] = calculate_target_yaw(
-                    quad->linear_position_W[0],
-                    quad->linear_position_W[2],
-                    target[0],
-                    target[2]
-                );
-                
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
                 
@@ -90,7 +86,7 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->angular_velocity_B[1],
                        quad->angular_velocity_B[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,", // Target
+                fprintf(f, "%.6f,%.6f,%.6f,", // Target position
                        target[0], target[1], target[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
@@ -170,10 +166,8 @@ int main() {
     // Generate timestamped filenames
     char data_fname[64], model_fname[64];
     time_t now = time(NULL);
-    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_flight.csv", 
-             localtime(&now));
-    strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_policy.bin", 
-             localtime(&now));
+    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_flight.csv", localtime(&now));
+    strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_policy.bin", localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
     generate_training_data(data_fname, 500);
