@@ -17,11 +17,6 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
-// Calculate yaw angle to face target position
-double calculate_target_yaw(double current_x, double current_z, double target_x, double target_z) {
-    return atan2(target_z - current_z, target_x - current_x) + M_PI;
-}
-
 // Generate training data
 void generate_training_data(const char* filename, int num_episodes) {
     FILE* f = fopen(filename, "w");
