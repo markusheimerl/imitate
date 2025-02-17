@@ -5,38 +5,15 @@
 #include <math.h>
 #include "sim/quad.h"
 #include "sim/raytracer/scene.h"
-#include "ssm/gpu/ssm.h"
+#include "mlp/mlp.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 24.0)
-#define SIM_TIME    20.0  // Visualization duration in seconds
+#define SIM_TIME    5.0  // Simulation duration in seconds
 
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
-}
-
-// Check if quadcopter has reached target
-int target_reached(Quad* quad, double* target) {
-    double dx = quad->linear_position_W[0] - target[0];
-    double dy = quad->linear_position_W[1] - target[1];
-    double dz = quad->linear_position_W[2] - target[2];
-    double distance = sqrt(dx*dx + dy*dy + dz*dz);
-    double velocity_mag = sqrt(
-        quad->linear_velocity_W[0] * quad->linear_velocity_W[0] +
-        quad->linear_velocity_W[1] * quad->linear_velocity_W[1] +
-        quad->linear_velocity_W[2] * quad->linear_velocity_W[2]
-    );
-    return (distance < 0.05 && velocity_mag < 0.02);
-}
-
-// Generate new random target
-void generate_target(double* target) {
-    target[0] = random_range(-2.0, 2.0);     // x
-    target[1] = random_range(1.0, 3.0);      // y: Always above ground
-    target[2] = random_range(-2.0, 2.0);     // z
-    target[3] = target[4] = target[5] = 0.0; // vx, vy, vz
-    target[6] = random_range(0.0, 2*M_PI);   // yaw
 }
 
 int main(int argc, char* argv[]) {
@@ -46,26 +23,34 @@ int main(int argc, char* argv[]) {
     }
 
     // Load policy network
-    SSM* policy = load_model(argv[1]);
+    Net* policy = load_model(argv[1]);
 
     // Print network dimensions
     printf("Loaded policy network dimensions:\n");
     printf("Input dim: %d\n", policy->input_dim);
-    printf("State dim: %d\n", policy->state_dim);
+    printf("Hidden dim: %d\n", policy->hidden_dim);
     printf("Output dim: %d\n", policy->output_dim);
     printf("Batch size: %d\n", policy->batch_size);
 
     srand(time(NULL));
     
-    // Initialize quadcopter at center
-    Quad* quad = create_quad(0.0, 1.0, 0.0);
+    // Initialize quadcopter with random position
+    Quad* quad = create_quad(
+        random_range(-2.0, 2.0),
+        random_range(0.0, 2.0),    // Always at or above ground
+        random_range(-2.0, 2.0)
+    );
     
-    // Initialize first target
-    double target[7];
-    generate_target(target);
+    // Initialize random target position and yaw
+    double target[7] = {
+        random_range(-2.0, 2.0),    // x
+        random_range(1.0, 3.0),     // y: Always above ground
+        random_range(-2.0, 2.0),    // z
+        0.0, 0.0, 0.0,              // vx, vy, vz
+        random_range(0.0, 2*M_PI)   // yaw
+    };
     
-    printf("Initial target: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
-           target[0], target[1], target[2], target[6]);
+    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
     // Initialize scene
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -85,7 +70,7 @@ int main(int argc, char* argv[]) {
     add_mesh_to_scene(&scene, ground);
     add_mesh_to_scene(&scene, treasure);
 
-    // Set initial treasure position
+    // Set treasure position
     Vec3 treasure_pos = {
         (float)target[0],
         (float)target[1],
@@ -105,64 +90,34 @@ int main(int argc, char* argv[]) {
     double t_physics = 0.0;
     double t_control = 0.0;
     double t_render = 0.0;
-    double total_time = 0.0;
     clock_t start_time = clock();
-    int target_count = 0;
     
-    // Allocate host and device input buffers
-    float* h_input = (float*)malloc(policy->input_dim * sizeof(float));
-    float* d_input;
-    CHECK_CUDA(cudaMalloc(&d_input, policy->input_dim * sizeof(float)));
-    
+    // Preallocate batch-sized input buffer
+    float* batch_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
+
     // Main simulation loop
-    while (total_time < SIM_TIME) {
+    for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
         // Physics update
         if (t_physics >= DT_PHYSICS) {
             update_quad(quad, DT_PHYSICS);
-            
-            // Check if target is reached
-            if (target_reached(quad, target)) {
-                target_count++;
-                generate_target(target);
-
-                // Update treasure position
-                treasure_pos.x = (float)target[0];
-                treasure_pos.y = (float)target[1];
-                treasure_pos.z = (float)target[2];
-                set_mesh_position(&scene.meshes[2], treasure_pos);
-            }
-            
             t_physics = 0.0;
-            total_time += DT_PHYSICS;
         }
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Build input vector
-            for(int i = 0; i < 3; i++) h_input[i] = (float)quad->linear_position_W[i];
-            for(int i = 0; i < 3; i++) h_input[i+3] = (float)quad->linear_velocity_W[i];
-            for(int i = 0; i < 3; i++) h_input[i+6] = (float)quad->angular_velocity_B[i];
-            for(int i = 0; i < 3; i++) h_input[i+9] = (float)target[i];
-            h_input[12] = (float)target[6];
+            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad->linear_position_W[i];
+            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad->linear_velocity_W[i];
+            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad->R_W_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad->angular_velocity_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i+18] = (float)target[i];
+            batch_input[21] = (float)target[6];
             
-            // Copy input to device
-            CHECK_CUDA(cudaMemcpy(d_input, h_input, 
-                                policy->input_dim * sizeof(float), 
-                                cudaMemcpyHostToDevice));
-            
-            // Reset state and forward pass
-            CHECK_CUDA(cudaMemset(policy->d_state, 0, 
-                                policy->state_dim * sizeof(float)));
-            forward_pass(policy, d_input);
-            
-            // Copy predictions back to host
-            float h_predictions[4];
-            CHECK_CUDA(cudaMemcpy(h_predictions, policy->d_predictions,
-                                4 * sizeof(float), cudaMemcpyDeviceToHost));
+            // Forward pass through policy network
+            forward_pass(policy, batch_input);
             
             // Apply predicted motor commands
             for (int i = 0; i < 4; i++) {
-                quad->omega_next[i] = (double)h_predictions[i];
+                quad->omega_next[i] = (double)policy->predictions[i];
             }
             
             t_control = 0.0;
@@ -188,8 +143,7 @@ int main(int argc, char* argv[]) {
             render_scene(&scene);
             next_frame(&scene);
             
-            update_progress_bar((int)(total_time / DT_RENDER), 
-                              (int)(SIM_TIME * 24), start_time);
+            update_progress_bar((int)(t * DT_PHYSICS / DT_RENDER), (int)(SIM_TIME * 24), start_time);
             
             t_render = 0.0;
         }
@@ -200,25 +154,18 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    printf("Total targets reached: %d\n", target_count);
-    printf("Final position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
-           quad->linear_position_W[0], quad->linear_position_W[1], 
-           quad->linear_position_W[2], 
-           fmod(atan2(quad->R_W_B[3], quad->R_W_B[0]) + 2 * M_PI, 2 * M_PI));
+    printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2], fmod(atan2(quad->R_W_B[3], quad->R_W_B[0]) + 2 * M_PI, 2 * M_PI));
     
     // Save animation
     char filename[64];
     time_t now = time(NULL);
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", 
-             localtime(&now));  
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", localtime(&now));  
     save_scene(&scene, filename);
 
     // Cleanup
-    free(h_input);
-    cudaFree(d_input);
+    free(batch_input);
     destroy_scene(&scene);
-    free_ssm(policy);
+    free_net(policy);
     free(quad);
-    
     return 0;
 }

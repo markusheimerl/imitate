@@ -15,7 +15,7 @@ imitate.out: imitate.c
 	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(CUDALIBS) $(LDFLAGS) -o $@
 
 visualize.out: visualize.c
-	$(CC) $(CFLAGS) $(CUDAFLAGS) $< -lwebp -lwebpmux $(CUDALIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $< -lopenblas -lwebp -lwebpmux -static $(LDFLAGS) -o $@
 
 run: imitate.out
 	@time ./imitate.out
