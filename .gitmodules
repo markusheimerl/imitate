@@ -4,3 +4,6 @@
 [submodule "sim"]
 	path = sim
 	url = https://github.com/markusheimerl/sim.git
+[submodule "ssm"]
+	path = ssm
+	url = https://github.com/markusheimerl/ssm
