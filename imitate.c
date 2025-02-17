@@ -5,8 +5,8 @@
 #include <time.h>
 #include <math.h>
 #include "sim/quad.h"
-#include "mlp/gpu/mlp.h"
-#include "mlp/data.h"
+#include "ssm/gpu/ssm.h"
+#include "ssm/data.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
@@ -50,9 +50,8 @@ void generate_training_data(const char* filename) {
     
     // Write header
     fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
-    fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
+    fprintf(f, "tx,ty,tz,tyaw,"); // Target (4)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
     // Initialize quadcopter randomly
@@ -94,11 +93,6 @@ void generate_training_data(const char* filename) {
                    quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
                    quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
                    
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                   quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                   quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                   quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
-                   
             fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
                    quad->angular_velocity_B[0],
                    quad->angular_velocity_B[1],
@@ -126,37 +120,52 @@ void generate_training_data(const char* filename) {
     printf("Generated data for %.1f seconds with %d targets reached\n", total_time, target_count);
 }
 
-// Train MLP
+// Train SSM
 void train_policy(const char* data_file, const char* model_file) {
     printf("Loading training data from %s...\n", data_file);
     
-    float *X, *y;
+    float *h_X, *h_y;  // Host data
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 22, 4);
+    load_csv(data_file, &h_X, &h_y, &num_samples, 13, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
-    // Initialize MLP
-    const int input_dim = 22;   // 18 state + 4 target
+    // Initialize SSM
+    const int input_dim = 13;   // 6 pos/vel + 3 angular vel + 4 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;
     
-    Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
+    // Allocate device memory for training data
+    float *d_X, *d_y;
+    size_t X_size = num_samples * input_dim * sizeof(float);
+    size_t y_size = num_samples * output_dim * sizeof(float);
+    
+    CHECK_CUDA(cudaMalloc(&d_X, X_size));
+    CHECK_CUDA(cudaMalloc(&d_y, y_size));
+    
+    // Copy training data to device
+    CHECK_CUDA(cudaMemcpy(d_X, h_X, X_size, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_y, h_y, y_size, cudaMemcpyHostToDevice));
+    
+    // Initialize SSM
+    SSM* ssm = init_ssm(input_dim, hidden_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 35000;
+    const int num_epochs = 100000;
     const float learning_rate = 0.001f;
     
     printf("Starting training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        forward_pass(net, X);
-        float loss = calculate_loss(net, y);
-        zero_gradients(net);
-        backward_pass(net, X);
-        update_weights(net, learning_rate);
+        CHECK_CUDA(cudaMemset(ssm->d_state, 0, batch_size * hidden_dim * sizeof(float)));
+        
+        forward_pass(ssm, d_X);
+        float loss = calculate_loss(ssm, d_y);
+        zero_gradients(ssm);
+        backward_pass(ssm, d_X);
+        update_weights(ssm, learning_rate);
         
         if (epoch == 0 || (epoch + 1) % 100 == 0) {
             printf("Epoch [%d/%d], Loss: %.8f\n", 
@@ -165,13 +174,15 @@ void train_policy(const char* data_file, const char* model_file) {
     }
     
     // Save trained model
-    net->batch_size = 1;
-    save_model(net, model_file);
+    ssm->batch_size = 1;
+    save_model(ssm, model_file);
     
     // Cleanup
-    free(X);
-    free(y);
-    free_net(net);
+    free(h_X);
+    free(h_y);
+    cudaFree(d_X);
+    cudaFree(d_y);
+    free_ssm(ssm);
 }
 
 int main() {
