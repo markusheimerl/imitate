@@ -10,7 +10,7 @@
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
-#define SIM_TIME    5.0  // 5 seconds per episode
+#define SIM_TIME    0.1  // 5 seconds per episode
 
 // Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
@@ -113,7 +113,7 @@ void train_policy(const char* data_file, const char* model_file, int num_episode
     const int state_dim = 512;  // Hidden state dimension
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_episodes;  // Process in batches for SSM
-    const int seq_length = (int)(SIM_TIME / DT_CONTROL - 5.5);  // Sequence length for temporal dependencies
+    const int seq_length = (int)(SIM_TIME / DT_CONTROL - 0.5);  // Sequence length for temporal dependencies
     printf("Sequence length times batch size: %d (must equal total training samples)\n", seq_length * batch_size);
     
     // Transfer data to GPU
@@ -129,7 +129,7 @@ void train_policy(const char* data_file, const char* model_file, int num_episode
     SSM* ssm = init_ssm(input_dim, state_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 100000;
+    const int num_epochs = 50000;
     const float learning_rate = 0.0001;
     
     // Allocate memory for batch data
@@ -209,10 +209,10 @@ int main() {
     strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_policy.bin", localtime(&now));
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(data_fname, 512);
+    generate_training_data(data_fname, 8);
     
     printf("Phase 2: Training policy network...\n");
-    train_policy(data_fname, model_fname, 512);
+    train_policy(data_fname, model_fname, 8);
     
     printf("Training complete!\n");
     printf("Data saved to: %s\n", data_fname);
