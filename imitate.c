@@ -13,7 +13,7 @@
 #define INITIAL_SIM_TIME 0.1
 #define TIME_INCREMENT 0.5
 #define NUM_ITERATIONS 30
-#define LOSS_THRESHOLD 0.01
+#define LOSS_THRESHOLD 0.05
 #define MAX_EPOCHS 100000
 
 // Helper function to get random value in range [min, max]
@@ -55,7 +55,7 @@ void generate_training_data(const char* filename, double sim_time) {
     // Write header
     fprintf(f, "vx,vy,vz,wx,wy,wz,tx,ty,tz,tyaw,m1,m2,m3,m4\n");
     
-    int num_episodes = (int)(8 * sqrt(sim_time / INITIAL_SIM_TIME));
+    int num_episodes = (int)(8 * (1 + 0.2 * log2(sim_time / INITIAL_SIM_TIME)));
     printf("Generating %d episodes for %.2f seconds each\n", num_episodes, sim_time);
     
     // Calculate ranges based on current simulation time
@@ -144,7 +144,7 @@ void train_policy(const char* data_file, const char* model_file,
     printf("Training data loaded: %d samples\n", num_samples);
     
     const int input_dim = 10;
-    const int state_dim = 512;
+    const int state_dim = 1024;
     const int output_dim = 4;
     const int batch_size = (int)(8 * sim_time / INITIAL_SIM_TIME);
     const int seq_length = (int)(sim_time / DT_CONTROL - ((int)sim_time + 0.5));
@@ -162,7 +162,7 @@ void train_policy(const char* data_file, const char* model_file,
     
     // Calculate adaptive learning rate
     const float initial_lr = 0.0003f;
-    const float learning_rate = initial_lr;// * expf(-0.1f * (sim_time - INITIAL_SIM_TIME));
+    const float learning_rate = initial_lr * expf(-0.1f * (sim_time - INITIAL_SIM_TIME));
     printf("Adaptive learning rate: %.6f\n", learning_rate);
     
     // Transfer data to GPU
