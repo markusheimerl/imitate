@@ -11,9 +11,9 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define INITIAL_SIM_TIME 0.1
-#define TIME_INCREMENT 0.5
+#define TIME_INCREMENT 0.1
 #define NUM_ITERATIONS 30
-#define LOSS_THRESHOLD 0.05
+#define LOSS_THRESHOLD 0.01
 #define MAX_EPOCHS 100000
 
 // Helper function to get random value in range [min, max]
@@ -55,7 +55,7 @@ void generate_training_data(const char* filename, double sim_time) {
     // Write header
     fprintf(f, "vx,vy,vz,wx,wy,wz,tx,ty,tz,tyaw,m1,m2,m3,m4\n");
     
-    int num_episodes = (int)(8 * (1 + 0.2 * log2(sim_time / INITIAL_SIM_TIME)));
+    int num_episodes = 16;//(int)(8 * (1 + 0.2 * log2(sim_time / INITIAL_SIM_TIME)));
     printf("Generating %d episodes for %.2f seconds each\n", num_episodes, sim_time);
     
     // Calculate ranges based on current simulation time
@@ -146,8 +146,8 @@ void train_policy(const char* data_file, const char* model_file,
     const int input_dim = 10;
     const int state_dim = 1024;
     const int output_dim = 4;
-    const int batch_size = (int)(8 * sim_time / INITIAL_SIM_TIME);
-    const int seq_length = (int)(sim_time / DT_CONTROL - ((int)sim_time + 0.5));
+    const int batch_size = 16;//(int)(8 * (1 + 0.2 * log2(sim_time / INITIAL_SIM_TIME)));
+    const int seq_length = (int)(sim_time / DT_CONTROL - ( 0.5));
     
     printf("Batch size: %d, Sequence length: %d\n", batch_size, seq_length);
     printf("Batch size * Sequence length: %d\n", batch_size * seq_length);
