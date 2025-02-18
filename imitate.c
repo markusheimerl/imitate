@@ -150,6 +150,7 @@ void train_policy(const char* data_file, const char* model_file,
     const int seq_length = (int)(sim_time / DT_CONTROL - ((int)sim_time + 0.5));
     
     printf("Batch size: %d, Sequence length: %d\n", batch_size, seq_length);
+    printf("Batch size * Sequence length: %d\n", batch_size * seq_length);
     
     SSM* ssm;
     if (previous_model) {
