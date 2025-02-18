@@ -10,7 +10,7 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 24.0)
-#define SIM_TIME    5.0  // Simulation duration in seconds
+#define SIM_TIME    0.5  // Simulation duration in seconds
 
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
@@ -37,18 +37,17 @@ int main(int argc, char* argv[]) {
     
     // Initialize quadcopter with random position
     Quad* quad = create_quad(
-        random_range(-2.0, 2.0),
-        random_range(0.0, 2.0),    // Always at or above ground
-        random_range(-2.0, 2.0)
+        random_range(-0.1, 0.1),
+        random_range(0.0, 0.1),
+        random_range(-0.1, 0.1)
     );
     
-    // Initialize random target position and yaw
     double target[7] = {
-        random_range(-2.0, 2.0),    // x
-        random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0),    // z
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(0.0, 2*M_PI)   // yaw
+        random_range(-0.1, 0.1),
+        random_range(0.1, 0.2),
+        random_range(-0.1, 0.1),
+        0.0, 0.0, 0.0,
+        random_range(0.0, 2*M_PI)
     };
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
