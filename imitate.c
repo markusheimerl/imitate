@@ -10,7 +10,7 @@
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
-#define SIM_TIME    3000.0
+#define SIM_TIME    300.0
 
 // Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
@@ -49,10 +49,9 @@ void generate_training_data(const char* filename) {
     }
     
     // Write header
-    fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
+    fprintf(f, "vx,vy,vz,"); // Velocity (3)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
-    fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
+    fprintf(f, "tx,ty,tz,tyaw,"); // Target (4)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
     // Initialize quadcopter randomly
@@ -89,15 +88,11 @@ void generate_training_data(const char* filename) {
             // Get motor commands from geometric controller
             control_quad(quad, target);
             
-            // Write state, target, and action to file
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                   quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
-                   quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
-                   
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                   quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                   quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                   quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
+            // Write velocity and angular velocity
+            fprintf(f, "%.6f,%.6f,%.6f,", // Velocity
+                   quad->linear_velocity_W[0], 
+                   quad->linear_velocity_W[1], 
+                   quad->linear_velocity_W[2]);
                    
             fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
                    quad->angular_velocity_B[0],
@@ -132,12 +127,12 @@ void train_policy(const char* data_file, const char* model_file) {
     
     float *X, *y;
     int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 22, 4);
+    load_csv(data_file, &X, &y, &num_samples, 10, 4);
     
     printf("Training data loaded: %d samples\n", num_samples);
     
     // Initialize MLP
-    const int input_dim = 22;   // 18 state + 4 target
+    const int input_dim = 10;   // 6 state + 4 target
     const int hidden_dim = 512;
     const int output_dim = 4;   // 4 motor commands
     const int batch_size = num_samples;

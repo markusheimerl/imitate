@@ -136,12 +136,11 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad->linear_position_W[i];
-            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad->linear_velocity_W[i];
-            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad->R_W_B[i];
-            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad->angular_velocity_B[i];
-            for(int i = 0; i < 3; i++) batch_input[i+18] = (float)target[i];
-            batch_input[21] = (float)target[6];
+            // Fill input buffer with velocity and angular velocity
+            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad->linear_velocity_W[i];
+            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad->angular_velocity_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i+6] = (float)target[i];
+            batch_input[9] = (float)target[6];
             
             // Forward pass through policy network
             forward_pass(policy, batch_input);
