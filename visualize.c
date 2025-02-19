@@ -77,14 +77,6 @@ int main(int argc, char* argv[]) {
         0.0, 0.0, 0.0,              // vx, vy, vz
         random_range(0.0, 2*M_PI)   // yaw
     };
-    // Initialize random target position and yaw
-    double target[7] = {
-        random_range(-2.0, 2.0),    // x
-        random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0),    // z
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(0.0, 2*M_PI)   // yaw
-    };
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
            target[0], target[1], target[2], target[6]);
@@ -134,7 +126,6 @@ int main(int argc, char* argv[]) {
     float* batch_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
 
     // Main simulation loop
-    for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
         // Physics update
         if (t_physics >= DT_PHYSICS) {
