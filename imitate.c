@@ -12,46 +12,90 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define SIM_TIME    10.0  // 10 seconds per episode
 
+void get_linear_acceleration_B(const Quad* q, double* a_B) {
+    // 1. Calculate total thrust force in body frame (aligned with y-axis)
+    double total_thrust = 0;
+    for(int i = 0; i < 4; i++) {
+        double omega_sq = q->omega[i] * fabs(q->omega[i]);
+        total_thrust += K_F * omega_sq;
+    }
+    
+    // 2. Create thrust vector in body frame [0, T/m, 0]
+    double thrust_B[3] = {0, total_thrust/MASS, 0};
+    
+    // 3. Transform gravity from world to body frame
+    double gravity_W[3] = {0, -GRAVITY, 0};
+    double R_W_B_T[9];
+    transpMat3f(q->R_W_B, R_W_B_T);
+    double gravity_B[3];
+    multMatVec3f(R_W_B_T, gravity_W, gravity_B);
+    
+    // 4. Sum accelerations in body frame
+    for(int i = 0; i < 3; i++) {
+        a_B[i] = thrust_B[i] + gravity_B[i];
+    }
+}
+
 // State estimator structure
 typedef struct {
     double estimated_pos[3];
+    double estimated_vel[3];
     double estimated_R[9];
 } StateEstimator;
 
 // Initialize state estimator
-StateEstimator* create_estimator(double initial_x, double initial_y, double initial_z, const double* initial_R) {
+StateEstimator* create_estimator(double initial_x, double initial_y, double initial_z, 
+                                const double* initial_R) {
     StateEstimator* est = (StateEstimator*)malloc(sizeof(StateEstimator));
     est->estimated_pos[0] = initial_x;
     est->estimated_pos[1] = initial_y;
     est->estimated_pos[2] = initial_z;
+    est->estimated_vel[0] = 0.0;
+    est->estimated_vel[1] = 0.0;
+    est->estimated_vel[2] = 0.0;
     memcpy(est->estimated_R, initial_R, 9 * sizeof(double));
     return est;
 }
 
-// Update state estimate using velocities
-void update_state_estimate(StateEstimator* est, const double* linear_velocity, 
-                         const double* angular_velocity, double dt) {
-    // Integrate linear velocity for position
-    for (int i = 0; i < 3; i++) {
-        est->estimated_pos[i] = est->estimated_pos[i] + linear_velocity[i] * dt;
+// Update state estimate using body acceleration
+void update_state_estimate(StateEstimator* est, const Quad* quad, double dt) {
+    // 1. Get acceleration in body frame
+    double a_B[3];
+    get_linear_acceleration_B(quad, a_B);
+    
+    // 2. Transform acceleration to world frame
+    double a_W[3];
+    multMatVec3f(est->estimated_R, a_B, a_W);
+    
+    // 3. Update velocity estimate using acceleration
+    for(int i = 0; i < 3; i++) {
+        est->estimated_vel[i] += a_W[i] * dt;
     }
     
-    // Integrate angular velocity for rotation matrix
-    // Ṙ = R[ω]ₓ
-    double w_hat[9];
-    so3hat(angular_velocity, w_hat);
+    // 4. Update position estimate using updated velocity
+    for(int i = 0; i < 3; i++) {
+        est->estimated_pos[i] += est->estimated_vel[i] * dt;
+    }
     
-    // Calculate R_dot = R[ω]ₓ
+    // 5. Update rotation estimate using angular velocity
+    double w_hat[9];
+    so3hat(quad->angular_velocity_B, w_hat);
+    
     double R_dot[9];
     multMat3f(est->estimated_R, w_hat, R_dot);
     
-    // Euler integration: R(t+dt) = R(t) + dt * R_dot
     double R_dot_scaled[9];
     multScalMat3f(dt, R_dot, R_dot_scaled);
     addMat3f(est->estimated_R, R_dot_scaled, est->estimated_R);
     
-    // Orthonormalize to prevent drift
+    // 6. Orthonormalize rotation matrix
     orthonormalize_rotation_matrix(est->estimated_R);
+    
+    // 7. Ground collision check
+    if(est->estimated_pos[1] < 0.0) {
+        est->estimated_pos[1] = 0.0;
+        est->estimated_vel[1] = 0.0;
+    }
 }
 
 // Helper function to get random value in range [min, max]
@@ -112,17 +156,16 @@ void generate_training_data(const char* filename, int num_episodes) {
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
 
-                update_state_estimate(estimator, quad->linear_velocity_W, 
-                                   quad->angular_velocity_B, DT_CONTROL);
+                update_state_estimate(estimator, quad, DT_CONTROL);
                 
                 // Write state (using estimated states), target, and action to file
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Estimated position and velocity
                        estimator->estimated_pos[0], 
                        estimator->estimated_pos[1], 
                        estimator->estimated_pos[2],
-                       quad->linear_velocity_W[0], 
-                       quad->linear_velocity_W[1], 
-                       quad->linear_velocity_W[2]);
+                       estimator->estimated_vel[0], 
+                       estimator->estimated_vel[1], 
+                       estimator->estimated_vel[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Estimated rotation
                        estimator->estimated_R[0], estimator->estimated_R[1], estimator->estimated_R[2],
