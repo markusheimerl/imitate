@@ -12,26 +12,58 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define SIM_TIME    10.0  // 10 seconds per episode
 
-// Position estimator structure
+// State estimator structure
 typedef struct {
     double estimated_pos[3];
-} PosEstimator;
+    double estimated_R[9];  // Estimated rotation matrix
+} StateEstimator;
 
-// Initialize position estimator
-PosEstimator* create_estimator(double initial_x, double initial_y, double initial_z) {
-    PosEstimator* est = (PosEstimator*)malloc(sizeof(PosEstimator));
+// Initialize state estimator
+StateEstimator* create_estimator(double initial_x, double initial_y, double initial_z, const double* initial_R) {
+    StateEstimator* est = (StateEstimator*)malloc(sizeof(StateEstimator));
     est->estimated_pos[0] = initial_x;
     est->estimated_pos[1] = initial_y;
     est->estimated_pos[2] = initial_z;
+    memcpy(est->estimated_R, initial_R, 9 * sizeof(double));
     return est;
 }
 
-// Update position estimate using velocity
-void update_position_estimate(PosEstimator* est, const double* velocity, double dt) {
-    // Integrate velocity
+// Update state estimate using velocities
+void update_state_estimate(StateEstimator* est, const double* linear_velocity, 
+                         const double* angular_velocity, double dt) {
+    // Integrate linear velocity for position
     for (int i = 0; i < 3; i++) {
-        est->estimated_pos[i] = est->estimated_pos[i] + velocity[i] * dt;
+        est->estimated_pos[i] = est->estimated_pos[i] + linear_velocity[i] * dt;
     }
+    
+    // Integrate angular velocity for rotation matrix
+    // R(t+dt) = R(t) * exp(w_hat * dt)
+    // First order approximation: exp(w_hat * dt) ≈ I + w_hat * dt
+    
+    // Create skew-symmetric matrix from angular velocity
+    double w_hat[9];
+    so3hat(angular_velocity, w_hat);
+    
+    // Scale by dt
+    double w_hat_dt[9];
+    multScalMat3f(dt, w_hat, w_hat_dt);
+    
+    // Add identity matrix
+    double exp_w[9] = {
+        1.0 + w_hat_dt[0], w_hat_dt[1], w_hat_dt[2],
+        w_hat_dt[3], 1.0 + w_hat_dt[4], w_hat_dt[5],
+        w_hat_dt[6], w_hat_dt[7], 1.0 + w_hat_dt[8]
+    };
+    
+    // Multiply current rotation by exponential map
+    double new_R[9];
+    multMat3f(est->estimated_R, exp_w, new_R);
+    
+    // Orthonormalize to prevent drift
+    orthonormalize_rotation_matrix(new_R);
+    
+    // Update estimated rotation
+    memcpy(est->estimated_R, new_R, 9 * sizeof(double));
 }
 
 // Helper function to get random value in range [min, max]
@@ -49,7 +81,7 @@ void generate_training_data(const char* filename, int num_episodes) {
     
     // Write header
     fprintf(f, "px,py,pz,vx,vy,vz,"); // Estimated position and velocity (6)
-    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
+    fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Estimated rotation matrix (9)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
     fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
@@ -62,11 +94,12 @@ void generate_training_data(const char* filename, int num_episodes) {
             random_range(-2.0, 2.0)
         );
         
-        // Create position estimator with same initial position
-        PosEstimator* estimator = create_estimator(
+        // Create state estimator with same initial state
+        StateEstimator* estimator = create_estimator(
             quad->linear_position_W[0],
             quad->linear_position_W[1],
-            quad->linear_position_W[2]
+            quad->linear_position_W[2],
+            quad->R_W_B
         );
         
         // Random target
@@ -91,9 +124,10 @@ void generate_training_data(const char* filename, int num_episodes) {
                 // Get motor commands from geometric controller
                 control_quad(quad, target);
 
-                update_position_estimate(estimator, quad->linear_velocity_W, DT_CONTROL);
+                update_state_estimate(estimator, quad->linear_velocity_W, 
+                                   quad->angular_velocity_B, DT_CONTROL);
                 
-                // Write state (using estimated position), target, and action to file
+                // Write state (using estimated states), target, and action to file
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Estimated position and velocity
                        estimator->estimated_pos[0], 
                        estimator->estimated_pos[1], 
@@ -102,10 +136,10 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad->linear_velocity_W[1], 
                        quad->linear_velocity_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                       quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Estimated rotation
+                       estimator->estimated_R[0], estimator->estimated_R[1], estimator->estimated_R[2],
+                       estimator->estimated_R[3], estimator->estimated_R[4], estimator->estimated_R[5],
+                       estimator->estimated_R[6], estimator->estimated_R[7], estimator->estimated_R[8]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
                        quad->angular_velocity_B[0],
