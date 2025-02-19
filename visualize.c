@@ -10,7 +10,29 @@
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
 #define DT_RENDER   (1.0 / 24.0)
-#define SIM_TIME    10.0  // Simulation duration in seconds
+#define SIM_TIME    20.0  // Visualization duration in seconds
+
+// Position estimator structure
+typedef struct {
+    double estimated_pos[3];
+} PosEstimator;
+
+// Initialize position estimator
+PosEstimator* create_estimator(double initial_x, double initial_y, double initial_z) {
+    PosEstimator* est = (PosEstimator*)malloc(sizeof(PosEstimator));
+    est->estimated_pos[0] = initial_x;
+    est->estimated_pos[1] = initial_y;
+    est->estimated_pos[2] = initial_z;
+    return est;
+}
+
+// Update position estimate using velocity
+void update_position_estimate(PosEstimator* est, const double* velocity, double dt) {
+    // Integrate velocity
+    for (int i = 0; i < 3; i++) {
+        est->estimated_pos[i] = est->estimated_pos[i] + velocity[i] * dt;
+    }
+}
 
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
@@ -34,12 +56,11 @@ int main(int argc, char* argv[]) {
 
     srand(time(NULL));
     
-    // Initialize quadcopter with random position
-    Quad* quad = create_quad(
-        random_range(-2.0, 2.0),
-        random_range(0.0, 2.0),    // Always at or above ground
-        random_range(-2.0, 2.0)
-    );
+    // Initialize quadcopter at center
+    Quad* quad = create_quad(0.0, 1.0, 0.0);
+    
+    // Initialize position estimator
+    PosEstimator* estimator = create_estimator(0.0, 1.0, 0.0);
     
     // Initialize random target position and yaw
     double target[7] = {
@@ -105,7 +126,9 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad->linear_position_W[i];
+            update_position_estimate(estimator, quad->linear_velocity_W, DT_CONTROL);
+            // Use estimated position instead of true position
+            for(int i = 0; i < 3; i++) batch_input[i] = (float)estimator->estimated_pos[i];
             for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad->linear_velocity_W[i];
             for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad->R_W_B[i];
             for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad->angular_velocity_B[i];
@@ -154,7 +177,13 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2], fmod(atan2(quad->R_W_B[3], quad->R_W_B[0]) + 2 * M_PI, 2 * M_PI));
+    printf("\nTotal targets reached: %d\n", target_count);
+    printf("Final estimated position: (%.2f, %.2f, %.2f)\n",
+           estimator->estimated_pos[0], estimator->estimated_pos[1], estimator->estimated_pos[2]);
+    printf("Final true position: (%.2f, %.2f, %.2f)\n",
+           quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2]);
+    printf("Final yaw: %.2f rad\n", 
+           fmod(atan2(quad->R_W_B[3], quad->R_W_B[0]) + 2 * M_PI, 2 * M_PI));
     
     // Save animation
     char filename[64];
@@ -164,6 +193,7 @@ int main(int argc, char* argv[]) {
 
     // Cleanup
     free(batch_input);
+    free(estimator);
     destroy_scene(&scene);
     free_net(policy);
     free(quad);

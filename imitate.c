@@ -12,6 +12,28 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define SIM_TIME    3000.0
 
+// Position estimator structure
+typedef struct {
+    double estimated_pos[3];
+} PosEstimator;
+
+// Initialize position estimator
+PosEstimator* create_estimator(double initial_x, double initial_y, double initial_z) {
+    PosEstimator* est = (PosEstimator*)malloc(sizeof(PosEstimator));
+    est->estimated_pos[0] = initial_x;
+    est->estimated_pos[1] = initial_y;
+    est->estimated_pos[2] = initial_z;
+    return est;
+}
+
+// Update position estimate using velocity
+void update_position_estimate(PosEstimator* est, const double* velocity, double dt) {
+    // Integrate velocity
+    for (int i = 0; i < 3; i++) {
+        est->estimated_pos[i] = est->estimated_pos[i] + velocity[i] * dt;
+    }
+}
+
 // Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
@@ -49,18 +71,19 @@ void generate_training_data(const char* filename, int num_episodes) {
     }
     
     // Write header
-    fprintf(f, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
+    fprintf(f, "px_est,py_est,pz_est,vx,vy,vz,"); // Estimated position and velocity (6)
     fprintf(f, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
     fprintf(f, "wx,wy,wz,"); // Angular velocity (3)
     fprintf(f, "tx,ty,tz,tyaw,"); // Target (7)
     fprintf(f, "m1,m2,m3,m4\n"); // Actions (4)
     
     // Initialize quadcopter randomly
-    Quad* quad = create_quad(
-        random_range(-2.0, 2.0),
-        random_range(1.0, 3.0),
-        random_range(-2.0, 2.0)
-    );
+    double init_x = random_range(-2.0, 2.0);
+    double init_y = random_range(1.0, 3.0);
+    double init_z = random_range(-2.0, 2.0);
+    
+    Quad* quad = create_quad(init_x, init_y, init_z);
+    PosEstimator* estimator = create_estimator(init_x, init_y, init_z);
     
     // Initialize first target
     double target[7];
@@ -78,7 +101,6 @@ void generate_training_data(const char* filename, int num_episodes) {
             t_physics = 0.0;
             total_time += DT_PHYSICS;
             
-            // Check if current target is reached
             if (target_reached(quad, target)) {
                 target_count++;
                 generate_target(target);
@@ -86,28 +108,31 @@ void generate_training_data(const char* filename, int num_episodes) {
         }
         
         if (t_control >= DT_CONTROL) {
-            // Get motor commands from geometric controller
             control_quad(quad, target);
-            
-            // Write state, target, and action to file
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                   quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
-                   quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
+            update_position_estimate(estimator, quad->linear_velocity_W, DT_CONTROL);
+            // Write estimated position instead of true position
+            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,",
+                   estimator->estimated_pos[0], 
+                   estimator->estimated_pos[1], 
+                   estimator->estimated_pos[2],
+                   quad->linear_velocity_W[0], 
+                   quad->linear_velocity_W[1], 
+                   quad->linear_velocity_W[2]);
                    
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
+            fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,",
                    quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
                    quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
                    quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
                    
-            fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
+            fprintf(f, "%.6f,%.6f,%.6f,",
                    quad->angular_velocity_B[0],
                    quad->angular_velocity_B[1],
                    quad->angular_velocity_B[2]);
                    
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Target
+            fprintf(f, "%.6f,%.6f,%.6f,%.6f,",
                    target[0], target[1], target[2], target[6]);
                    
-            fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
+            fprintf(f, "%.6f,%.6f,%.6f,%.6f\n",
                    quad->omega_next[0],
                    quad->omega_next[1],
                    quad->omega_next[2],
@@ -121,6 +146,7 @@ void generate_training_data(const char* filename, int num_episodes) {
     }
     
     free(quad);
+    free(estimator);
     fclose(f);
 }
 
