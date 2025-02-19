@@ -15,7 +15,7 @@
 // State estimator structure
 typedef struct {
     double estimated_pos[3];
-    double estimated_R[9];  // Estimated rotation matrix
+    double estimated_R[9];
 } StateEstimator;
 
 // Initialize state estimator
@@ -37,24 +37,21 @@ void update_state_estimate(StateEstimator* est, const double* linear_velocity,
     }
     
     // Integrate angular velocity for rotation matrix
-    // R(t+dt) = R(t) * exp(w_hat * dt)
+    // Ṙ = R[ω]ₓ
     double w_hat[9];
     so3hat(angular_velocity, w_hat);
     
-    double w_hat_dt[9];
-    multScalMat3f(dt, w_hat, w_hat_dt);
+    // Calculate R_dot = R[ω]ₓ
+    double R_dot[9];
+    multMat3f(est->estimated_R, w_hat, R_dot);
     
-    double exp_w[9] = {
-        1.0 + w_hat_dt[0], w_hat_dt[1], w_hat_dt[2],
-        w_hat_dt[3], 1.0 + w_hat_dt[4], w_hat_dt[5],
-        w_hat_dt[6], w_hat_dt[7], 1.0 + w_hat_dt[8]
-    };
+    // Euler integration: R(t+dt) = R(t) + dt * R_dot
+    double R_dot_scaled[9];
+    multScalMat3f(dt, R_dot, R_dot_scaled);
+    addMat3f(est->estimated_R, R_dot_scaled, est->estimated_R);
     
-    double new_R[9];
-    multMat3f(est->estimated_R, exp_w, new_R);
-    
-    orthonormalize_rotation_matrix(new_R);
-    memcpy(est->estimated_R, new_R, 9 * sizeof(double));
+    // Orthonormalize to prevent drift
+    orthonormalize_rotation_matrix(est->estimated_R);
 }
 
 double random_range(double min, double max) {
