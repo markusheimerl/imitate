@@ -5,7 +5,7 @@
 #include <math.h>
 #include "sim/quad.h"
 #include "sim/raytracer/scene.h"
-#include "mlp/mlp.h"
+#include "mlp/multilayer/mlp.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)

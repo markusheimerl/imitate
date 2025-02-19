@@ -5,7 +5,7 @@
 #include <time.h>
 #include <math.h>
 #include "sim/quad.h"
-#include "mlp/gpu/mlp.h"
+#include "mlp/gpu/multilayer/mlp.h"
 #include "mlp/data.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
@@ -170,7 +170,7 @@ void train_policy(const char* data_file, const char* model_file) {
     
     // Training parameters
     const int num_epochs = 35000;
-    const float learning_rate = 0.001f;
+    const float learning_rate = 0.0009f;
     
     printf("Starting training for %d epochs...\n", num_epochs);
     
