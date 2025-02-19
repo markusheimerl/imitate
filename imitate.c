@@ -10,7 +10,7 @@
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
-#define SIM_TIME    5.0  // 5 seconds per episode
+#define SIM_TIME    10.0  // 5 seconds per episode
 
 // Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
