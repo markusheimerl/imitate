@@ -40,6 +40,13 @@ int main(int argc, char* argv[]) {
         random_range(0.0, 2.0),    // Always at or above ground
         random_range(-2.0, 2.0)
     );
+
+    // Initialize state estimator
+    StateEstimator estimator = {
+        .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
+        .angular_velocity = {0.0, 0.0, 0.0},
+        .gyro_bias = {0.0, 0.0, 0.0}
+    };
     
     // Initialize random target position and yaw
     double target[7] = {
@@ -47,7 +54,7 @@ int main(int argc, char* argv[]) {
         random_range(1.0, 3.0),     // y: Always above ground
         random_range(-2.0, 2.0),    // z
         0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(0.0, 2*M_PI)   // yaw
+        random_range(-M_PI, M_PI)   // yaw
     };
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
@@ -101,10 +108,19 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
+            // Update state estimator
+            update_estimator(
+                quad.gyro_measurement,
+                quad.accel_measurement,
+                DT_CONTROL,
+                &estimator
+            );
+
+            // Fill network input with estimated states
             for(int i = 0; i < 3; i++) batch_input[i] = (float)quad.linear_position_W[i];
             for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad.linear_velocity_W[i];
-            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad.R_W_B[i];
-            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad.angular_velocity_B[i];
+            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)estimator.R[i];
+            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)estimator.angular_velocity[i];
             for(int i = 0; i < 3; i++) batch_input[i+18] = (float)target[i];
             batch_input[21] = (float)target[6];
             

@@ -39,6 +39,13 @@ void generate_training_data(const char* filename, int num_episodes) {
             random_range(0.0, 2.0),    // Always at or above ground
             random_range(-2.0, 2.0)
         );
+
+        // Initialize state estimator
+        StateEstimator estimator = {
+            .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
+            .angular_velocity = {0.0, 0.0, 0.0},
+            .gyro_bias = {0.0, 0.0, 0.0}
+        };
         
         // Random target
         double target[7] = {
@@ -59,13 +66,21 @@ void generate_training_data(const char* filename, int num_episodes) {
             }
             
             if (t_control >= DT_CONTROL) {
+                // Update state estimator
+                update_estimator(
+                    quad.gyro_measurement,
+                    quad.accel_measurement,
+                    DT_CONTROL,
+                    &estimator
+                );
+
                 // Get motor commands from geometric controller
                 double new_omega[4];
                 control_quad_commands(
                     quad.linear_position_W,
                     quad.linear_velocity_W,
-                    quad.R_W_B,
-                    quad.angular_velocity_B,
+                    estimator.R,
+                    estimator.angular_velocity,
                     quad.inertia,
                     target,
                     new_omega
@@ -77,15 +92,15 @@ void generate_training_data(const char* filename, int num_episodes) {
                        quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
                        quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                       quad.R_W_B[0], quad.R_W_B[1], quad.R_W_B[2],
-                       quad.R_W_B[3], quad.R_W_B[4], quad.R_W_B[5],
-                       quad.R_W_B[6], quad.R_W_B[7], quad.R_W_B[8]);
+                fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Estimated rotation matrix
+                       estimator.R[0], estimator.R[1], estimator.R[2],
+                       estimator.R[3], estimator.R[4], estimator.R[5],
+                       estimator.R[6], estimator.R[7], estimator.R[8]);
                        
-                fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
-                       quad.angular_velocity_B[0],
-                       quad.angular_velocity_B[1],
-                       quad.angular_velocity_B[2]);
+                fprintf(f, "%.6f,%.6f,%.6f,", // Estimated angular velocity
+                       estimator.angular_velocity[0],
+                       estimator.angular_velocity[1],
+                       estimator.angular_velocity[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Target
                        target[0], target[1], target[2], target[6]);
