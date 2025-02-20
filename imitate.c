@@ -34,7 +34,7 @@ void generate_training_data(const char* filename, int num_episodes) {
     
     for (int episode = 0; episode < num_episodes; episode++) {
         // Random initial state
-        Quad* quad = create_quad(
+        Quad quad = create_quad(
             random_range(-2.0, 2.0),
             random_range(0.0, 2.0),    // Always at or above ground
             random_range(-2.0, 2.0)
@@ -54,37 +54,47 @@ void generate_training_data(const char* filename, int num_episodes) {
         
         for (int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
             if (t_physics >= DT_PHYSICS) {
-                update_quad(quad, DT_PHYSICS);
+                update_quad(&quad, DT_PHYSICS);
                 t_physics = 0.0;
             }
             
             if (t_control >= DT_CONTROL) {
                 // Get motor commands from geometric controller
-                control_quad(quad, target);
+                double new_omega[4];
+                control_quad_commands(
+                    quad.linear_position_W,
+                    quad.linear_velocity_W,
+                    quad.R_W_B,
+                    quad.angular_velocity_B,
+                    quad.inertia,
+                    target,
+                    new_omega
+                );
+                memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
                 
                 // Write state, target, and action to file
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                       quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2],
-                       quad->linear_velocity_W[0], quad->linear_velocity_W[1], quad->linear_velocity_W[2]);
+                       quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
+                       quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Rotation matrix
-                       quad->R_W_B[0], quad->R_W_B[1], quad->R_W_B[2],
-                       quad->R_W_B[3], quad->R_W_B[4], quad->R_W_B[5],
-                       quad->R_W_B[6], quad->R_W_B[7], quad->R_W_B[8]);
+                       quad.R_W_B[0], quad.R_W_B[1], quad.R_W_B[2],
+                       quad.R_W_B[3], quad.R_W_B[4], quad.R_W_B[5],
+                       quad.R_W_B[6], quad.R_W_B[7], quad.R_W_B[8]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,", // Angular velocity
-                       quad->angular_velocity_B[0],
-                       quad->angular_velocity_B[1],
-                       quad->angular_velocity_B[2]);
+                       quad.angular_velocity_B[0],
+                       quad.angular_velocity_B[1],
+                       quad.angular_velocity_B[2]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f,", // Target
                        target[0], target[1], target[2], target[6]);
                        
                 fprintf(f, "%.6f,%.6f,%.6f,%.6f\n", // Motor commands
-                       quad->omega_next[0],
-                       quad->omega_next[1],
-                       quad->omega_next[2],
-                       quad->omega_next[3]);
+                       quad.omega_next[0],
+                       quad.omega_next[1],
+                       quad.omega_next[2],
+                       quad.omega_next[3]);
                        
                 t_control = 0.0;
             }
@@ -92,8 +102,6 @@ void generate_training_data(const char* filename, int num_episodes) {
             t_physics += DT_PHYSICS;
             t_control += DT_PHYSICS;
         }
-        
-        free(quad);
         
         if ((episode + 1) % 10 == 0) {
             printf("Generated %d episodes\n", episode + 1);

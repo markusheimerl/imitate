@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     srand(time(NULL));
     
     // Initialize quadcopter with random position
-    Quad* quad = create_quad(
+    Quad quad = create_quad(
         random_range(-2.0, 2.0),
         random_range(0.0, 2.0),    // Always at or above ground
         random_range(-2.0, 2.0)
@@ -71,12 +71,8 @@ int main(int argc, char* argv[]) {
     add_mesh_to_scene(&scene, treasure);
 
     // Set treasure position
-    Vec3 treasure_pos = {
-        (float)target[0],
-        (float)target[1],
-        (float)target[2]
-    };
-    set_mesh_position(&scene.meshes[2], treasure_pos);
+    set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+    set_mesh_rotation(&scene.meshes[1], (Vec3){0.0f, (float)target[6], 0.0f});
 
     // Set up camera
     set_scene_camera(&scene,
@@ -99,16 +95,16 @@ int main(int argc, char* argv[]) {
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
         // Physics update
         if (t_physics >= DT_PHYSICS) {
-            update_quad(quad, DT_PHYSICS);
+            update_quad(&quad, DT_PHYSICS);
             t_physics = 0.0;
         }
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad->linear_position_W[i];
-            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad->linear_velocity_W[i];
-            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad->R_W_B[i];
-            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad->angular_velocity_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)quad.R_W_B[i];
+            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)quad.angular_velocity_B[i];
             for(int i = 0; i < 3; i++) batch_input[i+18] = (float)target[i];
             batch_input[21] = (float)target[6];
             
@@ -117,7 +113,7 @@ int main(int argc, char* argv[]) {
             
             // Apply predicted motor commands
             for (int i = 0; i < 4; i++) {
-                quad->omega_next[i] = (double)policy->predictions[i];
+                quad.omega_next[i] = (double)policy->predictions[i];
             }
             
             t_control = 0.0;
@@ -126,15 +122,15 @@ int main(int argc, char* argv[]) {
         // Render update
         if (t_render >= DT_RENDER) {
             Vec3 pos = {
-                (float)quad->linear_position_W[0],
-                (float)quad->linear_position_W[1],
-                (float)quad->linear_position_W[2]
+                (float)quad.linear_position_W[0],
+                (float)quad.linear_position_W[1],
+                (float)quad.linear_position_W[2]
             };
             
             Vec3 rot = {
-                atan2f(quad->R_W_B[7], quad->R_W_B[8]),
-                asinf(-quad->R_W_B[6]),
-                atan2f(quad->R_W_B[3], quad->R_W_B[0])
+                atan2f(quad.R_W_B[7], quad.R_W_B[8]),
+                asinf(-quad.R_W_B[6]),
+                atan2f(quad.R_W_B[3], quad.R_W_B[0])
             };
 
             set_mesh_position(&scene.meshes[0], pos);
@@ -154,7 +150,9 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", quad->linear_position_W[0], quad->linear_position_W[1], quad->linear_position_W[2], fmod(atan2(quad->R_W_B[3], quad->R_W_B[0]) + 2 * M_PI, 2 * M_PI));
+    printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw %.2f or ±%.2f\n", 
+           quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
+           asinf(-quad.R_W_B[6]), M_PI - fabs(asinf(-quad.R_W_B[6])));
     
     // Save animation
     char filename[64];
@@ -166,6 +164,5 @@ int main(int argc, char* argv[]) {
     free(batch_input);
     destroy_scene(&scene);
     free_net(policy);
-    free(quad);
     return 0;
 }
