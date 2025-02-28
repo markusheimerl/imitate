@@ -24,4 +24,4 @@ viz: visualize.out
 	@./visualize.out $(shell ls -t *_policy.bin | head -1)
 
 clean:
-	rm -f *.out *_policy.bin *_flight.csv *_flight.webp
+	rm -f *.out *.bin *.csv *_flight.webp

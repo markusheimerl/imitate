@@ -50,7 +50,6 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-*_policy.bin
-*_flight.csv
+*.bin
+*.csv
 *_flight.webp
-*_flight_fpv.webp
