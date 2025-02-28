@@ -229,7 +229,7 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     SSM* ssm = init_ssm(input_dim, state_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 10000;
+    const int num_epochs = 2000;
     const float learning_rate = 0.00008f;
     
     printf("Starting SSM training for %d epochs...\n", num_epochs);
@@ -263,9 +263,6 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
             
             // Update weights
             update_weights(ssm, learning_rate);
-                    
-            // Apply spectral normalization to A matrix periodically
-            if (ssm->adam_t % 500 == 0) apply_spectral_normalization(ssm);
         }
         
         // Print progress
