@@ -15,13 +15,13 @@ imitate.out: imitate.c
 	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(CUDALIBS) $(LDFLAGS) -o $@
 
 visualize.out: visualize.c
-	$(CC) $(CFLAGS) $< -lopenblas -lwebp -lwebpmux -lpthread -static $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $< -lopenblas -lwebp -lwebpmux $(LDFLAGS) -o $@
 
 run: imitate.out
 	@time ./imitate.out
 
 viz: visualize.out
-	@./visualize.out $(shell ls -t *_policy.bin | head -1)
+	@./visualize.out $(shell ls -t *_policy.bin | head -1) $(shell ls -t *_estimator.bin | head -1)
 
 clean:
 	rm -f *.out *.bin *.csv *_flight.webp

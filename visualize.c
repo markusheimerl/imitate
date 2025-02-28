@@ -6,6 +6,7 @@
 #include "sim/quad.h"
 #include "sim/raytracer/scene.h"
 #include "mlp/mlp.h"
+#include "ssm/ssm.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
@@ -17,13 +18,14 @@ double random_range(double min, double max) {
 }
 
 int main(int argc, char* argv[]) {
-    if(argc != 2) {
-        printf("Usage: %s <policy_file>\n", argv[0]);
+    if(argc != 3) {
+        printf("Usage: %s <policy_file> <estimator_file>\n", argv[0]);
         return 1;
     }
 
-    // Load policy network
+    // Load policy network and estimator SSM
     Net* policy = load_model(argv[1]);
+    SSM* estimator_ssm = load_ssm(argv[2]);
 
     // Print network dimensions
     printf("Loaded policy network dimensions:\n");
@@ -31,6 +33,12 @@ int main(int argc, char* argv[]) {
     printf("Hidden dim: %d\n", policy->hidden_dim);
     printf("Output dim: %d\n", policy->output_dim);
     printf("Batch size: %d\n", policy->batch_size);
+    
+    printf("\nLoaded estimator SSM dimensions:\n");
+    printf("Input dim: %d\n", estimator_ssm->input_dim);
+    printf("State dim: %d\n", estimator_ssm->state_dim);
+    printf("Output dim: %d\n", estimator_ssm->output_dim);
+    printf("Batch size: %d\n", estimator_ssm->batch_size);
 
     srand(time(NULL));
     
@@ -41,7 +49,7 @@ int main(int argc, char* argv[]) {
         random_range(-2.0, 2.0)
     );
 
-    // Initialize state estimator
+    // Initialize state estimator (will be replaced by SSM output)
     StateEstimator estimator = {
         .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
         .angular_velocity = {0.0, 0.0, 0.0},
@@ -79,7 +87,7 @@ int main(int argc, char* argv[]) {
 
     // Set treasure position
     set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&scene.meshes[1], (Vec3){0.0f, (float)target[6], 0.0f});
+    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
 
     // Set up camera
     set_scene_camera(&scene,
@@ -95,8 +103,12 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Preallocate batch-sized input buffer
-    float* batch_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
+    // Preallocate input buffers
+    float* policy_input = (float*)calloc(policy->batch_size * policy->input_dim, sizeof(float));
+    float* estimator_input = (float*)calloc(estimator_ssm->batch_size * estimator_ssm->input_dim, sizeof(float));
+    
+    // Reset SSM internal state
+    memset(estimator_ssm->state, 0, estimator_ssm->batch_size * estimator_ssm->state_dim * sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -108,24 +120,31 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Update state estimator
-            update_estimator(
-                quad.gyro_measurement,
-                quad.accel_measurement,
-                DT_CONTROL,
-                &estimator
-            );
+            // Fill estimator input with IMU data
+            for(int i = 0; i < 3; i++) estimator_input[i] = (float)quad.gyro_measurement[i];
+            for(int i = 0; i < 3; i++) estimator_input[i+3] = (float)quad.accel_measurement[i];
+            
+            // Forward pass through estimator SSM
+            ssm_forward_pass(estimator_ssm, estimator_input);
+            
+            // Copy estimator output to estimator state
+            for(int i = 0; i < 9; i++) {
+                estimator.R[i] = (double)estimator_ssm->predictions[i];
+            }
+            for(int i = 0; i < 3; i++) {
+                estimator.angular_velocity[i] = (double)estimator_ssm->predictions[i+9];
+            }
 
-            // Fill network input with estimated states
-            for(int i = 0; i < 3; i++) batch_input[i] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) batch_input[i+3] = (float)quad.linear_velocity_W[i];
-            for(int i = 0; i < 9; i++) batch_input[i+6] = (float)estimator.R[i];
-            for(int i = 0; i < 3; i++) batch_input[i+15] = (float)estimator.angular_velocity[i];
-            for(int i = 0; i < 3; i++) batch_input[i+18] = (float)target[i];
-            batch_input[21] = (float)target[6];
+            // Fill policy input with quad state and estimated states
+            for(int i = 0; i < 3; i++) policy_input[i] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) policy_input[i+3] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 9; i++) policy_input[i+6] = (float)estimator.R[i];
+            for(int i = 0; i < 3; i++) policy_input[i+15] = (float)estimator.angular_velocity[i];
+            for(int i = 0; i < 3; i++) policy_input[i+18] = (float)target[i];
+            policy_input[21] = (float)target[6];
             
             // Forward pass through policy network
-            forward_pass(policy, batch_input);
+            forward_pass(policy, policy_input);
             
             // Apply predicted motor commands
             for (int i = 0; i < 4; i++) {
@@ -170,15 +189,23 @@ int main(int argc, char* argv[]) {
            quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
            asinf(-quad.R_W_B[6]), M_PI - fabs(asinf(-quad.R_W_B[6])));
     
+    // Calculate distance to target
+    double dist = sqrt(pow(quad.linear_position_W[0] - target[0], 2) + 
+                     pow(quad.linear_position_W[1] - target[1], 2) + 
+                     pow(quad.linear_position_W[2] - target[2], 2));
+    printf("Distance to target: %.2f meters\n", dist);
+    
     // Save animation
     char filename[64];
     time_t now = time(NULL);
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_policy_flight.webp", localtime(&now));  
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", localtime(&now));  
     save_scene(&scene, filename);
 
     // Cleanup
-    free(batch_input);
+    free(policy_input);
+    free(estimator_input);
     destroy_scene(&scene);
     free_net(policy);
+    free_ssm(estimator_ssm);
     return 0;
 }

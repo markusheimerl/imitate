@@ -360,6 +360,7 @@ void train_estimator(const char* data_file, const char* model_file) {
     }
     
     // Save model
+    ssm->batch_size = 1;
     save_ssm(ssm, model_file);
     
     // Cleanup
