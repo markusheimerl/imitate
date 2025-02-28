@@ -3,10 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
-#include <math.h>
 #include "sim/quad.h"
-#include "mlp/gpu/mlp.h"
-#include "mlp/data.h"
 #include "ssm/gpu/ssm.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
@@ -18,32 +15,19 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
-// Generate training data for both policy network and state estimator
-void generate_training_data(const char* policy_file, const char* estimator_file, int num_episodes) {
-    FILE* f_policy = fopen(policy_file, "w");
-    if (!f_policy) {
-        printf("Error opening file: %s\n", policy_file);
+// Generate training data for the SSM
+void generate_data(const char* data_file, int num_episodes) {
+    FILE* f_data = fopen(data_file, "w");
+    if (!f_data) {
+        printf("Error opening file: %s\n", data_file);
         return;
     }
     
-    FILE* f_estimator = fopen(estimator_file, "w");
-    if (!f_estimator) {
-        printf("Error opening file: %s\n", estimator_file);
-        fclose(f_policy);
-        return;
-    }
-    
-    // Write policy data header
-    fprintf(f_policy, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f_policy, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
-    fprintf(f_policy, "wx,wy,wz,"); // Angular velocity (3)
-    fprintf(f_policy, "tx,ty,tz,tyaw,"); // Target (7)
-    fprintf(f_policy, "m1,m2,m3,m4"); // Actions (4)
-    
-    // Write estimator data header
-    fprintf(f_estimator, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
-    fprintf(f_estimator, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9) 
-    fprintf(f_estimator, "wx,wy,wz"); // Angular velocity (3)
+    // Write header: IMU measurements, position, velocity, target position+yaw, motor commands
+    fprintf(f_data, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
+    fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
+    fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
+    fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
     
     for (int episode = 0; episode < num_episodes; episode++) {
         // Random initial state
@@ -79,11 +63,6 @@ void generate_training_data(const char* policy_file, const char* estimator_file,
             }
             
             if (t_control >= DT_CONTROL) {
-                // Input: gyro and accel measurements
-                fprintf(f_estimator, "\n%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,",
-                       quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
-                       quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
-                
                 // Update state estimator
                 update_estimator(
                     quad.gyro_measurement,
@@ -92,16 +71,6 @@ void generate_training_data(const char* policy_file, const char* estimator_file,
                     &estimator
                 );
                 
-                // Output: rotation matrix and angular velocity
-                fprintf(f_estimator, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,",
-                       estimator.R[0], estimator.R[1], estimator.R[2],
-                       estimator.R[3], estimator.R[4], estimator.R[5],
-                       estimator.R[6], estimator.R[7], estimator.R[8]);
-                fprintf(f_estimator, "%.6f,%.6f,%.6f",
-                       estimator.angular_velocity[0],
-                       estimator.angular_velocity[1],
-                       estimator.angular_velocity[2]);
-
                 // Get motor commands from geometric controller
                 double new_omega[4];
                 control_quad_commands(
@@ -115,25 +84,19 @@ void generate_training_data(const char* policy_file, const char* estimator_file,
                 );
                 memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
                 
-                // Write state, target, and action to file for policy network
-                fprintf(f_policy, "\n%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
+                // Write training sample: IMU, position, velocity, target, and motor commands
+                fprintf(f_data, "\n%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
+                       quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
+                       quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
+                       
+                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
                        quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
                        quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
-                       
-                fprintf(f_policy, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Estimated rotation matrix
-                       estimator.R[0], estimator.R[1], estimator.R[2],
-                       estimator.R[3], estimator.R[4], estimator.R[5],
-                       estimator.R[6], estimator.R[7], estimator.R[8]);
-                       
-                fprintf(f_policy, "%.6f,%.6f,%.6f,", // Estimated angular velocity
-                       estimator.angular_velocity[0],
-                       estimator.angular_velocity[1],
-                       estimator.angular_velocity[2]);
-                       
-                fprintf(f_policy, "%.6f,%.6f,%.6f,%.6f,", // Target
+                
+                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,", // Target
                        target[0], target[1], target[2], target[6]);
                        
-                fprintf(f_policy, "%.6f,%.6f,%.6f,%.6f", // Motor commands
+                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
                        quad.omega_next[0],
                        quad.omega_next[1],
                        quad.omega_next[2],
@@ -151,61 +114,12 @@ void generate_training_data(const char* policy_file, const char* estimator_file,
         }
     }
     
-    fclose(f_policy);
-    fclose(f_estimator);
+    fclose(f_data);
 }
 
-// Train MLP policy
-void train_policy(const char* data_file, const char* model_file) {
-    printf("Loading policy training data from %s...\n", data_file);
-    
-    float *X, *y;
-    int num_samples;
-    load_csv(data_file, &X, &y, &num_samples, 22, 4);
-    
-    printf("Policy training data loaded: %d samples\n", num_samples);
-    
-    // Initialize MLP
-    const int input_dim = 22;   // 18 state + 4 target
-    const int hidden_dim = 512;
-    const int output_dim = 4;   // 4 motor commands
-    const int batch_size = num_samples;
-    
-    Net* net = init_net(input_dim, hidden_dim, output_dim, batch_size);
-    
-    // Training parameters
-    const int num_epochs = 25000;
-    const float learning_rate = 0.001f;
-    
-    printf("Starting policy training for %d epochs...\n", num_epochs);
-    
-    // Training loop
-    for (int epoch = 0; epoch < num_epochs; epoch++) {
-        forward_pass(net, X);
-        float loss = calculate_loss(net, y);
-        zero_gradients(net);
-        backward_pass(net, X);
-        update_weights(net, learning_rate);
-        
-        if (epoch == 0 || (epoch + 1) % 100 == 0) {
-            printf("Policy Epoch [%d/%d], Loss: %.8f\n", 
-                   epoch + 1, num_epochs, loss);
-        }
-    }
-    
-    // Save trained model
-    net->batch_size = 1;
-    save_model(net, model_file);
-    
-    // Cleanup
-    free(X);
-    free(y);
-    free_net(net);
-}
-
-// Train SSM state estimator
-void train_estimator(const char* data_file, const char* model_file) {
-    printf("Loading estimator training data from %s...\n", data_file);
+// Train the SSM
+void train_model(const char* data_file, const char* model_file, int num_episodes) {
+    printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
     FILE* f = fopen(data_file, "r");
@@ -223,17 +137,16 @@ void train_estimator(const char* data_file, const char* model_file) {
     }
     fclose(f);
     
-    // We know we generated 500 episodes, so calculate the steps per episode
-    const int num_episodes = 500;
+    // Calculate steps per episode
     const int seq_length = total_samples / num_episodes;
     
     printf("Found %d total samples across %d episodes, %d steps per episode\n", 
            total_samples, num_episodes, seq_length);
     
     // Parameters
-    const int input_dim = 6;    // gyro (3) + accel (3)
-    const int state_dim = 32;  // Internal state dimension
-    const int output_dim = 12;  // rotation matrix (9) + angular velocity (3)
+    const int input_dim = 16;    // IMU (6) + position (3) + velocity (3) + target (4)
+    const int state_dim = 512;   // Internal state dimension
+    const int output_dim = 4;    // Motor commands (4)
     const int batch_size = num_episodes;  // Process all episodes in parallel
     
     // Allocate memory for data, reorganized by episode
@@ -312,14 +225,14 @@ void train_estimator(const char* data_file, const char* model_file) {
     free(h_X_episodes);
     free(h_y_episodes);
     
-    // Initialize state space model with the correct batch size
+    // Initialize state space model 
     SSM* ssm = init_ssm(input_dim, state_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 2000;
-    const float learning_rate = 0.00001f;
+    const int num_epochs = 100000;
+    const float learning_rate = 0.0000001f;
     
-    printf("Starting estimator training for %d epochs...\n", num_epochs);
+    printf("Starting SSM training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
@@ -354,7 +267,7 @@ void train_estimator(const char* data_file, const char* model_file) {
         
         // Print progress
         if (epoch == 0 || (epoch + 1) % 10 == 0) {
-            printf("Estimator Epoch [%d/%d], Average Loss: %.8f\n", 
+            printf("Epoch [%d/%d], Average Loss: %.8f\n", 
                    epoch + 1, num_epochs, epoch_loss / num_batches);
         }
     }
@@ -373,28 +286,23 @@ int main() {
     srand(time(NULL) ^ getpid());
     
     // Generate timestamped filenames
-    char policy_data_fname[64], policy_model_fname[64];
-    char estimator_data_fname[64], estimator_model_fname[64];
+    char data_fname[64], model_fname[64];
     time_t now = time(NULL);
-    strftime(policy_data_fname, sizeof(policy_data_fname), "%Y%m%d_%H%M%S_policy_data.csv", localtime(&now));
-    strftime(policy_model_fname, sizeof(policy_model_fname), "%Y%m%d_%H%M%S_policy.bin", localtime(&now));
-    strftime(estimator_data_fname, sizeof(estimator_data_fname), "%Y%m%d_%H%M%S_estimator_data.csv", localtime(&now));
-    strftime(estimator_model_fname, sizeof(estimator_model_fname), "%Y%m%d_%H%M%S_estimator.bin", localtime(&now));
+    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
+    strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_model.bin", localtime(&now));
+    
+    // Number of episodes for training
+    int num_episodes = 500;
     
     printf("Phase 1: Generating training data...\n");
-    generate_training_data(policy_data_fname, estimator_data_fname, 500);
+    generate_data(data_fname, num_episodes);
     
-    printf("Phase 2: Training policy network...\n");
-    train_policy(policy_data_fname, policy_model_fname);
-    
-    printf("Phase 3: Training state estimator...\n");
-    train_estimator(estimator_data_fname, estimator_model_fname);
+    printf("Phase 2: Training SSM...\n");
+    train_model(data_fname, model_fname, num_episodes);
     
     printf("Training complete!\n");
-    printf("Policy data saved to: %s\n", policy_data_fname);
-    printf("Policy model saved to: %s\n", policy_model_fname);
-    printf("Estimator data saved to: %s\n", estimator_data_fname);
-    printf("Estimator model saved to: %s\n", estimator_model_fname);
+    printf("Data saved to: %s\n", data_fname);
+    printf("Model saved to: %s\n", model_fname);
     
     return 0;
 }
