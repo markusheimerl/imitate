@@ -230,7 +230,7 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     
     // Training parameters
     const int num_epochs = 100000;
-    const float learning_rate = 0.0000001f;
+    const float learning_rate = 0.00005f;
     
     printf("Starting SSM training for %d epochs...\n", num_epochs);
     
@@ -292,7 +292,7 @@ int main() {
     strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_model.bin", localtime(&now));
     
     // Number of episodes for training
-    int num_episodes = 500;
+    int num_episodes = 5000;
     
     printf("Phase 1: Generating training data...\n");
     generate_data(data_fname, num_episodes);

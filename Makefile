@@ -7,7 +7,7 @@ CUDAFLAGS = --cuda-gpu-arch=sm_89 \
     -fcuda-approx-transcendentals \
     -Wno-unknown-cuda-version
 
-CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -lcublas
+CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -lcublas -lcusolver
 
 all: imitate.out visualize.out
 
