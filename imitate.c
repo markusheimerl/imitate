@@ -50,7 +50,7 @@ void generate_data(const char* data_file, int num_episodes) {
             random_range(1.0, 3.0),     // y: Always above ground
             random_range(-2.0, 2.0),    // z
             0.0, 0.0, 0.0,              // vx, vy, vz
-            random_range(0.0, 2*M_PI)   // yaw
+            random_range(-M_PI, M_PI)   // yaw
         };
         
         double t_physics = 0.0;
