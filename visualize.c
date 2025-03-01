@@ -41,16 +41,16 @@ int main(int argc, char* argv[]) {
         random_range(-2.0, 2.0)
     );
 
-    // Place target in front of the drone
+    // Initialize random target position and yaw
     double target[7] = {
-        quad.linear_position_W[0] + random_range(-1.0, 1.0),    // x
-        random_range(1.0, 3.0),       // y: Always above ground
-        quad.linear_position_W[2] + random_range(2.0, 5.0),  // z: In front of the drone
-        0.0, 0.0, 0.0,                // vx, vy, vz
-        0.0                           // yaw
+        random_range(-2.0, 2.0),    // x
+        random_range(1.0, 3.0),     // y: Always above ground
+        random_range(-2.0, 2.0),    // z
+        0.0, 0.0, 0.0,              // vx, vy, vz
+        random_range(-M_PI, M_PI)   // yaw
     };
-
-    printf("Target position: (%.2f, %.2f, %.2f)\n", target[0], target[1], target[2]);
+    
+    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
     // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -88,10 +88,10 @@ int main(int argc, char* argv[]) {
 
     // Set treasure position (target) for both scenes
     set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, 0.0f, 0.0f}); // Fixed rotation
+    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
     
     set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, 0.0f, 0.0f}); // Fixed rotation
+    set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
 
     // Set up chase camera with 60 degree FOV
     set_scene_camera(&scene,
@@ -134,8 +134,9 @@ int main(int argc, char* argv[]) {
             for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.linear_position_W[i];
             for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.linear_velocity_W[i];
             
-            // Target position (3) - no yaw
+            // Target position and yaw (4)
             for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)target[i];
+            ssm_input[idx++] = (float)target[6];
             
             // Forward pass through SSM - using CPU version
             ssm_forward_pass(ssm, ssm_input);
