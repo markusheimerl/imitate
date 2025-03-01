@@ -109,7 +109,7 @@ void generate_data(const char* data_file, int num_episodes) {
             t_control += DT_PHYSICS;
         }
         
-        if ((episode + 1) % 10 == 0) {
+        if ((episode + 1) % 1000 == 0) {
             printf("Generated %d episodes\n", episode + 1);
         }
     }
@@ -229,8 +229,8 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     SSM* ssm = init_ssm(input_dim, state_dim, output_dim, batch_size);
     
     // Training parameters
-    const int num_epochs = 2000;
-    const float learning_rate = 0.00008f;
+    const int num_epochs = 1000;
+    const float learning_rate = 0.0001f;
     
     printf("Starting SSM training for %d epochs...\n", num_epochs);
     
@@ -292,7 +292,7 @@ int main() {
     strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_model.bin", localtime(&now));
     
     // Number of episodes for training
-    int num_episodes = 5000;
+    int num_episodes = 10000;
     
     printf("Phase 1: Generating training data...\n");
     generate_data(data_fname, num_episodes);
