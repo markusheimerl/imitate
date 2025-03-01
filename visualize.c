@@ -52,29 +52,48 @@ int main(int argc, char* argv[]) {
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
-    // Initialize scene
+    // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
+    Scene fpv_scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
     
-    // Set up lighting
+    // Set up lighting for both scenes
     set_scene_light(&scene,
         (Vec3){1.0f, 1.0f, -1.0f},
         (Vec3){1.4f, 1.4f, 1.4f}
     );
     
-    // Add meshes to scene
+    set_scene_light(&fpv_scene,
+        (Vec3){1.0f, 1.0f, -1.0f},
+        (Vec3){1.4f, 1.4f, 1.4f}
+    );
+    
+    // Create meshes
     Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
     Mesh treasure = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
     
+    // Add meshes to scenes
     add_mesh_to_scene(&scene, drone);
     add_mesh_to_scene(&scene, ground);
     add_mesh_to_scene(&scene, treasure);
+    
+    // For FPV scene, we'll create new meshes to add to avoid double-free
+    Mesh drone_fpv = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
+    Mesh ground_fpv = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
+    Mesh treasure_fpv = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
+    
+    add_mesh_to_scene(&fpv_scene, drone_fpv);
+    add_mesh_to_scene(&fpv_scene, ground_fpv);
+    add_mesh_to_scene(&fpv_scene, treasure_fpv);
 
-    // Set treasure position (target)
+    // Set treasure position (target) for both scenes
     set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
     set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+    
+    set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+    set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
 
-    // Set up camera
+    // Set up chase camera with 60 degree FOV
     set_scene_camera(&scene,
         (Vec3){-3.0f, 3.0f, -3.0f},
         (Vec3){0.0f, 0.0f, 0.0f},
@@ -132,6 +151,7 @@ int main(int argc, char* argv[]) {
         
         // Render update
         if (t_render >= DT_RENDER) {
+            // Get drone position and orientation for visualization
             Vec3 pos = {
                 (float)quad.linear_position_W[0],
                 (float)quad.linear_position_W[1],
@@ -144,11 +164,56 @@ int main(int argc, char* argv[]) {
                 atan2f(quad.R_W_B[3], quad.R_W_B[0])
             };
 
+            // Update drone position in both scenes
             set_mesh_position(&scene.meshes[0], pos);
             set_mesh_rotation(&scene.meshes[0], rot);
             
+            set_mesh_position(&fpv_scene.meshes[0], pos);
+            set_mesh_rotation(&fpv_scene.meshes[0], rot);
+            
+            // Update FPV camera to match drone's position and orientation
+            Vec3 forward = {
+                (float)quad.R_W_B[2],  // Third column
+                (float)quad.R_W_B[5],
+                (float)quad.R_W_B[8]
+            };
+            
+            Vec3 up = {
+                (float)quad.R_W_B[1],  // Second column
+                (float)quad.R_W_B[4],
+                (float)quad.R_W_B[7]
+            };
+            
+            // Set camera position above the drone
+            Vec3 camera_offset = {
+                up.x * 0.15f,
+                up.y * 0.15f,
+                up.z * 0.15f
+            };
+            
+            Vec3 fpv_pos = {
+                pos.x + camera_offset.x,
+                pos.y + camera_offset.y,
+                pos.z + camera_offset.z
+            };
+            
+            // Calculate look-at point (position + forward)
+            Vec3 look_at = {
+                pos.x + forward.x,  // Look at point is in front of drone's position
+                pos.y + forward.y,
+                pos.z + forward.z
+            };
+            
+            // Set FPV camera with the same FOV as the chase camera (60 degrees)
+            set_scene_camera(&fpv_scene, fpv_pos, look_at, up, 70.0f);
+            
+            // Render both scenes
             render_scene(&scene);
+            render_scene(&fpv_scene);
+            
+            // Advance to next frame in both scenes
             next_frame(&scene);
+            next_frame(&fpv_scene);
             
             update_progress_bar((int)(t * DT_PHYSICS / DT_RENDER), (int)(SIM_TIME * 24), start_time);
             
@@ -171,15 +236,24 @@ int main(int argc, char* argv[]) {
                      pow(quad.linear_position_W[2] - target[2], 2));
     printf("Distance to target: %.2f meters\n", dist);
     
-    // Save animation
+    // Save animations
     char filename[64];
+    char fpv_filename[64];
+    
     time_t now = time(NULL);
-    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", localtime(&now));  
+    strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S_flight.webp", localtime(&now));
+    strftime(fpv_filename, sizeof(fpv_filename), "%Y%m%d_%H%M%S_flight_fpv.webp", localtime(&now));
+    
     save_scene(&scene, filename);
+    save_scene(&fpv_scene, fpv_filename);
+    
+    printf("Third-person view saved to: %s\n", filename);
+    printf("First-person view saved to: %s\n", fpv_filename);
 
-    // Cleanup
     free(ssm_input);
+    destroy_scene(&fpv_scene);
     destroy_scene(&scene);
     free_ssm(ssm);
+    
     return 0;
 }

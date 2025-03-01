@@ -20,4 +20,4 @@ viz: visualize.out
 	@./visualize.out $(shell ls -t *_model.bin | head -1)
 
 clean:
-	rm -f *.out *.bin *.csv *_flight.webp
+	rm -f *.out *.bin *.csv *.webp
