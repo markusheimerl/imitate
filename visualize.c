@@ -132,8 +132,8 @@ int main(int argc, char* argv[]) {
             for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)target[i];
             ssm_input[idx++] = (float)target[6];
             
-            // Forward pass through SSM - using CPU version
-            ssm_forward_pass(ssm, ssm_input);
+            // Forward pass through SSM
+            forward_pass(ssm, ssm_input);
             
             // Apply predicted motor commands (4)
             for (int i = 0; i < 4; i++) {
