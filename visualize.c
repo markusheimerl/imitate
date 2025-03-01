@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     
     // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
-    Scene fpv_scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
+    Scene fpv_scene = create_scene(20, 15, (int)(SIM_TIME * 1000), 24, 1.0f);
     
     // Set up lighting for both scenes
     set_scene_light(&scene,
