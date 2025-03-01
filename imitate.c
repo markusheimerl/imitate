@@ -23,10 +23,10 @@ void generate_data(const char* data_file, int num_episodes) {
         return;
     }
     
-    // Write header: IMU measurements, position, velocity, target position+yaw, motor commands
+    // Write header: IMU measurements, position, velocity, target position (no yaw), motor commands
     fprintf(f_data, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
     fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
+    fprintf(f_data, "tx,ty,tz,"); // Target position (3)
     fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
     
     for (int episode = 0; episode < num_episodes; episode++) {
@@ -44,13 +44,13 @@ void generate_data(const char* data_file, int num_episodes) {
             .gyro_bias = {0.0, 0.0, 0.0}
         };
         
-        // Random target
+        // Place target in front of the drone
         double target[7] = {
-            random_range(-2.0, 2.0),    // x
-            random_range(1.0, 3.0),     // y: Always above ground
-            random_range(-2.0, 2.0),    // z
-            0.0, 0.0, 0.0,              // vx, vy, vz
-            random_range(0.0, 2*M_PI)   // yaw
+            quad.linear_position_W[0] + random_range(-1.0, 1.0),    // x
+            random_range(1.0, 3.0),       // y: Always above ground
+            quad.linear_position_W[2] + random_range(2.0, 5.0),  // z: In front of the drone
+            0.0, 0.0, 0.0,                // vx, vy, vz
+            0.0                           // yaw
         };
         
         double t_physics = 0.0;
@@ -93,8 +93,8 @@ void generate_data(const char* data_file, int num_episodes) {
                        quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
                        quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
                 
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,", // Target
-                       target[0], target[1], target[2], target[6]);
+                fprintf(f_data, "%.6f,%.6f,%.6f,", // Target position
+                       target[0], target[1], target[2]);
                        
                 fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
                        quad.omega_next[0],
@@ -144,7 +144,7 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
            total_samples, num_episodes, seq_length);
     
     // Parameters
-    const int input_dim = 16;    // IMU (6) + position (3) + velocity (3) + target (4)
+    const int input_dim = 15;    // IMU (6) + position (3) + velocity (3) + target (3)
     const int state_dim = 512;   // Internal state dimension
     const int output_dim = 4;    // Motor commands (4)
     const int batch_size = num_episodes;  // Process all episodes in parallel
