@@ -145,7 +145,7 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     
     // Parameters
     const int input_dim = 16;    // IMU (6) + position (3) + velocity (3) + target (4)
-    const int state_dim = 512;   // Internal state dimension
+    const int state_dim = 256;   // Internal state dimension
     const int output_dim = 4;    // Motor commands (4)
     const int batch_size = num_episodes;  // Process all episodes in parallel
     
