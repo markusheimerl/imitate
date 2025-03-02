@@ -134,7 +134,7 @@ void generate_data(const char* data_file, int num_episodes) {
     fclose(f_data);
 }
 
-// Custom function to propagate gradients between the two models
+// Custom function to propagate gradients between models
 void backward_between_models(SSM* first_model, SSM* second_model, float* d_first_model_input) {
     // Zero gradients for first model
     zero_gradients(first_model);
@@ -166,10 +166,12 @@ void backward_between_models(SSM* first_model, SSM* second_model, float* d_first
     backward_pass(first_model, d_first_model_input);
 }
 
-// Train two SSM models:
-// - First model processes all input data
-// - Second model takes first model's output and produces motor commands
-void train_stacked_models(const char* data_file, const char* model1_file, const char* model2_file, int num_episodes) {
+// Train three SSM models in sequence:
+// - Perception model processes raw input data
+// - Planning model processes perception output and produces navigation plan
+// - Control model takes planning output and produces motor commands
+void train_stacked_models(const char* data_file, const char* perception_file, 
+                          const char* planning_file, const char* control_file, int num_episodes) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -195,14 +197,16 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
            total_samples, num_episodes, seq_length);
     
     // Parameters for the new architecture
-    const int input_dim = 16;       // All input data (IMU + position + velocity + target)
-    const int hidden_dim = 64;      // Output dimension for first model
-    const int output_dim = 4;       // Motor commands
+    const int input_dim = 16;         // All input data (IMU + position + velocity + target)
+    const int perception_dim = 48;    // Output dimension for perception model
+    const int planning_dim = 32;      // Output dimension for planning model
+    const int output_dim = 4;         // Motor commands
     
-    const int state_dim1 = 128;     // Internal state dimension for first model
-    const int state_dim2 = 128;     // Internal state dimension for second model
+    const int perception_state_dim = 128;  // Internal state dimension for perception model
+    const int planning_state_dim = 128;    // Internal state dimension for planning model
+    const int control_state_dim = 64;      // Internal state dimension for control model
     
-    const int batch_size = num_episodes;  // Process all episodes in parallel
+    const int batch_size = num_episodes;   // Process all episodes in parallel
     
     // Allocate memory for data
     float* h_X = (float*)malloc(total_samples * input_dim * sizeof(float));
@@ -266,19 +270,21 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
     free(h_X_episodes);
     free(h_y_episodes);
     
-    // Initialize the SSM models
-    SSM* first_ssm = init_ssm(input_dim, state_dim1, hidden_dim, batch_size);
-    SSM* second_ssm = init_ssm(hidden_dim, state_dim2, output_dim, batch_size);
+    // Initialize the three SSM models
+    SSM* perception_ssm = init_ssm(input_dim, perception_state_dim, perception_dim, batch_size);
+    SSM* planning_ssm = init_ssm(perception_dim, planning_state_dim, planning_dim, batch_size);
+    SSM* control_ssm = init_ssm(planning_dim, control_state_dim, output_dim, batch_size);
     
-    // Allocate memory for intermediate output
-    float *d_hidden_output;
-    CHECK_CUDA(cudaMalloc(&d_hidden_output, batch_size * hidden_dim * sizeof(float)));
+    // Allocate memory for intermediate outputs
+    float *d_perception_output, *d_planning_output;
+    CHECK_CUDA(cudaMalloc(&d_perception_output, batch_size * perception_dim * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_planning_output, batch_size * planning_dim * sizeof(float)));
     
     // Training parameters
     const int num_epochs = 1000;
     const float learning_rate = 0.0001f;
     
-    printf("Starting stacked model training for %d epochs...\n", num_epochs);
+    printf("Starting three-stage model training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
@@ -286,8 +292,9 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
         int num_steps = 0;
         
         // Reset states at the beginning of each epoch
-        CHECK_CUDA(cudaMemset(first_ssm->d_state, 0, first_ssm->batch_size * first_ssm->state_dim * sizeof(float)));
-        CHECK_CUDA(cudaMemset(second_ssm->d_state, 0, second_ssm->batch_size * second_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(perception_ssm->d_state, 0, perception_ssm->batch_size * perception_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(planning_ssm->d_state, 0, planning_ssm->batch_size * planning_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(control_ssm->d_state, 0, control_ssm->batch_size * control_ssm->state_dim * sizeof(float)));
         
         // Process sequence in batches
         for (int step = 0; step < seq_length; step++) {
@@ -295,32 +302,44 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
             float* d_current_X = d_X + step * batch_size * input_dim;
             float* d_current_y = d_y + step * batch_size * output_dim;
             
-            // Forward pass through first model
-            forward_pass(first_ssm, d_current_X);
+            // Forward pass through perception model
+            forward_pass(perception_ssm, d_current_X);
             
-            // Copy output from first model to input for second model
-            CHECK_CUDA(cudaMemcpy(d_hidden_output, first_ssm->d_predictions, 
-                               batch_size * hidden_dim * sizeof(float), 
+            // Copy output from perception model to input for planning model
+            CHECK_CUDA(cudaMemcpy(d_perception_output, perception_ssm->d_predictions, 
+                               batch_size * perception_dim * sizeof(float), 
                                cudaMemcpyDeviceToDevice));
             
-            // Forward pass through second model
-            forward_pass(second_ssm, d_hidden_output);
+            // Forward pass through planning model
+            forward_pass(planning_ssm, d_perception_output);
+            
+            // Copy output from planning model to input for control model
+            CHECK_CUDA(cudaMemcpy(d_planning_output, planning_ssm->d_predictions, 
+                               batch_size * planning_dim * sizeof(float), 
+                               cudaMemcpyDeviceToDevice));
+            
+            // Forward pass through control model
+            forward_pass(control_ssm, d_planning_output);
             
             // Calculate loss
-            float loss = calculate_loss(second_ssm, d_current_y);
+            float loss = calculate_loss(control_ssm, d_current_y);
             epoch_loss += loss;
             num_steps++;
             
-            // Backward pass through second model
-            zero_gradients(second_ssm);
-            backward_pass(second_ssm, d_hidden_output);
+            // Backward pass through control model
+            zero_gradients(control_ssm);
+            backward_pass(control_ssm, d_planning_output);
             
-            // Backpropagate through first model
-            backward_between_models(first_ssm, second_ssm, d_current_X);
+            // Backpropagate through planning model
+            backward_between_models(planning_ssm, control_ssm, d_perception_output);
+            
+            // Backpropagate through perception model
+            backward_between_models(perception_ssm, planning_ssm, d_current_X);
             
             // Update weights
-            update_weights(first_ssm, learning_rate);
-            update_weights(second_ssm, learning_rate);
+            update_weights(perception_ssm, learning_rate);
+            update_weights(planning_ssm, learning_rate);
+            update_weights(control_ssm, learning_rate);
         }
         
         // Print progress
@@ -330,29 +349,34 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
     }
     
     // Save models with batch_size=1 for inference
-    first_ssm->batch_size = 1;
-    second_ssm->batch_size = 1;
+    perception_ssm->batch_size = 1;
+    planning_ssm->batch_size = 1;
+    control_ssm->batch_size = 1;
     
-    save_ssm(first_ssm, model1_file);
-    save_ssm(second_ssm, model2_file);
+    save_ssm(perception_ssm, perception_file);
+    save_ssm(planning_ssm, planning_file);
+    save_ssm(control_ssm, control_file);
     
     // Cleanup
     cudaFree(d_X);
     cudaFree(d_y);
-    cudaFree(d_hidden_output);
-    free_ssm(first_ssm);
-    free_ssm(second_ssm);
+    cudaFree(d_perception_output);
+    cudaFree(d_planning_output);
+    free_ssm(perception_ssm);
+    free_ssm(planning_ssm);
+    free_ssm(control_ssm);
 }
 
 int main() {
     srand(time(NULL) ^ getpid());
     
     // Generate timestamped filenames
-    char data_fname[64], model1_fname[64], model2_fname[64];
+    char data_fname[64], perception_fname[64], planning_fname[64], control_fname[64];
     time_t now = time(NULL);
     strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
-    strftime(model1_fname, sizeof(model1_fname), "%Y%m%d_%H%M%S_perception_model.bin", localtime(&now));
-    strftime(model2_fname, sizeof(model2_fname), "%Y%m%d_%H%M%S_control_model.bin", localtime(&now));
+    strftime(perception_fname, sizeof(perception_fname), "%Y%m%d_%H%M%S_perception_model.bin", localtime(&now));
+    strftime(planning_fname, sizeof(planning_fname), "%Y%m%d_%H%M%S_planning_model.bin", localtime(&now));
+    strftime(control_fname, sizeof(control_fname), "%Y%m%d_%H%M%S_control_model.bin", localtime(&now));
     
     // Number of episodes for training
     int num_episodes = 10000;
@@ -360,13 +384,14 @@ int main() {
     printf("Phase 1: Generating training data...\n");
     generate_data(data_fname, num_episodes);
     
-    printf("Phase 2: Training stacked SSM models...\n");
-    train_stacked_models(data_fname, model1_fname, model2_fname, num_episodes);
+    printf("Phase 2: Training three-stage SSM model...\n");
+    train_stacked_models(data_fname, perception_fname, planning_fname, control_fname, num_episodes);
     
     printf("Training complete!\n");
     printf("Data saved to: %s\n", data_fname);
-    printf("Perception model saved to: %s\n", model1_fname);
-    printf("Control model saved to: %s\n", model2_fname);
+    printf("Perception model saved to: %s\n", perception_fname);
+    printf("Planning model saved to: %s\n", planning_fname);
+    printf("Control model saved to: %s\n", control_fname);
     
     return 0;
 }

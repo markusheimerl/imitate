@@ -17,14 +17,15 @@ double random_range(double min, double max) {
 }
 
 int main(int argc, char* argv[]) {
-    if(argc != 3) {
-        printf("Usage: %s <perception_model_file> <control_model_file>\n", argv[0]);
+    if(argc != 4) {
+        printf("Usage: %s <perception_model_file> <planning_model_file> <control_model_file>\n", argv[0]);
         return 1;
     }
 
-    // Load both SSM models
+    // Load all three SSM models
     SSM* perception_ssm = load_ssm(argv[1]);
-    SSM* control_ssm = load_ssm(argv[2]);
+    SSM* planning_ssm = load_ssm(argv[2]);
+    SSM* control_ssm = load_ssm(argv[3]);
 
     // Print network dimensions
     printf("Loaded Perception Model dimensions:\n");
@@ -33,17 +34,33 @@ int main(int argc, char* argv[]) {
     printf("Output dim: %d\n", perception_ssm->output_dim);
     printf("Batch size: %d\n", perception_ssm->batch_size);
     
+    printf("\nLoaded Planning Model dimensions:\n");
+    printf("Input dim: %d\n", planning_ssm->input_dim);
+    printf("State dim: %d\n", planning_ssm->state_dim);
+    printf("Output dim: %d\n", planning_ssm->output_dim);
+    printf("Batch size: %d\n", planning_ssm->batch_size);
+    
     printf("\nLoaded Control Model dimensions:\n");
     printf("Input dim: %d\n", control_ssm->input_dim);
     printf("State dim: %d\n", control_ssm->state_dim);
     printf("Output dim: %d\n", control_ssm->output_dim);
     printf("Batch size: %d\n", control_ssm->batch_size);
     
-    // Verify model compatibility - output of perception model should match input of control model
-    if (perception_ssm->output_dim != control_ssm->input_dim) {
-        printf("Error: Model dimensions don't match! Perception output: %d, Control input: %d\n", 
-               perception_ssm->output_dim, control_ssm->input_dim);
+    // Verify model compatibility
+    if (perception_ssm->output_dim != planning_ssm->input_dim) {
+        printf("Error: Model dimensions don't match! Perception output: %d, Planning input: %d\n", 
+               perception_ssm->output_dim, planning_ssm->input_dim);
         free_ssm(perception_ssm);
+        free_ssm(planning_ssm);
+        free_ssm(control_ssm);
+        return 1;
+    }
+    
+    if (planning_ssm->output_dim != control_ssm->input_dim) {
+        printf("Error: Model dimensions don't match! Planning output: %d, Control input: %d\n", 
+               planning_ssm->output_dim, control_ssm->input_dim);
+        free_ssm(perception_ssm);
+        free_ssm(planning_ssm);
         free_ssm(control_ssm);
         return 1;
     }
@@ -120,11 +137,13 @@ int main(int argc, char* argv[]) {
     // Allocate input buffer for perception model
     float* perception_input = (float*)calloc(perception_ssm->batch_size * perception_ssm->input_dim, sizeof(float));
     
-    // Allocate intermediate buffer for connecting perception to control model
+    // Allocate intermediate buffers for connecting the models
+    float* planning_input = (float*)calloc(planning_ssm->batch_size * planning_ssm->input_dim, sizeof(float));
     float* control_input = (float*)calloc(control_ssm->batch_size * control_ssm->input_dim, sizeof(float));
     
-    // Reset internal states of both models
+    // Reset internal states of all models
     memset(perception_ssm->state, 0, perception_ssm->batch_size * perception_ssm->state_dim * sizeof(float));
+    memset(planning_ssm->state, 0, planning_ssm->batch_size * planning_ssm->state_dim * sizeof(float));
     memset(control_ssm->state, 0, control_ssm->batch_size * control_ssm->state_dim * sizeof(float));
 
     // Main simulation loop
@@ -155,8 +174,14 @@ int main(int argc, char* argv[]) {
             // Forward pass through perception model
             forward_pass(perception_ssm, perception_input);
             
-            // Copy the output of the perception model as input to the control model
-            memcpy(control_input, perception_ssm->predictions, perception_ssm->output_dim * sizeof(float));
+            // Copy the output of the perception model as input to the planning model
+            memcpy(planning_input, perception_ssm->predictions, perception_ssm->output_dim * sizeof(float));
+            
+            // Forward pass through planning model
+            forward_pass(planning_ssm, planning_input);
+            
+            // Copy the output of the planning model as input to the control model
+            memcpy(control_input, planning_ssm->predictions, planning_ssm->output_dim * sizeof(float));
             
             // Forward pass through control model
             forward_pass(control_ssm, control_input);
@@ -272,6 +297,7 @@ int main(int argc, char* argv[]) {
 
     // Cleanup
     free(perception_input);
+    free(planning_input);
     free(control_input);
     destroy_mesh(&drone);
     destroy_mesh(&ground);
@@ -279,6 +305,7 @@ int main(int argc, char* argv[]) {
     destroy_scene(&scene);
     destroy_scene(&fpv_scene);
     free_ssm(perception_ssm);
+    free_ssm(planning_ssm);
     free_ssm(control_ssm);
     return 0;
 }
