@@ -117,8 +117,51 @@ void generate_data(const char* data_file, int num_episodes) {
     fclose(f_data);
 }
 
-// Train the SSM
-void train_model(const char* data_file, const char* model_file, int num_episodes) {
+// Custom function to propagate gradients between the two models
+void backward_between_models(SSM* upstream_model, SSM* downstream_model, float* d_upstream_input) {
+    // Zero gradients for upstream model
+    zero_gradients(upstream_model);
+    
+    // Compute gradient of loss w.r.t upstream model's output (downstream model's input)
+    const float alpha = 1.0f, beta = 0.0f;
+    
+    // Create a temporary buffer for gradient computation
+    float* d_temp_grad;
+    CHECK_CUDA(cudaMalloc(&d_temp_grad, upstream_model->batch_size * upstream_model->output_dim * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_temp_grad, 0, upstream_model->batch_size * upstream_model->output_dim * sizeof(float)));
+    
+    // Gradient contribution from state path: dL/dOutput = C^T * error
+    CHECK_CUBLAS(cublasSgemm(downstream_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                          upstream_model->output_dim, upstream_model->batch_size, downstream_model->output_dim,
+                          &alpha,
+                          downstream_model->d_C, downstream_model->output_dim,
+                          downstream_model->d_error, downstream_model->output_dim,
+                          &beta,
+                          d_temp_grad, upstream_model->output_dim));
+    
+    // Gradient contribution from direct path: dL/dOutput += D^T * error
+    CHECK_CUBLAS(cublasSgemm(downstream_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                          upstream_model->output_dim, upstream_model->batch_size, downstream_model->output_dim,
+                          &alpha,
+                          downstream_model->d_D, downstream_model->output_dim,
+                          downstream_model->d_error, downstream_model->output_dim,
+                          &alpha, // Add to existing gradient
+                          d_temp_grad, upstream_model->output_dim));
+    
+    // Copy the computed gradient to upstream model's error buffer
+    CHECK_CUDA(cudaMemcpy(upstream_model->d_error, d_temp_grad, 
+                       upstream_model->batch_size * upstream_model->output_dim * sizeof(float), 
+                       cudaMemcpyDeviceToDevice));
+    
+    // Free temporary buffer
+    cudaFree(d_temp_grad);
+    
+    // Now do the backward pass for the upstream model
+    backward_pass(upstream_model, d_upstream_input);
+}
+
+// Train two SSM models end-to-end
+void train_dual_models(const char* data_file, const char* model1_file, const char* model2_file, int num_episodes) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -145,7 +188,9 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     
     // Parameters
     const int input_dim = 16;    // IMU (6) + position (3) + velocity (3) + target (4)
-    const int state_dim = 256;   // Internal state dimension
+    const int mid_dim = 32;      // Intermediate dimension connecting the two models
+    const int state_dim1 = 128;  // Internal state dimension for first model
+    const int state_dim2 = 256;  // Internal state dimension for second model
     const int output_dim = 4;    // Motor commands (4)
     const int batch_size = num_episodes;  // Process all episodes in parallel
     
@@ -225,23 +270,28 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     free(h_X_episodes);
     free(h_y_episodes);
     
-    // Initialize state space model 
-    SSM* ssm = init_ssm(input_dim, state_dim, output_dim, batch_size);
+    // Allocate memory for intermediate outputs between the two models
+    float *d_mid_output;
+    CHECK_CUDA(cudaMalloc(&d_mid_output, batch_size * mid_dim * sizeof(float)));
+    
+    // Initialize two state space models for end-to-end training
+    SSM* ssm1 = init_ssm(input_dim, state_dim1, mid_dim, batch_size);
+    SSM* ssm2 = init_ssm(mid_dim, state_dim2, output_dim, batch_size);
     
     // Training parameters
     const int num_epochs = 1000;
     const float learning_rate = 0.0001f;
     
-    printf("Starting SSM training for %d epochs...\n", num_epochs);
+    printf("Starting end-to-end SSM training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         float epoch_loss = 0.0f;
         int num_batches = 0;
         
-        // Reset state at the beginning of each epoch
-        CHECK_CUDA(cudaMemset(ssm->d_state, 0, 
-                             ssm->batch_size * ssm->state_dim * sizeof(float)));
+        // Reset states at the beginning of each epoch
+        CHECK_CUDA(cudaMemset(ssm1->d_state, 0, ssm1->batch_size * ssm1->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(ssm2->d_state, 0, ssm2->batch_size * ssm2->state_dim * sizeof(float)));
         
         // Process full sequence of all episodes
         for (int step = 0; step < seq_length; step++) {
@@ -249,20 +299,32 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
             float *d_batch_X = &d_X[step * batch_size * input_dim];
             float *d_batch_y = &d_y[step * batch_size * output_dim];
             
-            // Forward pass
-            forward_pass(ssm, d_batch_X);
+            // Forward pass through first model
+            forward_pass(ssm1, d_batch_X);
             
-            // Calculate loss
-            float loss = calculate_loss(ssm, d_batch_y);
+            // Copy predictions from first model to intermediate buffer
+            CHECK_CUDA(cudaMemcpy(d_mid_output, ssm1->d_predictions, 
+                                 batch_size * mid_dim * sizeof(float), 
+                                 cudaMemcpyDeviceToDevice));
+            
+            // Forward pass through second model
+            forward_pass(ssm2, d_mid_output);
+            
+            // Calculate loss for the combined model output
+            float loss = calculate_loss(ssm2, d_batch_y);
             epoch_loss += loss;
             num_batches++;
             
-            // Backward pass
-            zero_gradients(ssm);
-            backward_pass(ssm, d_batch_X);
+            // Backward pass through second model first
+            zero_gradients(ssm2);
+            backward_pass(ssm2, d_mid_output);
             
-            // Update weights
-            update_weights(ssm, learning_rate);
+            // Propagate gradients back to the first model using our custom function
+            backward_between_models(ssm1, ssm2, d_batch_X);
+            
+            // Update weights for both models
+            update_weights(ssm1, learning_rate);
+            update_weights(ssm2, learning_rate);
         }
         
         // Print progress
@@ -272,24 +334,29 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
         }
     }
     
-    // Save model
-    ssm->batch_size = 1;
-    save_ssm(ssm, model_file);
+    // Save models with batch_size=1 for inference
+    ssm1->batch_size = 1;
+    ssm2->batch_size = 1;
+    save_ssm(ssm1, model1_file);
+    save_ssm(ssm2, model2_file);
     
     // Cleanup
     cudaFree(d_X);
     cudaFree(d_y);
-    free_ssm(ssm);
+    cudaFree(d_mid_output);
+    free_ssm(ssm1);
+    free_ssm(ssm2);
 }
 
 int main() {
     srand(time(NULL) ^ getpid());
     
     // Generate timestamped filenames
-    char data_fname[64], model_fname[64];
+    char data_fname[64], model1_fname[64], model2_fname[64];
     time_t now = time(NULL);
     strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
-    strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_model.bin", localtime(&now));
+    strftime(model1_fname, sizeof(model1_fname), "%Y%m%d_%H%M%S_model1.bin", localtime(&now));
+    strftime(model2_fname, sizeof(model2_fname), "%Y%m%d_%H%M%S_model2.bin", localtime(&now));
     
     // Number of episodes for training
     int num_episodes = 10000;
@@ -297,12 +364,13 @@ int main() {
     printf("Phase 1: Generating training data...\n");
     generate_data(data_fname, num_episodes);
     
-    printf("Phase 2: Training SSM...\n");
-    train_model(data_fname, model_fname, num_episodes);
+    printf("Phase 2: Training dual SSM models end-to-end...\n");
+    train_dual_models(data_fname, model1_fname, model2_fname, num_episodes);
     
     printf("Training complete!\n");
     printf("Data saved to: %s\n", data_fname);
-    printf("Model saved to: %s\n", model_fname);
+    printf("First model saved to: %s\n", model1_fname);
+    printf("Second model saved to: %s\n", model2_fname);
     
     return 0;
 }
