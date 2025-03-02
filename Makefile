@@ -16,7 +16,7 @@ run: imitate.out
 	@time ./imitate.out
 
 viz: visualize.out
-	@time ./visualize.out $(shell ls -t *_model1.bin | head -1) $(shell ls -t *_model2.bin | head -1)
+	@time ./visualize.out $(shell ls -t *_perception_model.bin | head -1) $(shell ls -t *_control_model.bin | head -1)
 
 clean:
 	rm -f *.out *.bin *.csv *.webp

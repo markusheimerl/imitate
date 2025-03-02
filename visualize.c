@@ -18,33 +18,33 @@ double random_range(double min, double max) {
 
 int main(int argc, char* argv[]) {
     if(argc != 3) {
-        printf("Usage: %s <model1_file> <model2_file>\n", argv[0]);
+        printf("Usage: %s <perception_model_file> <control_model_file>\n", argv[0]);
         return 1;
     }
 
     // Load both SSM models
-    SSM* ssm1 = load_ssm(argv[1]);
-    SSM* ssm2 = load_ssm(argv[2]);
+    SSM* perception_ssm = load_ssm(argv[1]);
+    SSM* control_ssm = load_ssm(argv[2]);
 
     // Print network dimensions
-    printf("Loaded SSM1 dimensions:\n");
-    printf("Input dim: %d\n", ssm1->input_dim);
-    printf("State dim: %d\n", ssm1->state_dim);
-    printf("Output dim: %d\n", ssm1->output_dim);
-    printf("Batch size: %d\n", ssm1->batch_size);
+    printf("Loaded Perception Model dimensions:\n");
+    printf("Input dim: %d\n", perception_ssm->input_dim);
+    printf("State dim: %d\n", perception_ssm->state_dim);
+    printf("Output dim: %d\n", perception_ssm->output_dim);
+    printf("Batch size: %d\n", perception_ssm->batch_size);
     
-    printf("\nLoaded SSM2 dimensions:\n");
-    printf("Input dim: %d\n", ssm2->input_dim);
-    printf("State dim: %d\n", ssm2->state_dim);
-    printf("Output dim: %d\n", ssm2->output_dim);
-    printf("Batch size: %d\n", ssm2->batch_size);
+    printf("\nLoaded Control Model dimensions:\n");
+    printf("Input dim: %d\n", control_ssm->input_dim);
+    printf("State dim: %d\n", control_ssm->state_dim);
+    printf("Output dim: %d\n", control_ssm->output_dim);
+    printf("Batch size: %d\n", control_ssm->batch_size);
     
-    // Verify model compatibility - output of first model should match input of second
-    if (ssm1->output_dim != ssm2->input_dim) {
-        printf("Error: Model dimensions don't match! SSM1 output: %d, SSM2 input: %d\n", 
-               ssm1->output_dim, ssm2->input_dim);
-        free_ssm(ssm1);
-        free_ssm(ssm2);
+    // Verify model compatibility - output of perception model should match input of control model
+    if (perception_ssm->output_dim != control_ssm->input_dim) {
+        printf("Error: Model dimensions don't match! Perception output: %d, Control input: %d\n", 
+               perception_ssm->output_dim, control_ssm->input_dim);
+        free_ssm(perception_ssm);
+        free_ssm(control_ssm);
         return 1;
     }
 
@@ -117,15 +117,15 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Allocate input buffer for SSM1
-    float* ssm1_input = (float*)calloc(ssm1->batch_size * ssm1->input_dim, sizeof(float));
+    // Allocate input buffer for perception model
+    float* perception_input = (float*)calloc(perception_ssm->batch_size * perception_ssm->input_dim, sizeof(float));
     
-    // Allocate intermediate buffer for connecting SSM1 to SSM2
-    float* ssm2_input = (float*)calloc(ssm2->batch_size * ssm2->input_dim, sizeof(float));
+    // Allocate intermediate buffer for connecting perception to control model
+    float* control_input = (float*)calloc(control_ssm->batch_size * control_ssm->input_dim, sizeof(float));
     
     // Reset internal states of both models
-    memset(ssm1->state, 0, ssm1->batch_size * ssm1->state_dim * sizeof(float));
-    memset(ssm2->state, 0, ssm2->batch_size * ssm2->state_dim * sizeof(float));
+    memset(perception_ssm->state, 0, perception_ssm->batch_size * perception_ssm->state_dim * sizeof(float));
+    memset(control_ssm->state, 0, control_ssm->batch_size * control_ssm->state_dim * sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -137,33 +137,33 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Fill SSM1 input: IMU data, position, velocity, and target
+            // Fill input for perception model: IMU data, position, velocity, and target
             int idx = 0;
             
             // IMU measurements (6)
-            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.gyro_measurement[i];
-            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.accel_measurement[i];
+            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.gyro_measurement[i];
+            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.accel_measurement[i];
             
             // Position and velocity (6)
-            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.linear_velocity_W[i];
             
             // Target position and yaw (4)
-            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)target[i];
-            ssm1_input[idx++] = (float)target[6];
+            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)target[i];
+            perception_input[idx++] = (float)target[6];
             
-            // Forward pass through first model
-            forward_pass(ssm1, ssm1_input);
+            // Forward pass through perception model
+            forward_pass(perception_ssm, perception_input);
             
-            // Copy the output of the first model as input to the second model
-            memcpy(ssm2_input, ssm1->predictions, ssm1->output_dim * sizeof(float));
+            // Copy the output of the perception model as input to the control model
+            memcpy(control_input, perception_ssm->predictions, perception_ssm->output_dim * sizeof(float));
             
-            // Forward pass through the second model
-            forward_pass(ssm2, ssm2_input);
+            // Forward pass through control model
+            forward_pass(control_ssm, control_input);
             
-            // Apply predicted motor commands from the second model
+            // Apply predicted motor commands from the control model
             for (int i = 0; i < 4; i++) {
-                quad.omega_next[i] = (double)ssm2->predictions[i];
+                quad.omega_next[i] = (double)control_ssm->predictions[i];
             }
             
             t_control = 0.0;
@@ -271,14 +271,14 @@ int main(int argc, char* argv[]) {
     printf("First-person view saved to: %s\n", fpv_filename);
 
     // Cleanup
-    free(ssm1_input);
-    free(ssm2_input);
+    free(perception_input);
+    free(control_input);
     destroy_mesh(&drone);
     destroy_mesh(&ground);
     destroy_mesh(&treasure);
     destroy_scene(&scene);
     destroy_scene(&fpv_scene);
-    free_ssm(ssm1);
-    free_ssm(ssm2);
+    free_ssm(perception_ssm);
+    free_ssm(control_ssm);
     return 0;
 }
