@@ -66,8 +66,8 @@ void generate_data(const char* data_file, int num_episodes) {
     }
     
     // Define constants for the FPV rendering
-    const int fpv_width = 20;
-    const int fpv_height = 15;
+    const int fpv_width = 8;
+    const int fpv_height = 4;
     const int fpv_channels = 3;
     const int fpv_pixels = fpv_width * fpv_height;
     
@@ -349,8 +349,8 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
            total_samples, num_episodes, seq_length);
     
     // Parameters for the updated architecture
-    const int fpv_width = 20;
-    const int fpv_height = 15;
+    const int fpv_width = 8;
+    const int fpv_height = 4;
     const int fpv_pixels = fpv_width * fpv_height;
     const int sensor_dim = 16;        // IMU + position + velocity + target
     const int input_dim = fpv_pixels + sensor_dim;  // Combined input dimension
@@ -441,8 +441,8 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     CHECK_CUDA(cudaMalloc(&d_layer3_output, batch_size * layer3_dim * sizeof(float)));
     
     // Training parameters
-    const int num_epochs = 1000;
-    const float learning_rate = 0.0001f;
+    const int num_epochs = 2000;
+    const float learning_rate = 0.00001f;
     
     printf("Starting four-stage model training for %d epochs...\n", num_epochs);
     
@@ -551,7 +551,7 @@ int main() {
     strftime(layer4_fname, sizeof(layer4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
     
     // Number of episodes for training
-    int num_episodes = 1000;
+    int num_episodes = 2000;
     
     printf("Phase 1: Generating training data with FPV rendering...\n");
     generate_data(data_fname, num_episodes);

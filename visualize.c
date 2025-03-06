@@ -97,8 +97,8 @@ int main(int argc, char* argv[]) {
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
     // Define FPV rendering constants
-    const int fpv_width = 20;
-    const int fpv_height = 15;
+    const int fpv_width = 8;
+    const int fpv_height = 4;
     const int fpv_channels = 3;
     const int fpv_pixels = fpv_width * fpv_height;
     
