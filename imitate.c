@@ -17,6 +17,16 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
+// Helper function to calculate the angle between two points in the XZ plane
+double calculate_yaw_to_target(double x1, double z1, double x2, double z2) {
+    // Calculate direction vector from (x1,z1) to (x2,z2)
+    double dx = x2 - x1;
+    double dz = z2 - z1;
+    
+    // Compute angle (atan2 returns angle in range [-π, π])
+    return atan2(dx, dz);
+}
+
 // Helper function to reorganize data for batch processing
 void reorganize_data(float* input, float* output, int num_episodes, int seq_length, int feature_dim) {
     for (int episode = 0; episode < num_episodes; episode++) {
@@ -66,19 +76,19 @@ void generate_data(const char* data_file, int num_episodes) {
     }
     
     // Define constants for the FPV rendering
-    const int fpv_width = 8;
-    const int fpv_height = 4;
+    const int fpv_width = 32;
+    const int fpv_height = 16;
     const int fpv_channels = 3;
     const int fpv_pixels = fpv_width * fpv_height;
     
-    // Write header: Visual grayscale pixels, IMU measurements, position, velocity, target position+yaw, motor commands
+    // Write header: Visual grayscale pixels, IMU measurements, position, velocity, target position, motor commands
     fprintf(f_data, "pix1");
     for (int i = 2; i <= fpv_pixels; i++) {
         fprintf(f_data, ",pix%d", i);
     }
     fprintf(f_data, ",gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
     fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
+    fprintf(f_data, "tx,ty,tz,"); // Target position only (3) - removed yaw
     fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
     
     // Set up rendering scene for FPV
@@ -90,13 +100,11 @@ void generate_data(const char* data_file, int num_episodes) {
         (Vec3){1.4f, 1.4f, 1.4f}
     );
     
-    // Create meshes
-    Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
+    // Create meshes - no drone mesh for FPV
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
     Mesh treasure = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
     
-    // Add meshes to scene
-    add_mesh_to_scene(&fpv_scene, drone);
+    // Add meshes to scene (only ground and treasure)
     add_mesh_to_scene(&fpv_scene, ground);
     add_mesh_to_scene(&fpv_scene, treasure);
     
@@ -104,32 +112,61 @@ void generate_data(const char* data_file, int num_episodes) {
     float* grayscale_pixels = (float*)calloc(fpv_pixels, sizeof(float));
     
     for (int episode = 0; episode < num_episodes; episode++) {
-        // Random initial state
-        Quad quad = create_quad(
-            random_range(-2.0, 2.0),
-            random_range(0.0, 2.0),    // Always at or above ground
-            random_range(-2.0, 2.0)
+        // Initialize random drone position
+        double drone_x = random_range(-2.0, 2.0);
+        double drone_y = random_range(0.5, 2.0);
+        double drone_z = random_range(-2.0, 2.0);
+        
+        // Initialize random drone yaw
+        double drone_yaw = random_range(-M_PI, M_PI);
+        
+        // Calculate a random distance (between 1 and 4 units) in front of the drone
+        double distance = random_range(1.0, 4.0);
+        
+        // Add some random deviation to make it more natural (±30° from the center of view)
+        double angle_deviation = random_range(-M_PI/6, M_PI/6);  // ±30 degrees
+        double adjusted_yaw = drone_yaw + angle_deviation;
+        
+        // Calculate the target position based on the drone's position, adjusted yaw, and distance
+        double target_x = drone_x + sin(adjusted_yaw) * distance;
+        double target_z = drone_z + cos(adjusted_yaw) * distance;
+        
+        // Keep the target within boundaries
+        target_x = fmax(-2.0, fmin(2.0, target_x));
+        target_z = fmax(-2.0, fmin(2.0, target_z));
+        
+        // Set a random target height
+        double target_y = random_range(0.5, 2.5);
+        
+        // Calculate initial desired drone yaw to face the target
+        double desired_yaw = calculate_yaw_to_target(
+            drone_x,
+            drone_z,
+            target_x,
+            target_z
         );
-
+        
+        // Create combined target array with the target position and desired drone yaw
+        double target[7] = {
+            target_x, target_y, target_z,    // Target position
+            0.0, 0.0, 0.0,                  // Zero velocity target
+            desired_yaw                     // Target yaw for the drone
+        };
+        
+        // Initialize quadcopter with random position and yaw
+        Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
+        
         // Initialize state estimator
         StateEstimator estimator = {
-            .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
             .angular_velocity = {0.0, 0.0, 0.0},
             .gyro_bias = {0.0, 0.0, 0.0}
         };
+        // Copy the quad's rotation matrix to the estimator
+        memcpy(estimator.R, quad.R_W_B, 9 * sizeof(double));
         
-        // Random target
-        double target[7] = {
-            random_range(-2.0, 2.0),    // x
-            random_range(1.0, 3.0),     // y: Always above ground
-            random_range(-2.0, 2.0),    // z
-            0.0, 0.0, 0.0,              // vx, vy, vz
-            random_range(-M_PI, M_PI)   // yaw
-        };
-        
-        // Set treasure position for target
-        set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-        set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+        // Set treasure position for target with fixed yaw (0.0)
+        set_mesh_position(&fpv_scene.meshes[1], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+        set_mesh_rotation(&fpv_scene.meshes[1], (Vec3){0.0f, 0.0f, 0.0f});  // Fixed yaw at 0.0
         
         double t_physics = 0.0;
         double t_control = 0.0;
@@ -143,23 +180,13 @@ void generate_data(const char* data_file, int num_episodes) {
             
             // Render update
             if (t_render >= DT_RENDER) {
-                // Get drone position and orientation for visualization
+                // Update FPV camera to match drone's position and orientation
                 Vec3 pos = {
                     (float)quad.linear_position_W[0],
                     (float)quad.linear_position_W[1],
                     (float)quad.linear_position_W[2]
                 };
                 
-                Vec3 rot = {
-                    atan2f(quad.R_W_B[7], quad.R_W_B[8]),
-                    asinf(-quad.R_W_B[6]),
-                    atan2f(quad.R_W_B[3], quad.R_W_B[0])
-                };
-                
-                set_mesh_position(&fpv_scene.meshes[0], pos);
-                set_mesh_rotation(&fpv_scene.meshes[0], rot);
-                
-                // Update FPV camera to match drone's position and orientation
                 Vec3 forward = {
                     (float)quad.R_W_B[2],  // Third column
                     (float)quad.R_W_B[5],
@@ -172,7 +199,7 @@ void generate_data(const char* data_file, int num_episodes) {
                     (float)quad.R_W_B[7]
                 };
                 
-                // Set camera position above the drone
+                // Set camera position slightly above the drone
                 Vec3 camera_offset = {
                     up.x * 0.15f,
                     up.y * 0.15f,
@@ -222,6 +249,32 @@ void generate_data(const char* data_file, int num_episodes) {
                     &estimator
                 );
                 
+                // Calculate vector from drone to target
+                double drone_to_target_x = target[0] - quad.linear_position_W[0];
+                double drone_to_target_z = target[2] - quad.linear_position_W[2];
+                
+                // Calculate distance to target in xz plane
+                double xz_distance = sqrt(drone_to_target_x * drone_to_target_x + drone_to_target_z * drone_to_target_z);
+                
+                // Calculate desired yaw for control (drone should face the target)
+                double control_yaw;
+                if (xz_distance > 0.3) {
+                    control_yaw = calculate_yaw_to_target(
+                        quad.linear_position_W[0],
+                        quad.linear_position_W[2],
+                        target[0],
+                        target[2]
+                    );
+                } else {
+                    // When close to target, maintain the last approach direction
+                    control_yaw = target[6];  // Use the stored target yaw
+                }
+                
+                // Create control target with calculated yaw
+                double control_target[7];
+                memcpy(control_target, target, 7 * sizeof(double));
+                control_target[6] = control_yaw;
+                
                 // Get motor commands from geometric controller
                 double new_omega[4];
                 control_quad_commands(
@@ -230,13 +283,13 @@ void generate_data(const char* data_file, int num_episodes) {
                     estimator.R,
                     estimator.angular_velocity,
                     quad.inertia,
-                    target,
+                    control_target,
                     new_omega
                 );
                 memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
                 
                 // Write training sample: 
-                // Grayscale pixels, IMU, position, velocity, target, and motor commands
+                // Grayscale pixels, IMU, position, velocity, target position (no yaw), and motor commands
                 
                 // First write grayscale pixels
                 fprintf(f_data, "\n%.6f", grayscale_pixels[0]);
@@ -252,8 +305,8 @@ void generate_data(const char* data_file, int num_episodes) {
                        quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
                        quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
                 
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,", // Target
-                       target[0], target[1], target[2], target[6]);
+                fprintf(f_data, "%.6f,%.6f,%.6f,", // Target position only
+                       target[0], target[1], target[2]);
                        
                 fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
                        quad.omega_next[0],
@@ -278,7 +331,6 @@ void generate_data(const char* data_file, int num_episodes) {
     free(grayscale_pixels);
     
     // Clean up raytracer resources
-    destroy_mesh(&drone);
     destroy_mesh(&ground);
     destroy_mesh(&treasure);
     destroy_scene(&fpv_scene);
@@ -316,11 +368,7 @@ void backward_between_models(SSM* first_model, SSM* second_model, float* d_first
     backward_pass(first_model, d_first_model_input);
 }
 
-// Train four SSM models in sequence:
-// - Layer 1 processes visual + sensor input data
-// - Layer 2 processes layer 1 output for further feature extraction
-// - Layer 3 processes layer 2 output and produces a navigation plan
-// - Layer 4 takes layer 3 output and produces motor commands
+// Train four SSM models in sequence
 void train_stacked_models(const char* data_file, const char* layer1_file, 
                           const char* layer2_file, const char* layer3_file,
                           const char* layer4_file, int num_episodes) {
@@ -333,7 +381,7 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
         return;
     }
     
-    char line[8192];  // Increased buffer size for additional visual features
+    char line[16384];  // Increased buffer size for the larger resolution
     int total_samples = 0;
     // Skip header
     fgets(line, sizeof(line), f);
@@ -349,20 +397,20 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
            total_samples, num_episodes, seq_length);
     
     // Parameters for the updated architecture
-    const int fpv_width = 8;
-    const int fpv_height = 4;
+    const int fpv_width = 32;
+    const int fpv_height = 16;
     const int fpv_pixels = fpv_width * fpv_height;
-    const int sensor_dim = 16;        // IMU + position + velocity + target
+    const int sensor_dim = 15;        // IMU + position + velocity + target
     const int input_dim = fpv_pixels + sensor_dim;  // Combined input dimension
-    const int layer1_dim = 192;      // Output dimension for layer 1
-    const int layer2_dim = 128;      // Output dimension for layer 2
-    const int layer3_dim = 64;       // Output dimension for layer 3
+    const int layer1_dim = 256;      // Output dimension for layer 1
+    const int layer2_dim = 192;      // Output dimension for layer 2
+    const int layer3_dim = 96;       // Output dimension for layer 3
     const int output_dim = 4;        // Motor commands (layer 4 output)
     
-    const int layer1_state_dim = 384;  // State dimension for layer 1
-    const int layer2_state_dim = 256;  // State dimension for layer 2
-    const int layer3_state_dim = 128;  // State dimension for layer 3
-    const int layer4_state_dim = 64;   // State dimension for layer 4
+    const int layer1_state_dim = 512;  // State dimension for layer 1
+    const int layer2_state_dim = 384;  // State dimension for layer 2
+    const int layer3_state_dim = 192;  // State dimension for layer 3
+    const int layer4_state_dim = 96;   // State dimension for layer 4
     
     const int batch_size = num_episodes;   // Process all episodes in parallel
     
@@ -553,7 +601,7 @@ int main() {
     // Number of episodes for training
     int num_episodes = 2000;
     
-    printf("Phase 1: Generating training data with FPV rendering...\n");
+    printf("Phase 1: Generating training data with FPV rendering (32x16 resolution)...\n");
     generate_data(data_fname, num_episodes);
     
     printf("Phase 2: Training four-stage SSM model with raw pixel input...\n");

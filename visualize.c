@@ -12,6 +12,7 @@
 #define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    10.0  // Simulation duration in seconds
 
+// Helper function to get random value in range [min, max]
 double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
@@ -78,27 +79,50 @@ int main(int argc, char* argv[]) {
 
     srand(time(NULL));
     
-    // Initialize quadcopter with random position
-    Quad quad = create_quad(
-        random_range(-2.0, 2.0),
-        random_range(0.0, 2.0),    // Always at or above ground
-        random_range(-2.0, 2.0)
-    );
-
-    // Initialize random target position and yaw
-    double target[7] = {
-        random_range(-2.0, 2.0),    // x
-        random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0),    // z
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(-M_PI, M_PI)   // yaw
+    // Initialize random drone position
+    double drone_x = random_range(-2.0, 2.0);
+    double drone_y = random_range(0.5, 2.0);
+    double drone_z = random_range(-2.0, 2.0);
+    
+    // Initialize random drone yaw
+    double drone_yaw = random_range(-M_PI, M_PI);
+    
+    // Calculate a random distance (between 1 and 4 units) in front of the drone
+    double distance = random_range(1.0, 4.0);
+    
+    // Add some random deviation to make it more natural (±30° from the center of view)
+    double angle_deviation = random_range(-M_PI/6, M_PI/6);  // ±30 degrees
+    double adjusted_yaw = drone_yaw + angle_deviation;
+    
+    // Calculate the target position based on the drone's position, adjusted yaw, and distance
+    double target_x = drone_x + sin(adjusted_yaw) * distance;
+    double target_z = drone_z + cos(adjusted_yaw) * distance;
+    
+    // Keep the target within boundaries
+    target_x = fmax(-2.0, fmin(2.0, target_x));
+    target_z = fmax(-2.0, fmin(2.0, target_z));
+    
+    // Set a random target height
+    double target_y = random_range(0.5, 2.5);
+    
+    // Create combined target array with the target position and desired drone yaw
+    double target[3] = {
+        target_x, target_y, target_z    // Target position
     };
     
-    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
+    printf("Initial drone position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", 
+           drone_x, drone_y, drone_z, drone_yaw);
+    printf("Target position: (%.2f, %.2f, %.2f)\n", 
+           target[0], target[1], target[2]);
+    printf("Target is %.2f meters away in the drone's field of view (%.2f° from center)\n", 
+           distance, angle_deviation * 180.0 / M_PI);
     
-    // Define FPV rendering constants
-    const int fpv_width = 8;
-    const int fpv_height = 4;
+    // Initialize quadcopter with random position and yaw
+    Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
+    
+    // Define FPV rendering constants - increased resolution
+    const int fpv_width = 32;
+    const int fpv_height = 16;
     const int fpv_channels = 3;
     const int fpv_pixels = fpv_width * fpv_height;
     
@@ -117,25 +141,26 @@ int main(int argc, char* argv[]) {
         (Vec3){1.4f, 1.4f, 1.4f}
     );
     
-    // Create meshes
+    // Create meshes to be shared between scenes
     Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
     Mesh treasure = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
     
-    // Add meshes to scenes
+    // Add meshes to third-person scene
     add_mesh_to_scene(&scene, drone);
     add_mesh_to_scene(&scene, ground);
     add_mesh_to_scene(&scene, treasure);
-    add_mesh_to_scene(&fpv_scene, drone);
+    
+    // Add meshes to FPV scene (only ground and treasure, no drone in FPV)
     add_mesh_to_scene(&fpv_scene, ground);
     add_mesh_to_scene(&fpv_scene, treasure);
 
-    // Set treasure position (target) for both scenes
+    // Set treasure position (target) for both scenes with fixed yaw (0.0)
     set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, 0.0f, 0.0f});
     
-    set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+    set_mesh_position(&fpv_scene.meshes[1], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+    set_mesh_rotation(&fpv_scene.meshes[1], (Vec3){0.0f, 0.0f, 0.0f});
 
     // Set up chase camera with 60 degree FOV
     set_scene_camera(&scene,
@@ -203,9 +228,8 @@ int main(int argc, char* argv[]) {
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_position_W[i];
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_velocity_W[i];
             
-            // Target position and yaw (4)
+            // Target position (3)
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)target[i];
-            layer1_input[idx++] = (float)target[6];
             
             // Forward pass through the four models
             forward_pass(layer1_ssm, layer1_input);
@@ -242,12 +266,9 @@ int main(int argc, char* argv[]) {
                 atan2f(quad.R_W_B[3], quad.R_W_B[0])
             };
 
-            // Update drone position in both scenes
+            // Update drone position in third-person scene only
             set_mesh_position(&scene.meshes[0], pos);
             set_mesh_rotation(&scene.meshes[0], rot);
-            
-            set_mesh_position(&fpv_scene.meshes[0], pos);
-            set_mesh_rotation(&fpv_scene.meshes[0], rot);
             
             // Update FPV camera to match drone's position and orientation
             Vec3 forward = {
@@ -262,7 +283,7 @@ int main(int argc, char* argv[]) {
                 (float)quad.R_W_B[7]
             };
             
-            // Set camera position above the drone
+            // Set camera position slightly above the drone
             Vec3 camera_offset = {
                 up.x * 0.15f,
                 up.y * 0.15f,
