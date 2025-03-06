@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
     // Set a random target height
     double target_y = random_range(0.5, 2.5);
     
-    // Create combined target array with the target position and desired drone yaw
+    // Create target array with the target position
     double target[3] = {
         target_x, target_y, target_z    // Target position
     };
@@ -212,7 +212,7 @@ int main(int argc, char* argv[]) {
             // Convert RGB to grayscale
             convert_to_grayscale(frame_data, grayscale_pixels, fpv_width, fpv_height, fpv_channels);
             
-            // Fill input for layer 1 model: raw grayscale pixels, IMU data, position, velocity, and target
+            // Fill input for layer 1 model: raw grayscale pixels and IMU data only
             int idx = 0;
             
             // Grayscale pixels
@@ -220,16 +220,9 @@ int main(int argc, char* argv[]) {
                 layer1_input[idx++] = grayscale_pixels[i];
             }
             
-            // IMU measurements (6)
+            // IMU measurements (6 values: gyro x,y,z and accel x,y,z)
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.gyro_measurement[i];
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.accel_measurement[i];
-            
-            // Position and velocity (6)
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_velocity_W[i];
-            
-            // Target position (3)
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)target[i];
             
             // Forward pass through the four models
             forward_pass(layer1_ssm, layer1_input);

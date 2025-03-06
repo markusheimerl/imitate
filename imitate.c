@@ -81,14 +81,12 @@ void generate_data(const char* data_file, int num_episodes) {
     const int fpv_channels = 3;
     const int fpv_pixels = fpv_width * fpv_height;
     
-    // Write header: Visual grayscale pixels, IMU measurements, position, velocity, target position, motor commands
+    // Write header: Visual grayscale pixels, IMU measurements, motor commands
     fprintf(f_data, "pix1");
     for (int i = 2; i <= fpv_pixels; i++) {
         fprintf(f_data, ",pix%d", i);
     }
     fprintf(f_data, ",gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
-    fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f_data, "tx,ty,tz,"); // Target position only (3) - removed yaw
     fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
     
     // Set up rendering scene for FPV
@@ -249,32 +247,6 @@ void generate_data(const char* data_file, int num_episodes) {
                     &estimator
                 );
                 
-                // Calculate vector from drone to target
-                double drone_to_target_x = target[0] - quad.linear_position_W[0];
-                double drone_to_target_z = target[2] - quad.linear_position_W[2];
-                
-                // Calculate distance to target in xz plane
-                double xz_distance = sqrt(drone_to_target_x * drone_to_target_x + drone_to_target_z * drone_to_target_z);
-                
-                // Calculate desired yaw for control (drone should face the target)
-                double control_yaw;
-                if (xz_distance > 0.3) {
-                    control_yaw = calculate_yaw_to_target(
-                        quad.linear_position_W[0],
-                        quad.linear_position_W[2],
-                        target[0],
-                        target[2]
-                    );
-                } else {
-                    // When close to target, maintain the last approach direction
-                    control_yaw = target[6];  // Use the stored target yaw
-                }
-                
-                // Create control target with calculated yaw
-                double control_target[7];
-                memcpy(control_target, target, 7 * sizeof(double));
-                control_target[6] = control_yaw;
-                
                 // Get motor commands from geometric controller
                 double new_omega[4];
                 control_quad_commands(
@@ -283,13 +255,12 @@ void generate_data(const char* data_file, int num_episodes) {
                     estimator.R,
                     estimator.angular_velocity,
                     quad.inertia,
-                    control_target,
+                    target,
                     new_omega
                 );
                 memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
                 
-                // Write training sample: 
-                // Grayscale pixels, IMU, position, velocity, target position (no yaw), and motor commands
+                // Write training sample: Grayscale pixels, IMU, and motor commands
                 
                 // First write grayscale pixels
                 fprintf(f_data, "\n%.6f", grayscale_pixels[0]);
@@ -300,13 +271,6 @@ void generate_data(const char* data_file, int num_episodes) {
                 fprintf(f_data, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
                        quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
                        quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
-                       
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                       quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
-                       quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
-                
-                fprintf(f_data, "%.6f,%.6f,%.6f,", // Target position only
-                       target[0], target[1], target[2]);
                        
                 fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
                        quad.omega_next[0],
@@ -400,12 +364,12 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     const int fpv_width = 32;
     const int fpv_height = 16;
     const int fpv_pixels = fpv_width * fpv_height;
-    const int sensor_dim = 15;        // IMU + position + velocity + target
+    const int sensor_dim = 6;         // IMU data (6)
     const int input_dim = fpv_pixels + sensor_dim;  // Combined input dimension
-    const int layer1_dim = 256;      // Output dimension for layer 1
-    const int layer2_dim = 192;      // Output dimension for layer 2
-    const int layer3_dim = 96;       // Output dimension for layer 3
-    const int output_dim = 4;        // Motor commands (layer 4 output)
+    const int layer1_dim = 256;       // Output dimension for layer 1
+    const int layer2_dim = 192;       // Output dimension for layer 2
+    const int layer3_dim = 96;        // Output dimension for layer 3
+    const int output_dim = 4;         // Motor commands (layer 4 output)
     
     const int layer1_state_dim = 512;  // State dimension for layer 1
     const int layer2_state_dim = 384;  // State dimension for layer 2
@@ -435,7 +399,7 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
         
         char* token = strtok(line, ",");
         
-        // Read all input data (raw pixels + sensor data)
+        // Read all input data (raw pixels + IMU data)
         for (int j = 0; j < input_dim; j++) {
             if (token) {
                 h_X[i * input_dim + j] = atof(token);
@@ -490,7 +454,7 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     
     // Training parameters
     const int num_epochs = 2000;
-    const float learning_rate = 0.00001f;
+    const float learning_rate = 0.0001f;
     
     printf("Starting four-stage model training for %d epochs...\n", num_epochs);
     
@@ -601,7 +565,7 @@ int main() {
     // Number of episodes for training
     int num_episodes = 2000;
     
-    printf("Phase 1: Generating training data with FPV rendering (32x16 resolution)...\n");
+    printf("Phase 1: Generating training data with FPV rendering...\n");
     generate_data(data_fname, num_episodes);
     
     printf("Phase 2: Training four-stage SSM model with raw pixel input...\n");
