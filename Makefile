@@ -7,7 +7,7 @@ CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -lcublas
 all: imitate.out visualize.out
 
 imitate.out: imitate.c
-	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(CUDALIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(CUDAFLAGS) $< -lwebp -lwebpmux $(CUDALIBS) $(LDFLAGS) -o $@
 
 visualize.out: visualize.c
 	$(CC) $(CFLAGS) $< -lopenblas -lwebp -lwebpmux $(LDFLAGS) -o $@
@@ -17,9 +17,10 @@ run: imitate.out
 
 viz: visualize.out
 	@time ./visualize.out \
-		$(shell ls -t *_perception_model.bin | head -1) \
-		$(shell ls -t *_planning_model.bin | head -1) \
-		$(shell ls -t *_control_model.bin | head -1)
+		$(shell ls -t *_layer1_model.bin | head -1) \
+		$(shell ls -t *_layer2_model.bin | head -1) \
+		$(shell ls -t *_layer3_model.bin | head -1) \
+		$(shell ls -t *_layer4_model.bin | head -1)
 
 clean:
 	rm -f *.out *.bin *.csv *.webp

@@ -4,10 +4,12 @@
 #include <string.h>
 #include <time.h>
 #include "sim/quad.h"
+#include "sim/raytracer/scene.h"
 #include "ssm/gpu/ssm.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
+#define DT_RENDER   (1.0 / 24.0)
 #define SIM_TIME    10.0  // 10 seconds per episode
 
 // Helper function to get random value in range [min, max]
@@ -32,6 +34,29 @@ void reorganize_data(float* input, float* output, int num_episodes, int seq_leng
     }
 }
 
+// Function to convert raw FPV RGB image data to grayscale values
+void convert_to_grayscale(unsigned char* fpv_frame, float* grayscale_pixels, int width, int height, int channels) {
+    int total_pixels = width * height;
+    
+    if (fpv_frame == NULL) {
+        // If frame is NULL, set all pixels to black (0.0)
+        for (int i = 0; i < total_pixels; i++) {
+            grayscale_pixels[i] = 0.0f;
+        }
+        return;
+    }
+    
+    for (int i = 0; i < total_pixels; i++) {
+        // Get RGB values
+        float r = fpv_frame[i * channels] / 255.0f;
+        float g = fpv_frame[i * channels + 1] / 255.0f;
+        float b = fpv_frame[i * channels + 2] / 255.0f;
+        
+        // Convert to grayscale using standard luminance formula
+        grayscale_pixels[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+    }
+}
+
 // Generate training data for the SSM
 void generate_data(const char* data_file, int num_episodes) {
     FILE* f_data = fopen(data_file, "w");
@@ -40,11 +65,43 @@ void generate_data(const char* data_file, int num_episodes) {
         return;
     }
     
-    // Write header: IMU measurements, position, velocity, target position+yaw, motor commands
-    fprintf(f_data, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
+    // Define constants for the FPV rendering
+    const int fpv_width = 20;
+    const int fpv_height = 15;
+    const int fpv_channels = 3;
+    const int fpv_pixels = fpv_width * fpv_height;
+    
+    // Write header: Visual grayscale pixels, IMU measurements, position, velocity, target position+yaw, motor commands
+    fprintf(f_data, "pix1");
+    for (int i = 2; i <= fpv_pixels; i++) {
+        fprintf(f_data, ",pix%d", i);
+    }
+    fprintf(f_data, ",gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
     fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
     fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
     fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
+    
+    // Set up rendering scene for FPV
+    Scene fpv_scene = create_scene(fpv_width, fpv_height, (int)(SIM_TIME * 1000), 24, 1.0f);
+    
+    // Set up lighting for scene
+    set_scene_light(&fpv_scene,
+        (Vec3){1.0f, 1.0f, -1.0f},
+        (Vec3){1.4f, 1.4f, 1.4f}
+    );
+    
+    // Create meshes
+    Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
+    Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
+    Mesh treasure = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
+    
+    // Add meshes to scene
+    add_mesh_to_scene(&fpv_scene, drone);
+    add_mesh_to_scene(&fpv_scene, ground);
+    add_mesh_to_scene(&fpv_scene, treasure);
+    
+    // Buffer for grayscale pixels
+    float* grayscale_pixels = (float*)calloc(fpv_pixels, sizeof(float));
     
     for (int episode = 0; episode < num_episodes; episode++) {
         // Random initial state
@@ -70,8 +127,13 @@ void generate_data(const char* data_file, int num_episodes) {
             random_range(-M_PI, M_PI)   // yaw
         };
         
+        // Set treasure position for target
+        set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+        set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+        
         double t_physics = 0.0;
         double t_control = 0.0;
+        double t_render = 0.0;
         
         for (int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
             if (t_physics >= DT_PHYSICS) {
@@ -79,7 +141,79 @@ void generate_data(const char* data_file, int num_episodes) {
                 t_physics = 0.0;
             }
             
+            // Render update
+            if (t_render >= DT_RENDER) {
+                // Get drone position and orientation for visualization
+                Vec3 pos = {
+                    (float)quad.linear_position_W[0],
+                    (float)quad.linear_position_W[1],
+                    (float)quad.linear_position_W[2]
+                };
+                
+                Vec3 rot = {
+                    atan2f(quad.R_W_B[7], quad.R_W_B[8]),
+                    asinf(-quad.R_W_B[6]),
+                    atan2f(quad.R_W_B[3], quad.R_W_B[0])
+                };
+                
+                set_mesh_position(&fpv_scene.meshes[0], pos);
+                set_mesh_rotation(&fpv_scene.meshes[0], rot);
+                
+                // Update FPV camera to match drone's position and orientation
+                Vec3 forward = {
+                    (float)quad.R_W_B[2],  // Third column
+                    (float)quad.R_W_B[5],
+                    (float)quad.R_W_B[8]
+                };
+                
+                Vec3 up = {
+                    (float)quad.R_W_B[1],  // Second column
+                    (float)quad.R_W_B[4],
+                    (float)quad.R_W_B[7]
+                };
+                
+                // Set camera position above the drone
+                Vec3 camera_offset = {
+                    up.x * 0.15f,
+                    up.y * 0.15f,
+                    up.z * 0.15f
+                };
+                
+                Vec3 fpv_pos = {
+                    pos.x + camera_offset.x,
+                    pos.y + camera_offset.y,
+                    pos.z + camera_offset.z
+                };
+                
+                // Calculate look-at point (position + forward)
+                Vec3 look_at = {
+                    pos.x + forward.x,  // Look at point is in front of drone's position
+                    pos.y + forward.y,
+                    pos.z + forward.z
+                };
+                
+                // Set FPV camera
+                set_scene_camera(&fpv_scene, fpv_pos, look_at, up, 70.0f);
+                
+                // Render scene
+                render_scene(&fpv_scene);
+                
+                // Advance to next frame
+                next_frame(&fpv_scene);
+                
+                t_render = 0.0;
+            }
+            
             if (t_control >= DT_CONTROL) {
+                // Check if we have a valid frame index
+                unsigned char* frame_data = NULL;
+                if (fpv_scene.current_frame > 0 && fpv_scene.current_frame <= fpv_scene.frame_count) {
+                    frame_data = fpv_scene.frames[fpv_scene.current_frame - 1];
+                }
+                
+                // Convert RGB to grayscale (handles NULL gracefully)
+                convert_to_grayscale(frame_data, grayscale_pixels, fpv_width, fpv_height, fpv_channels);
+                
                 // Update state estimator
                 update_estimator(
                     quad.gyro_measurement,
@@ -101,8 +235,16 @@ void generate_data(const char* data_file, int num_episodes) {
                 );
                 memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
                 
-                // Write training sample: IMU, position, velocity, target, and motor commands
-                fprintf(f_data, "\n%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
+                // Write training sample: 
+                // Grayscale pixels, IMU, position, velocity, target, and motor commands
+                
+                // First write grayscale pixels
+                fprintf(f_data, "\n%.6f", grayscale_pixels[0]);
+                for (int j = 1; j < fpv_pixels; j++) {
+                    fprintf(f_data, ",%.6f", grayscale_pixels[j]);
+                }
+                
+                fprintf(f_data, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
                        quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
                        quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
                        
@@ -124,14 +266,22 @@ void generate_data(const char* data_file, int num_episodes) {
             
             t_physics += DT_PHYSICS;
             t_control += DT_PHYSICS;
+            t_render += DT_PHYSICS;
         }
         
-        if ((episode + 1) % 1000 == 0) {
+        if ((episode + 1) % 100 == 0) {
             printf("Generated %d episodes\n", episode + 1);
         }
     }
     
     fclose(f_data);
+    free(grayscale_pixels);
+    
+    // Clean up raytracer resources
+    destroy_mesh(&drone);
+    destroy_mesh(&ground);
+    destroy_mesh(&treasure);
+    destroy_scene(&fpv_scene);
 }
 
 // Custom function to propagate gradients between models
@@ -166,12 +316,14 @@ void backward_between_models(SSM* first_model, SSM* second_model, float* d_first
     backward_pass(first_model, d_first_model_input);
 }
 
-// Train three SSM models in sequence:
-// - Perception model processes raw input data
-// - Planning model processes perception output and produces navigation plan
-// - Control model takes planning output and produces motor commands
-void train_stacked_models(const char* data_file, const char* perception_file, 
-                          const char* planning_file, const char* control_file, int num_episodes) {
+// Train four SSM models in sequence:
+// - Layer 1 processes visual + sensor input data
+// - Layer 2 processes layer 1 output for further feature extraction
+// - Layer 3 processes layer 2 output and produces a navigation plan
+// - Layer 4 takes layer 3 output and produces motor commands
+void train_stacked_models(const char* data_file, const char* layer1_file, 
+                          const char* layer2_file, const char* layer3_file,
+                          const char* layer4_file, int num_episodes) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -181,7 +333,7 @@ void train_stacked_models(const char* data_file, const char* perception_file,
         return;
     }
     
-    char line[1024];
+    char line[8192];  // Increased buffer size for additional visual features
     int total_samples = 0;
     // Skip header
     fgets(line, sizeof(line), f);
@@ -196,15 +348,21 @@ void train_stacked_models(const char* data_file, const char* perception_file,
     printf("Found %d total samples across %d episodes, %d steps per episode\n", 
            total_samples, num_episodes, seq_length);
     
-    // Parameters for the new architecture
-    const int input_dim = 16;         // All input data (IMU + position + velocity + target)
-    const int perception_dim = 48;    // Output dimension for perception model
-    const int planning_dim = 32;      // Output dimension for planning model
-    const int output_dim = 4;         // Motor commands
+    // Parameters for the updated architecture
+    const int fpv_width = 20;
+    const int fpv_height = 15;
+    const int fpv_pixels = fpv_width * fpv_height;
+    const int sensor_dim = 16;        // IMU + position + velocity + target
+    const int input_dim = fpv_pixels + sensor_dim;  // Combined input dimension
+    const int layer1_dim = 192;      // Output dimension for layer 1
+    const int layer2_dim = 128;      // Output dimension for layer 2
+    const int layer3_dim = 64;       // Output dimension for layer 3
+    const int output_dim = 4;        // Motor commands (layer 4 output)
     
-    const int perception_state_dim = 128;  // Internal state dimension for perception model
-    const int planning_state_dim = 128;    // Internal state dimension for planning model
-    const int control_state_dim = 64;      // Internal state dimension for control model
+    const int layer1_state_dim = 384;  // State dimension for layer 1
+    const int layer2_state_dim = 256;  // State dimension for layer 2
+    const int layer3_state_dim = 128;  // State dimension for layer 3
+    const int layer4_state_dim = 64;   // State dimension for layer 4
     
     const int batch_size = num_episodes;   // Process all episodes in parallel
     
@@ -229,7 +387,7 @@ void train_stacked_models(const char* data_file, const char* perception_file,
         
         char* token = strtok(line, ",");
         
-        // Read all input data (16 values)
+        // Read all input data (raw pixels + sensor data)
         for (int j = 0; j < input_dim; j++) {
             if (token) {
                 h_X[i * input_dim + j] = atof(token);
@@ -270,21 +428,23 @@ void train_stacked_models(const char* data_file, const char* perception_file,
     free(h_X_episodes);
     free(h_y_episodes);
     
-    // Initialize the three SSM models
-    SSM* perception_ssm = init_ssm(input_dim, perception_state_dim, perception_dim, batch_size);
-    SSM* planning_ssm = init_ssm(perception_dim, planning_state_dim, planning_dim, batch_size);
-    SSM* control_ssm = init_ssm(planning_dim, control_state_dim, output_dim, batch_size);
+    // Initialize the four SSM models
+    SSM* layer1_ssm = init_ssm(input_dim, layer1_state_dim, layer1_dim, batch_size);
+    SSM* layer2_ssm = init_ssm(layer1_dim, layer2_state_dim, layer2_dim, batch_size);
+    SSM* layer3_ssm = init_ssm(layer2_dim, layer3_state_dim, layer3_dim, batch_size);
+    SSM* layer4_ssm = init_ssm(layer3_dim, layer4_state_dim, output_dim, batch_size);
     
     // Allocate memory for intermediate outputs
-    float *d_perception_output, *d_planning_output;
-    CHECK_CUDA(cudaMalloc(&d_perception_output, batch_size * perception_dim * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_planning_output, batch_size * planning_dim * sizeof(float)));
+    float *d_layer1_output, *d_layer2_output, *d_layer3_output;
+    CHECK_CUDA(cudaMalloc(&d_layer1_output, batch_size * layer1_dim * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_layer2_output, batch_size * layer2_dim * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_layer3_output, batch_size * layer3_dim * sizeof(float)));
     
     // Training parameters
     const int num_epochs = 1000;
     const float learning_rate = 0.0001f;
     
-    printf("Starting three-stage model training for %d epochs...\n", num_epochs);
+    printf("Starting four-stage model training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
@@ -292,9 +452,10 @@ void train_stacked_models(const char* data_file, const char* perception_file,
         int num_steps = 0;
         
         // Reset states at the beginning of each epoch
-        CHECK_CUDA(cudaMemset(perception_ssm->d_state, 0, perception_ssm->batch_size * perception_ssm->state_dim * sizeof(float)));
-        CHECK_CUDA(cudaMemset(planning_ssm->d_state, 0, planning_ssm->batch_size * planning_ssm->state_dim * sizeof(float)));
-        CHECK_CUDA(cudaMemset(control_ssm->d_state, 0, control_ssm->batch_size * control_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(layer1_ssm->d_state, 0, layer1_ssm->batch_size * layer1_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(layer2_ssm->d_state, 0, layer2_ssm->batch_size * layer2_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(layer3_ssm->d_state, 0, layer3_ssm->batch_size * layer3_ssm->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(layer4_ssm->d_state, 0, layer4_ssm->batch_size * layer4_ssm->state_dim * sizeof(float)));
         
         // Process sequence in batches
         for (int step = 0; step < seq_length; step++) {
@@ -302,44 +463,56 @@ void train_stacked_models(const char* data_file, const char* perception_file,
             float* d_current_X = d_X + step * batch_size * input_dim;
             float* d_current_y = d_y + step * batch_size * output_dim;
             
-            // Forward pass through perception model
-            forward_pass(perception_ssm, d_current_X);
+            // Forward pass through layer 1
+            forward_pass(layer1_ssm, d_current_X);
             
-            // Copy output from perception model to input for planning model
-            CHECK_CUDA(cudaMemcpy(d_perception_output, perception_ssm->d_predictions, 
-                               batch_size * perception_dim * sizeof(float), 
+            // Copy output from layer 1 to input for layer 2
+            CHECK_CUDA(cudaMemcpy(d_layer1_output, layer1_ssm->d_predictions, 
+                               batch_size * layer1_dim * sizeof(float), 
                                cudaMemcpyDeviceToDevice));
             
-            // Forward pass through planning model
-            forward_pass(planning_ssm, d_perception_output);
+            // Forward pass through layer 2
+            forward_pass(layer2_ssm, d_layer1_output);
             
-            // Copy output from planning model to input for control model
-            CHECK_CUDA(cudaMemcpy(d_planning_output, planning_ssm->d_predictions, 
-                               batch_size * planning_dim * sizeof(float), 
+            // Copy output from layer 2 to input for layer 3
+            CHECK_CUDA(cudaMemcpy(d_layer2_output, layer2_ssm->d_predictions, 
+                               batch_size * layer2_dim * sizeof(float), 
                                cudaMemcpyDeviceToDevice));
             
-            // Forward pass through control model
-            forward_pass(control_ssm, d_planning_output);
+            // Forward pass through layer 3
+            forward_pass(layer3_ssm, d_layer2_output);
+            
+            // Copy output from layer 3 to input for layer 4
+            CHECK_CUDA(cudaMemcpy(d_layer3_output, layer3_ssm->d_predictions, 
+                               batch_size * layer3_dim * sizeof(float), 
+                               cudaMemcpyDeviceToDevice));
+            
+            // Forward pass through layer 4
+            forward_pass(layer4_ssm, d_layer3_output);
             
             // Calculate loss
-            float loss = calculate_loss(control_ssm, d_current_y);
+            float loss = calculate_loss(layer4_ssm, d_current_y);
             epoch_loss += loss;
             num_steps++;
             
-            // Backward pass through control model
-            zero_gradients(control_ssm);
-            backward_pass(control_ssm, d_planning_output);
+            // Backward pass through layer 4
+            zero_gradients(layer4_ssm);
+            backward_pass(layer4_ssm, d_layer3_output);
             
-            // Backpropagate through planning model
-            backward_between_models(planning_ssm, control_ssm, d_perception_output);
+            // Backpropagate through layer 3
+            backward_between_models(layer3_ssm, layer4_ssm, d_layer2_output);
             
-            // Backpropagate through perception model
-            backward_between_models(perception_ssm, planning_ssm, d_current_X);
+            // Backpropagate through layer 2
+            backward_between_models(layer2_ssm, layer3_ssm, d_layer1_output);
+            
+            // Backpropagate through layer 1
+            backward_between_models(layer1_ssm, layer2_ssm, d_current_X);
             
             // Update weights
-            update_weights(perception_ssm, learning_rate);
-            update_weights(planning_ssm, learning_rate);
-            update_weights(control_ssm, learning_rate);
+            update_weights(layer1_ssm, learning_rate);
+            update_weights(layer2_ssm, learning_rate);
+            update_weights(layer3_ssm, learning_rate);
+            update_weights(layer4_ssm, learning_rate);
         }
         
         // Print progress
@@ -348,50 +521,50 @@ void train_stacked_models(const char* data_file, const char* perception_file,
         }
     }
     
-    // Save models with batch_size=1 for inference
-    perception_ssm->batch_size = 1;
-    planning_ssm->batch_size = 1;
-    control_ssm->batch_size = 1;
-    
-    save_ssm(perception_ssm, perception_file);
-    save_ssm(planning_ssm, planning_file);
-    save_ssm(control_ssm, control_file);
+    save_ssm(layer1_ssm, layer1_file);
+    save_ssm(layer2_ssm, layer2_file);
+    save_ssm(layer3_ssm, layer3_file);
+    save_ssm(layer4_ssm, layer4_file);
     
     // Cleanup
     cudaFree(d_X);
     cudaFree(d_y);
-    cudaFree(d_perception_output);
-    cudaFree(d_planning_output);
-    free_ssm(perception_ssm);
-    free_ssm(planning_ssm);
-    free_ssm(control_ssm);
+    cudaFree(d_layer1_output);
+    cudaFree(d_layer2_output);
+    cudaFree(d_layer3_output);
+    free_ssm(layer1_ssm);
+    free_ssm(layer2_ssm);
+    free_ssm(layer3_ssm);
+    free_ssm(layer4_ssm);
 }
 
 int main() {
     srand(time(NULL) ^ getpid());
     
     // Generate timestamped filenames
-    char data_fname[64], perception_fname[64], planning_fname[64], control_fname[64];
+    char data_fname[64], layer1_fname[64], layer2_fname[64], layer3_fname[64], layer4_fname[64];
     time_t now = time(NULL);
     strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
-    strftime(perception_fname, sizeof(perception_fname), "%Y%m%d_%H%M%S_perception_model.bin", localtime(&now));
-    strftime(planning_fname, sizeof(planning_fname), "%Y%m%d_%H%M%S_planning_model.bin", localtime(&now));
-    strftime(control_fname, sizeof(control_fname), "%Y%m%d_%H%M%S_control_model.bin", localtime(&now));
+    strftime(layer1_fname, sizeof(layer1_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
+    strftime(layer2_fname, sizeof(layer2_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
+    strftime(layer3_fname, sizeof(layer3_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
+    strftime(layer4_fname, sizeof(layer4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
     
     // Number of episodes for training
-    int num_episodes = 10000;
+    int num_episodes = 1000;
     
-    printf("Phase 1: Generating training data...\n");
+    printf("Phase 1: Generating training data with FPV rendering...\n");
     generate_data(data_fname, num_episodes);
     
-    printf("Phase 2: Training three-stage SSM model...\n");
-    train_stacked_models(data_fname, perception_fname, planning_fname, control_fname, num_episodes);
+    printf("Phase 2: Training four-stage SSM model with raw pixel input...\n");
+    train_stacked_models(data_fname, layer1_fname, layer2_fname, layer3_fname, layer4_fname, num_episodes);
     
     printf("Training complete!\n");
     printf("Data saved to: %s\n", data_fname);
-    printf("Perception model saved to: %s\n", perception_fname);
-    printf("Planning model saved to: %s\n", planning_fname);
-    printf("Control model saved to: %s\n", control_fname);
+    printf("Layer 1 model saved to: %s\n", layer1_fname);
+    printf("Layer 2 model saved to: %s\n", layer2_fname);
+    printf("Layer 3 model saved to: %s\n", layer3_fname);
+    printf("Layer 4 model saved to: %s\n", layer4_fname);
     
     return 0;
 }

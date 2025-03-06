@@ -16,54 +16,65 @@ double random_range(double min, double max) {
     return min + (double)rand() / RAND_MAX * (max - min);
 }
 
+// Function to convert raw FPV RGB image data to grayscale values
+void convert_to_grayscale(unsigned char* fpv_frame, float* grayscale_pixels, int width, int height, int channels) {
+    int total_pixels = width * height;
+    
+    if (fpv_frame == NULL) {
+        // If frame is NULL, set all pixels to black (0.0)
+        for (int i = 0; i < total_pixels; i++) {
+            grayscale_pixels[i] = 0.0f;
+        }
+        return;
+    }
+    
+    for (int i = 0; i < total_pixels; i++) {
+        // Get RGB values
+        float r = fpv_frame[i * channels] / 255.0f;
+        float g = fpv_frame[i * channels + 1] / 255.0f;
+        float b = fpv_frame[i * channels + 2] / 255.0f;
+        
+        // Convert to grayscale using standard luminance formula
+        grayscale_pixels[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+    }
+}
+
 int main(int argc, char* argv[]) {
-    if(argc != 4) {
-        printf("Usage: %s <perception_model_file> <planning_model_file> <control_model_file>\n", argv[0]);
+    if(argc != 5) {
+        printf("Usage: %s <layer1_model_file> <layer2_model_file> <layer3_model_file> <layer4_model_file>\n", argv[0]);
         return 1;
     }
 
-    // Load all three SSM models
-    SSM* perception_ssm = load_ssm(argv[1]);
-    SSM* planning_ssm = load_ssm(argv[2]);
-    SSM* control_ssm = load_ssm(argv[3]);
+    // Load all four SSM models
+    SSM* layer1_ssm = load_ssm(argv[1], 1);
+    SSM* layer2_ssm = load_ssm(argv[2], 1);
+    SSM* layer3_ssm = load_ssm(argv[3], 1);
+    SSM* layer4_ssm = load_ssm(argv[4], 1);
 
     // Print network dimensions
-    printf("Loaded Perception Model dimensions:\n");
-    printf("Input dim: %d\n", perception_ssm->input_dim);
-    printf("State dim: %d\n", perception_ssm->state_dim);
-    printf("Output dim: %d\n", perception_ssm->output_dim);
-    printf("Batch size: %d\n", perception_ssm->batch_size);
+    printf("Loaded Layer 1 Model dimensions:\n");
+    printf("Input dim: %d\n", layer1_ssm->input_dim);
+    printf("State dim: %d\n", layer1_ssm->state_dim);
+    printf("Output dim: %d\n", layer1_ssm->output_dim);
+    printf("Batch size: %d\n", layer1_ssm->batch_size);
     
-    printf("\nLoaded Planning Model dimensions:\n");
-    printf("Input dim: %d\n", planning_ssm->input_dim);
-    printf("State dim: %d\n", planning_ssm->state_dim);
-    printf("Output dim: %d\n", planning_ssm->output_dim);
-    printf("Batch size: %d\n", planning_ssm->batch_size);
+    printf("\nLoaded Layer 2 Model dimensions:\n");
+    printf("Input dim: %d\n", layer2_ssm->input_dim);
+    printf("State dim: %d\n", layer2_ssm->state_dim);
+    printf("Output dim: %d\n", layer2_ssm->output_dim);
+    printf("Batch size: %d\n", layer2_ssm->batch_size);
     
-    printf("\nLoaded Control Model dimensions:\n");
-    printf("Input dim: %d\n", control_ssm->input_dim);
-    printf("State dim: %d\n", control_ssm->state_dim);
-    printf("Output dim: %d\n", control_ssm->output_dim);
-    printf("Batch size: %d\n", control_ssm->batch_size);
+    printf("\nLoaded Layer 3 Model dimensions:\n");
+    printf("Input dim: %d\n", layer3_ssm->input_dim);
+    printf("State dim: %d\n", layer3_ssm->state_dim);
+    printf("Output dim: %d\n", layer3_ssm->output_dim);
+    printf("Batch size: %d\n", layer3_ssm->batch_size);
     
-    // Verify model compatibility
-    if (perception_ssm->output_dim != planning_ssm->input_dim) {
-        printf("Error: Model dimensions don't match! Perception output: %d, Planning input: %d\n", 
-               perception_ssm->output_dim, planning_ssm->input_dim);
-        free_ssm(perception_ssm);
-        free_ssm(planning_ssm);
-        free_ssm(control_ssm);
-        return 1;
-    }
-    
-    if (planning_ssm->output_dim != control_ssm->input_dim) {
-        printf("Error: Model dimensions don't match! Planning output: %d, Control input: %d\n", 
-               planning_ssm->output_dim, control_ssm->input_dim);
-        free_ssm(perception_ssm);
-        free_ssm(planning_ssm);
-        free_ssm(control_ssm);
-        return 1;
-    }
+    printf("\nLoaded Layer 4 Model dimensions:\n");
+    printf("Input dim: %d\n", layer4_ssm->input_dim);
+    printf("State dim: %d\n", layer4_ssm->state_dim);
+    printf("Output dim: %d\n", layer4_ssm->output_dim);
+    printf("Batch size: %d\n", layer4_ssm->batch_size);
 
     srand(time(NULL));
     
@@ -85,9 +96,15 @@ int main(int argc, char* argv[]) {
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
+    // Define FPV rendering constants
+    const int fpv_width = 20;
+    const int fpv_height = 15;
+    const int fpv_channels = 3;
+    const int fpv_pixels = fpv_width * fpv_height;
+    
     // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
-    Scene fpv_scene = create_scene(20, 15, (int)(SIM_TIME * 1000), 24, 1.0f);
+    Scene fpv_scene = create_scene(fpv_width, fpv_height, (int)(SIM_TIME * 1000), 24, 1.0f);
     
     // Set up lighting for both scenes
     set_scene_light(&scene,
@@ -134,17 +151,22 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Allocate input buffer for perception model
-    float* perception_input = (float*)calloc(perception_ssm->batch_size * perception_ssm->input_dim, sizeof(float));
+    // Allocate input buffer for layer1 model
+    float* layer1_input = (float*)calloc(layer1_ssm->input_dim, sizeof(float));
     
     // Allocate intermediate buffers for connecting the models
-    float* planning_input = (float*)calloc(planning_ssm->batch_size * planning_ssm->input_dim, sizeof(float));
-    float* control_input = (float*)calloc(control_ssm->batch_size * control_ssm->input_dim, sizeof(float));
+    float* layer2_input = (float*)calloc(layer2_ssm->input_dim, sizeof(float));
+    float* layer3_input = (float*)calloc(layer3_ssm->input_dim, sizeof(float));
+    float* layer4_input = (float*)calloc(layer4_ssm->input_dim, sizeof(float));
+    
+    // Grayscale pixels buffer
+    float* grayscale_pixels = (float*)calloc(fpv_pixels, sizeof(float));
     
     // Reset internal states of all models
-    memset(perception_ssm->state, 0, perception_ssm->batch_size * perception_ssm->state_dim * sizeof(float));
-    memset(planning_ssm->state, 0, planning_ssm->batch_size * planning_ssm->state_dim * sizeof(float));
-    memset(control_ssm->state, 0, control_ssm->batch_size * control_ssm->state_dim * sizeof(float));
+    memset(layer1_ssm->state, 0, layer1_ssm->state_dim * sizeof(float));
+    memset(layer2_ssm->state, 0, layer2_ssm->state_dim * sizeof(float));
+    memset(layer3_ssm->state, 0, layer3_ssm->state_dim * sizeof(float));
+    memset(layer4_ssm->state, 0, layer4_ssm->state_dim * sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -156,39 +178,50 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Fill input for perception model: IMU data, position, velocity, and target
+            // Check if we have a valid frame index
+            unsigned char* frame_data = NULL;
+            if (fpv_scene.current_frame > 0 && fpv_scene.current_frame <= fpv_scene.frame_count) {
+                frame_data = fpv_scene.frames[fpv_scene.current_frame - 1];
+            }
+            
+            // Convert RGB to grayscale
+            convert_to_grayscale(frame_data, grayscale_pixels, fpv_width, fpv_height, fpv_channels);
+            
+            // Fill input for layer 1 model: raw grayscale pixels, IMU data, position, velocity, and target
             int idx = 0;
             
+            // Grayscale pixels
+            for (int i = 0; i < fpv_pixels; i++) {
+                layer1_input[idx++] = grayscale_pixels[i];
+            }
+            
             // IMU measurements (6)
-            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.gyro_measurement[i];
-            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.accel_measurement[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.gyro_measurement[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.accel_measurement[i];
             
             // Position and velocity (6)
-            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_velocity_W[i];
             
             // Target position and yaw (4)
-            for(int i = 0; i < 3; i++) perception_input[idx++] = (float)target[i];
-            perception_input[idx++] = (float)target[6];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)target[i];
+            layer1_input[idx++] = (float)target[6];
             
-            // Forward pass through perception model
-            forward_pass(perception_ssm, perception_input);
+            // Forward pass through the four models
+            forward_pass(layer1_ssm, layer1_input);
+            memcpy(layer2_input, layer1_ssm->predictions, layer1_ssm->output_dim * sizeof(float));
             
-            // Copy the output of the perception model as input to the planning model
-            memcpy(planning_input, perception_ssm->predictions, perception_ssm->output_dim * sizeof(float));
+            forward_pass(layer2_ssm, layer2_input);
+            memcpy(layer3_input, layer2_ssm->predictions, layer2_ssm->output_dim * sizeof(float));
             
-            // Forward pass through planning model
-            forward_pass(planning_ssm, planning_input);
+            forward_pass(layer3_ssm, layer3_input);
+            memcpy(layer4_input, layer3_ssm->predictions, layer3_ssm->output_dim * sizeof(float));
             
-            // Copy the output of the planning model as input to the control model
-            memcpy(control_input, planning_ssm->predictions, planning_ssm->output_dim * sizeof(float));
+            forward_pass(layer4_ssm, layer4_input);
             
-            // Forward pass through control model
-            forward_pass(control_ssm, control_input);
-            
-            // Apply predicted motor commands from the control model
+            // Apply predicted motor commands from the layer 4 model
             for (int i = 0; i < 4; i++) {
-                quad.omega_next[i] = (double)control_ssm->predictions[i];
+                quad.omega_next[i] = (double)layer4_ssm->predictions[i];
             }
             
             t_control = 0.0;
@@ -296,16 +329,22 @@ int main(int argc, char* argv[]) {
     printf("First-person view saved to: %s\n", fpv_filename);
 
     // Cleanup
-    free(perception_input);
-    free(planning_input);
-    free(control_input);
+    free(layer1_input);
+    free(layer2_input);
+    free(layer3_input);
+    free(layer4_input);
+    free(grayscale_pixels);
+    
     destroy_mesh(&drone);
     destroy_mesh(&ground);
     destroy_mesh(&treasure);
     destroy_scene(&scene);
     destroy_scene(&fpv_scene);
-    free_ssm(perception_ssm);
-    free_ssm(planning_ssm);
-    free_ssm(control_ssm);
+    
+    free_ssm(layer1_ssm);
+    free_ssm(layer2_ssm);
+    free_ssm(layer3_ssm);
+    free_ssm(layer4_ssm);
+    
     return 0;
 }
