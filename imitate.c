@@ -3,8 +3,18 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include "sim/quad.h"
 #include "ssm/gpu/ssm.h"
 
+#define DT_PHYSICS  (1.0 / 1000.0)
+#define DT_CONTROL  (1.0 / 60.0)
+#define SIM_TIME    10.0  // 10 seconds per episode
+
+// Helper function to get random value in range [min, max]
+double random_range(double min, double max) {
+    return min + (double)rand() / RAND_MAX * (max - min);
+}  
+    
 // Helper function to reorganize data for batch processing
 void reorganize_data(float* input, float* output, int num_episodes, int seq_length, int feature_dim) {
     for (int episode = 0; episode < num_episodes; episode++) {
@@ -22,39 +32,144 @@ void reorganize_data(float* input, float* output, int num_episodes, int seq_leng
     }
 }
 
+// Generate training data for the SSM
+void generate_data(const char* data_file, int num_episodes) {
+    FILE* f_data = fopen(data_file, "w");
+    if (!f_data) {
+        printf("Error opening file: %s\n", data_file);
+        return;
+    }
+    
+    // Write header: IMU measurements, position, velocity, target position+yaw, motor commands
+    fprintf(f_data, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
+    fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
+    fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
+    fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
+    
+    for (int episode = 0; episode < num_episodes; episode++) {
+        // Random initial state
+        Quad quad = create_quad(
+            random_range(-2.0, 2.0),
+            random_range(0.0, 2.0),    // Always at or above ground
+            random_range(-2.0, 2.0),
+            0.0
+        );
+
+        // Initialize state estimator
+        StateEstimator estimator = {
+            .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
+            .angular_velocity = {0.0, 0.0, 0.0},
+            .gyro_bias = {0.0, 0.0, 0.0}
+        };
+        
+        // Random target
+        double target[7] = {
+            random_range(-2.0, 2.0),    // x
+            random_range(1.0, 3.0),     // y: Always above ground
+            random_range(-2.0, 2.0),    // z
+            0.0, 0.0, 0.0,              // vx, vy, vz
+            random_range(-M_PI, M_PI)   // yaw
+        };
+        
+        double t_physics = 0.0;
+        double t_control = 0.0;
+        
+        for (int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
+            if (t_physics >= DT_PHYSICS) {
+                update_quad(&quad, DT_PHYSICS);
+                t_physics = 0.0;
+            }
+            
+            if (t_control >= DT_CONTROL) {
+                // Update state estimator
+                update_estimator(
+                    quad.gyro_measurement,
+                    quad.accel_measurement,
+                    DT_CONTROL,
+                    &estimator
+                );
+                
+                // Get motor commands from geometric controller
+                double new_omega[4];
+                control_quad_commands(
+                    quad.linear_position_W,
+                    quad.linear_velocity_W,
+                    estimator.R,
+                    estimator.angular_velocity,
+                    quad.inertia,
+                    target,
+                    new_omega
+                );
+                memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
+                
+                // Write training sample: IMU, position, velocity, target, and motor commands
+                fprintf(f_data, "\n%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
+                       quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
+                       quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
+                       
+                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
+                       quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
+                       quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
+                
+                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,", // Target
+                       target[0], target[1], target[2], target[6]);
+                       
+                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
+                       quad.omega_next[0],
+                       quad.omega_next[1],
+                       quad.omega_next[2],
+                       quad.omega_next[3]);
+                       
+                t_control = 0.0;
+            }
+            
+            t_physics += DT_PHYSICS;
+            t_control += DT_PHYSICS;
+        }
+        
+        if ((episode + 1) % 1000 == 0) {
+            printf("Generated %d episodes\n", episode + 1);
+        }
+    }
+    
+    fclose(f_data);
+}
+
 // Custom function to propagate gradients between models
-void backward_between_models(SSM* first_model, SSM* second_model, float* d_first_model_input) {
-    // The error to propagate back is already in second_model->d_error
-    // Need to convert it to gradient w.r.t first model output
+void backward_between_models(SSM* prev_model, SSM* next_model, float* d_prev_model_input) {
+    // Zero gradients for previous model
+    zero_gradients(prev_model);
+    
+    // The error to propagate back is already in next_model->d_error
+    // Need to convert it to gradient w.r.t previous model output
     
     const float alpha = 1.0f, beta = 0.0f;
     
     // Compute gradient from state path: d_input_grad = B^T * state_error
-    CHECK_CUBLAS(cublasSgemm(second_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
-                           first_model->output_dim, first_model->batch_size, second_model->state_dim,
+    CHECK_CUBLAS(cublasSgemm(next_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                           prev_model->output_dim, prev_model->batch_size, next_model->state_dim,
                            &alpha,
-                           second_model->d_B, second_model->state_dim,
-                           second_model->d_state_error, second_model->state_dim,
+                           next_model->d_B, next_model->state_dim,
+                           next_model->d_state_error, next_model->state_dim,
                            &beta,
-                           first_model->d_error, first_model->output_dim));
+                           prev_model->d_error, prev_model->output_dim));
     
     // Add gradient from direct path: d_input_grad += D^T * error
-    CHECK_CUBLAS(cublasSgemm(second_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
-                           first_model->output_dim, first_model->batch_size, second_model->output_dim,
+    CHECK_CUBLAS(cublasSgemm(next_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                           prev_model->output_dim, prev_model->batch_size, next_model->output_dim,
                            &alpha,
-                           second_model->d_D, second_model->output_dim,
-                           second_model->d_error, second_model->output_dim,
+                           next_model->d_D, next_model->output_dim,
+                           next_model->d_error, next_model->output_dim,
                            &alpha, // Add to existing gradient
-                           first_model->d_error, first_model->output_dim));
+                           prev_model->d_error, prev_model->output_dim));
     
-    // Now do the backward pass for the first model
-    backward_pass(first_model, d_first_model_input);
+    // Now do the backward pass for the previous model
+    backward_pass(prev_model, d_prev_model_input);
 }
 
-// Train four SSM models in sequence
-void train_stacked_models(const char* data_file, const char* layer1_file, 
-                          const char* layer2_file, const char* layer3_file,
-                          const char* layer4_file, int num_episodes) {
+// Train four SSM models in a stack
+void train_stacked_models(const char* data_file, const char* model1_file, const char* model2_file, 
+                         const char* model3_file, const char* model4_file, int num_episodes) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -64,7 +179,7 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
         return;
     }
     
-    char line[16384];  // Increased buffer size for the larger resolution
+    char line[1024];
     int total_samples = 0;
     // Skip header
     fgets(line, sizeof(line), f);
@@ -79,23 +194,19 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     printf("Found %d total samples across %d episodes, %d steps per episode\n", 
            total_samples, num_episodes, seq_length);
     
-    // Parameters for the updated architecture
-    const int fpv_width = 32;
-    const int fpv_height = 16;
-    const int fpv_pixels = fpv_width * fpv_height;
-    const int sensor_dim = 6;         // IMU data (6)
-    const int input_dim = fpv_pixels + sensor_dim;  // Combined input dimension
-    const int layer1_dim = 256;       // Output dimension for layer 1
-    const int layer2_dim = 192;       // Output dimension for layer 2
-    const int layer3_dim = 96;        // Output dimension for layer 3
-    const int output_dim = 4;         // Motor commands (layer 4 output)
+    // Parameters for the new architecture
+    const int input_dim = 16;       // All input data (IMU + position + velocity + target)
+    const int hidden_dim1 = 96;     // Output dimension for first model
+    const int hidden_dim2 = 64;     // Output dimension for second model 
+    const int hidden_dim3 = 32;     // Output dimension for third model
+    const int output_dim = 4;       // Motor commands
     
-    const int layer1_state_dim = 512;  // State dimension for layer 1
-    const int layer2_state_dim = 384;  // State dimension for layer 2
-    const int layer3_state_dim = 192;  // State dimension for layer 3
-    const int layer4_state_dim = 96;   // State dimension for layer 4
+    const int state_dim1 = 128;     // Internal state dimension for first model
+    const int state_dim2 = 128;     // Internal state dimension for second model
+    const int state_dim3 = 128;     // Internal state dimension for third model
+    const int state_dim4 = 128;     // Internal state dimension for fourth model
     
-    const int batch_size = num_episodes;   // Process all episodes in parallel
+    const int batch_size = num_episodes;  // Process all episodes in parallel
     
     // Allocate memory for data
     float* h_X = (float*)malloc(total_samples * input_dim * sizeof(float));
@@ -118,7 +229,7 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
         
         char* token = strtok(line, ",");
         
-        // Read all input data (raw pixels + IMU data)
+        // Read all input data (16 values)
         for (int j = 0; j < input_dim; j++) {
             if (token) {
                 h_X[i * input_dim + j] = atof(token);
@@ -159,44 +270,23 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     free(h_X_episodes);
     free(h_y_episodes);
     
-    // Initialize the four SSM models
-    SSM* layer1_ssm = NULL;
-    SSM* layer2_ssm = NULL;
-    SSM* layer3_ssm = NULL;
-    SSM* layer4_ssm = NULL;
+    // Initialize the SSM models
+    SSM* layer1_ssm = init_ssm(input_dim, state_dim1, hidden_dim1, batch_size);
+    SSM* layer2_ssm = init_ssm(hidden_dim1, state_dim2, hidden_dim2, batch_size);
+    SSM* layer3_ssm = init_ssm(hidden_dim2, state_dim3, hidden_dim3, batch_size);
+    SSM* layer4_ssm = init_ssm(hidden_dim3, state_dim4, output_dim, batch_size);
+    
+    // Allocate memory for intermediate outputs
+    float *d_hidden_output1, *d_hidden_output2, *d_hidden_output3;
+    CHECK_CUDA(cudaMalloc(&d_hidden_output1, batch_size * hidden_dim1 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_hidden_output2, batch_size * hidden_dim2 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_hidden_output3, batch_size * hidden_dim3 * sizeof(float)));
     
     // Training parameters
     const int num_epochs = 1000;
     const float learning_rate = 0.0001f;
-    const int grad_accum_steps = 8;  // Number of steps to accumulate gradients
     
-    // Check if we're continuing training from existing models
-    if (access(layer1_file, F_OK) != -1 && 
-        access(layer2_file, F_OK) != -1 && 
-        access(layer3_file, F_OK) != -1 && 
-        access(layer4_file, F_OK) != -1) {
-        printf("Loading existing models for continued training...\n");
-        layer1_ssm = load_ssm(layer1_file, batch_size);
-        layer2_ssm = load_ssm(layer2_file, batch_size);
-        layer3_ssm = load_ssm(layer3_file, batch_size);
-        layer4_ssm = load_ssm(layer4_file, batch_size);
-    } else {
-        printf("Initializing new models for training...\n");
-        layer1_ssm = init_ssm(input_dim, layer1_state_dim, layer1_dim, batch_size);
-        layer2_ssm = init_ssm(layer1_dim, layer2_state_dim, layer2_dim, batch_size);
-        layer3_ssm = init_ssm(layer2_dim, layer3_state_dim, layer3_dim, batch_size);
-        layer4_ssm = init_ssm(layer3_dim, layer4_state_dim, output_dim, batch_size);
-    }
-    
-    // Allocate memory for intermediate outputs
-    float *d_layer1_output, *d_layer2_output, *d_layer3_output;
-    CHECK_CUDA(cudaMalloc(&d_layer1_output, batch_size * layer1_dim * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_layer2_output, batch_size * layer2_dim * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_layer3_output, batch_size * layer3_dim * sizeof(float)));
-    
-    printf("Starting four-stage model training for %d epochs...\n", num_epochs);
-    printf("Using gradient accumulation with %d steps\n", grad_accum_steps);
-    printf("Learning rate: %.6f\n", learning_rate);
+    printf("Starting stacked model training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
@@ -219,60 +309,47 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
             forward_pass(layer1_ssm, d_current_X);
             
             // Copy output from layer 1 to input for layer 2
-            CHECK_CUDA(cudaMemcpy(d_layer1_output, layer1_ssm->d_predictions, 
-                               batch_size * layer1_dim * sizeof(float), 
+            CHECK_CUDA(cudaMemcpy(d_hidden_output1, layer1_ssm->d_predictions, 
+                               batch_size * hidden_dim1 * sizeof(float), 
                                cudaMemcpyDeviceToDevice));
             
             // Forward pass through layer 2
-            forward_pass(layer2_ssm, d_layer1_output);
+            forward_pass(layer2_ssm, d_hidden_output1);
             
             // Copy output from layer 2 to input for layer 3
-            CHECK_CUDA(cudaMemcpy(d_layer2_output, layer2_ssm->d_predictions, 
-                               batch_size * layer2_dim * sizeof(float), 
+            CHECK_CUDA(cudaMemcpy(d_hidden_output2, layer2_ssm->d_predictions, 
+                               batch_size * hidden_dim2 * sizeof(float), 
                                cudaMemcpyDeviceToDevice));
             
             // Forward pass through layer 3
-            forward_pass(layer3_ssm, d_layer2_output);
+            forward_pass(layer3_ssm, d_hidden_output2);
             
             // Copy output from layer 3 to input for layer 4
-            CHECK_CUDA(cudaMemcpy(d_layer3_output, layer3_ssm->d_predictions, 
-                               batch_size * layer3_dim * sizeof(float), 
+            CHECK_CUDA(cudaMemcpy(d_hidden_output3, layer3_ssm->d_predictions, 
+                               batch_size * hidden_dim3 * sizeof(float), 
                                cudaMemcpyDeviceToDevice));
             
             // Forward pass through layer 4
-            forward_pass(layer4_ssm, d_layer3_output);
+            forward_pass(layer4_ssm, d_hidden_output3);
             
             // Calculate loss
             float loss = calculate_loss(layer4_ssm, d_current_y);
             epoch_loss += loss;
             num_steps++;
             
-            // Backward pass through layer 4
-            backward_pass(layer4_ssm, d_layer3_output);
+            // Backward pass through all layers
+            zero_gradients(layer4_ssm);
+            backward_pass(layer4_ssm, d_hidden_output3);
             
-            // Backpropagate through layer 3
-            backward_between_models(layer3_ssm, layer4_ssm, d_layer2_output);
-            
-            // Backpropagate through layer 2
-            backward_between_models(layer2_ssm, layer3_ssm, d_layer1_output);
-            
-            // Backpropagate through layer 1
+            backward_between_models(layer3_ssm, layer4_ssm, d_hidden_output2);
+            backward_between_models(layer2_ssm, layer3_ssm, d_hidden_output1);
             backward_between_models(layer1_ssm, layer2_ssm, d_current_X);
             
-            // Update weights only after accumulating gradients for grad_accum_steps or at end of sequence
-            if ((step + 1) % grad_accum_steps == 0 || step == seq_length - 1) {
-                // Update weights using accumulated gradients
-                update_weights(layer1_ssm, learning_rate);
-                update_weights(layer2_ssm, learning_rate);
-                update_weights(layer3_ssm, learning_rate);
-                update_weights(layer4_ssm, learning_rate);
-                
-                // Zero gradients after update
-                zero_gradients(layer1_ssm);
-                zero_gradients(layer2_ssm);
-                zero_gradients(layer3_ssm);
-                zero_gradients(layer4_ssm);
-            }
+            // Update weights
+            update_weights(layer1_ssm, learning_rate);
+            update_weights(layer2_ssm, learning_rate);
+            update_weights(layer3_ssm, learning_rate);
+            update_weights(layer4_ssm, learning_rate);
         }
         
         // Print progress
@@ -280,92 +357,51 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
             printf("Epoch [%d/%d], Average Loss: %.8f\n", epoch + 1, num_epochs, epoch_loss / num_steps);
         }
     }
-    
-    // Generate timestamped filenames for output
-    char time_prefix[64];
-    time_t now = time(NULL);
-    strftime(time_prefix, sizeof(time_prefix), "%Y%m%d_%H%M%S", localtime(&now));
-    
-    char final_layer1_file[128];
-    char final_layer2_file[128];
-    char final_layer3_file[128];
-    char final_layer4_file[128];
 
-    sprintf(final_layer1_file, "%s_layer1_model.bin", time_prefix);
-    sprintf(final_layer2_file, "%s_layer2_model.bin", time_prefix);
-    sprintf(final_layer3_file, "%s_layer3_model.bin", time_prefix);
-    sprintf(final_layer4_file, "%s_layer4_model.bin", time_prefix);
-
-    save_ssm(layer1_ssm, final_layer1_file);
-    save_ssm(layer2_ssm, final_layer2_file);
-    save_ssm(layer3_ssm, final_layer3_file);
-    save_ssm(layer4_ssm, final_layer4_file);
-    
-    printf("Models saved to:\n");
-    printf("  %s\n", final_layer1_file);
-    printf("  %s\n", final_layer2_file);
-    printf("  %s\n", final_layer3_file);
-    printf("  %s\n", final_layer4_file);
+    save_ssm(layer1_ssm, model1_file);
+    save_ssm(layer2_ssm, model2_file);
+    save_ssm(layer3_ssm, model3_file);
+    save_ssm(layer4_ssm, model4_file);
     
     // Cleanup
     cudaFree(d_X);
     cudaFree(d_y);
-    cudaFree(d_layer1_output);
-    cudaFree(d_layer2_output);
-    cudaFree(d_layer3_output);
+    cudaFree(d_hidden_output1);
+    cudaFree(d_hidden_output2);
+    cudaFree(d_hidden_output3);
     free_ssm(layer1_ssm);
     free_ssm(layer2_ssm);
     free_ssm(layer3_ssm);
     free_ssm(layer4_ssm);
 }
 
-int main(int argc, char** argv) {
+int main() {
     srand(time(NULL) ^ getpid());
     
-    // Default filenames and parameters
-    char data_fname[128];
-    char layer1_fname[128], layer2_fname[128], layer3_fname[128], layer4_fname[128];
-    int num_episodes = 2000;
-    
-    // Generate timestamped filenames for models
-    char time_prefix[64];
+    // Generate timestamped filenames
+    char data_fname[64], model1_fname[64], model2_fname[64], model3_fname[64], model4_fname[64];
     time_t now = time(NULL);
-    strftime(time_prefix, sizeof(time_prefix), "%Y%m%d_%H%M%S", localtime(&now));
+    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
+    strftime(model1_fname, sizeof(model1_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
+    strftime(model2_fname, sizeof(model2_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
+    strftime(model3_fname, sizeof(model3_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
+    strftime(model4_fname, sizeof(model4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
     
-    sprintf(layer1_fname, "%s_layer1_model.bin", time_prefix);
-    sprintf(layer2_fname, "%s_layer2_model.bin", time_prefix);
-    sprintf(layer3_fname, "%s_layer3_model.bin", time_prefix);
-    sprintf(layer4_fname, "%s_layer4_model.bin", time_prefix);
+    // Number of episodes for training
+    int num_episodes = 10000;
     
-    // Check for command line arguments
-    if (argc >= 6) {
-        // First argument is data file, next four are model files
-        strcpy(data_fname, argv[1]);
-        strcpy(layer1_fname, argv[2]);
-        strcpy(layer2_fname, argv[3]);
-        strcpy(layer3_fname, argv[4]);
-        strcpy(layer4_fname, argv[5]);
-        
-        printf("Using data file: %s\n", data_fname);
-        printf("Continuing training with existing models:\n");
-        printf("Layer 1: %s\n", layer1_fname);
-        printf("Layer 2: %s\n", layer2_fname);
-        printf("Layer 3: %s\n", layer3_fname);
-        printf("Layer 4: %s\n", layer4_fname);
-    } else if (argc >= 2) {
-        // First argument is data file, use new model files
-        strcpy(data_fname, argv[1]);
-        printf("Using data file: %s\n", data_fname);
-        printf("Starting new training run with timestamped model files\n");
-    } else {
-        printf("Error: Supply data file.\n");
-        return 1;
-    }
+    printf("Phase 1: Generating training data...\n");
+    generate_data(data_fname, num_episodes);
     
-    printf("Training four-stage SSM model with raw pixel input...\n");
-    train_stacked_models(data_fname, layer1_fname, layer2_fname, layer3_fname, layer4_fname, num_episodes);
+    printf("Phase 2: Training stacked SSM models...\n");
+    train_stacked_models(data_fname, model1_fname, model2_fname, model3_fname, model4_fname, num_episodes);
     
     printf("Training complete!\n");
+    printf("Data saved to: %s\n", data_fname);
+    printf("Layer 1 model saved to: %s\n", model1_fname);
+    printf("Layer 2 model saved to: %s\n", model2_fname);
+    printf("Layer 3 model saved to: %s\n", model3_fname);
+    printf("Layer 4 model saved to: %s\n", model4_fname);
     
     return 0;
 }
