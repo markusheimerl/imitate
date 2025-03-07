@@ -3,29 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
-#include "sim/quad.h"
-#include "sim/raytracer/scene.h"
 #include "ssm/gpu/ssm.h"
-
-#define DT_PHYSICS  (1.0 / 1000.0)
-#define DT_CONTROL  (1.0 / 60.0)
-#define DT_RENDER   (1.0 / 24.0)
-#define SIM_TIME    10.0  // 10 seconds per episode
-
-// Helper function to get random value in range [min, max]
-double random_range(double min, double max) {
-    return min + (double)rand() / RAND_MAX * (max - min);
-}
-
-// Helper function to calculate the angle between two points in the XZ plane
-double calculate_yaw_to_target(double x1, double z1, double x2, double z2) {
-    // Calculate direction vector from (x1,z1) to (x2,z2)
-    double dx = x2 - x1;
-    double dz = z2 - z1;
-    
-    // Compute angle (atan2 returns angle in range [-π, π])
-    return atan2(dx, dz);
-}
 
 // Helper function to reorganize data for batch processing
 void reorganize_data(float* input, float* output, int num_episodes, int seq_length, int feature_dim) {
@@ -44,267 +22,8 @@ void reorganize_data(float* input, float* output, int num_episodes, int seq_leng
     }
 }
 
-// Function to convert raw FPV RGB image data to grayscale values
-void convert_to_grayscale(unsigned char* fpv_frame, float* grayscale_pixels, int width, int height, int channels) {
-    int total_pixels = width * height;
-    
-    if (fpv_frame == NULL) {
-        // If frame is NULL, set all pixels to black (0.0)
-        for (int i = 0; i < total_pixels; i++) {
-            grayscale_pixels[i] = 0.0f;
-        }
-        return;
-    }
-    
-    for (int i = 0; i < total_pixels; i++) {
-        // Get RGB values
-        float r = fpv_frame[i * channels] / 255.0f;
-        float g = fpv_frame[i * channels + 1] / 255.0f;
-        float b = fpv_frame[i * channels + 2] / 255.0f;
-        
-        // Convert to grayscale using standard luminance formula
-        grayscale_pixels[i] = 0.299f * r + 0.587f * g + 0.114f * b;
-    }
-}
-
-// Generate training data for the SSM
-void generate_data(const char* data_file, int num_episodes) {
-    FILE* f_data = fopen(data_file, "w");
-    if (!f_data) {
-        printf("Error opening file: %s\n", data_file);
-        return;
-    }
-    
-    // Define constants for the FPV rendering
-    const int fpv_width = 32;
-    const int fpv_height = 16;
-    const int fpv_channels = 3;
-    const int fpv_pixels = fpv_width * fpv_height;
-    
-    // Write header: Visual grayscale pixels, IMU measurements, motor commands
-    fprintf(f_data, "pix1");
-    for (int i = 2; i <= fpv_pixels; i++) {
-        fprintf(f_data, ",pix%d", i);
-    }
-    fprintf(f_data, ",gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
-    fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
-    
-    // Set up rendering scene for FPV
-    Scene fpv_scene = create_scene(fpv_width, fpv_height, (int)(SIM_TIME * 1000), 24, 1.0f);
-    
-    // Set up lighting for scene
-    set_scene_light(&fpv_scene,
-        (Vec3){1.0f, 1.0f, -1.0f},
-        (Vec3){1.4f, 1.4f, 1.4f}
-    );
-    
-    // Create meshes - no drone mesh for FPV
-    Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
-    Mesh treasure = create_mesh("sim/raytracer/treasure.obj", "sim/raytracer/treasure.webp");
-    
-    // Add meshes to scene (only ground and treasure)
-    add_mesh_to_scene(&fpv_scene, ground);
-    add_mesh_to_scene(&fpv_scene, treasure);
-    
-    // Buffer for grayscale pixels
-    float* grayscale_pixels = (float*)calloc(fpv_pixels, sizeof(float));
-    
-    for (int episode = 0; episode < num_episodes; episode++) {
-        // Initialize random drone position
-        double drone_x = random_range(-2.0, 2.0);
-        double drone_y = random_range(0.5, 2.0);
-        double drone_z = random_range(-2.0, 2.0);
-        
-        // Initialize random drone yaw
-        double drone_yaw = random_range(-M_PI, M_PI);
-        
-        // Calculate a random distance (between 1 and 4 units) in front of the drone
-        double distance = random_range(1.0, 4.0);
-        
-        // Add some random deviation to make it more natural (±30° from the center of view)
-        double angle_deviation = random_range(-M_PI/6, M_PI/6);  // ±30 degrees
-        double adjusted_yaw = drone_yaw + angle_deviation;
-        
-        // Calculate the target position based on the drone's position, adjusted yaw, and distance
-        double target_x = drone_x + sin(adjusted_yaw) * distance;
-        double target_z = drone_z + cos(adjusted_yaw) * distance;
-        
-        // Keep the target within boundaries
-        target_x = fmax(-2.0, fmin(2.0, target_x));
-        target_z = fmax(-2.0, fmin(2.0, target_z));
-        
-        // Set a random target height
-        double target_y = random_range(0.5, 2.5);
-        
-        // Calculate initial desired drone yaw to face the target
-        double desired_yaw = calculate_yaw_to_target(
-            drone_x,
-            drone_z,
-            target_x,
-            target_z
-        );
-        
-        // Create combined target array with the target position and desired drone yaw
-        double target[7] = {
-            target_x, target_y, target_z,    // Target position
-            0.0, 0.0, 0.0,                  // Zero velocity target
-            desired_yaw                     // Target yaw for the drone
-        };
-        
-        // Initialize quadcopter with random position and yaw
-        Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
-        
-        // Initialize state estimator
-        StateEstimator estimator = {
-            .angular_velocity = {0.0, 0.0, 0.0},
-            .gyro_bias = {0.0, 0.0, 0.0}
-        };
-        // Copy the quad's rotation matrix to the estimator
-        memcpy(estimator.R, quad.R_W_B, 9 * sizeof(double));
-        
-        // Set treasure position for target with fixed yaw (0.0)
-        set_mesh_position(&fpv_scene.meshes[1], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-        set_mesh_rotation(&fpv_scene.meshes[1], (Vec3){0.0f, 0.0f, 0.0f});  // Fixed yaw at 0.0
-        
-        double t_physics = 0.0;
-        double t_control = 0.0;
-        double t_render = 0.0;
-        
-        for (int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
-            if (t_physics >= DT_PHYSICS) {
-                update_quad(&quad, DT_PHYSICS);
-                t_physics = 0.0;
-            }
-            
-            // Render update
-            if (t_render >= DT_RENDER) {
-                // Update FPV camera to match drone's position and orientation
-                Vec3 pos = {
-                    (float)quad.linear_position_W[0],
-                    (float)quad.linear_position_W[1],
-                    (float)quad.linear_position_W[2]
-                };
-                
-                Vec3 forward = {
-                    (float)quad.R_W_B[2],  // Third column
-                    (float)quad.R_W_B[5],
-                    (float)quad.R_W_B[8]
-                };
-                
-                Vec3 up = {
-                    (float)quad.R_W_B[1],  // Second column
-                    (float)quad.R_W_B[4],
-                    (float)quad.R_W_B[7]
-                };
-                
-                // Set camera position slightly above the drone
-                Vec3 camera_offset = {
-                    up.x * 0.15f,
-                    up.y * 0.15f,
-                    up.z * 0.15f
-                };
-                
-                Vec3 fpv_pos = {
-                    pos.x + camera_offset.x,
-                    pos.y + camera_offset.y,
-                    pos.z + camera_offset.z
-                };
-                
-                // Calculate look-at point (position + forward)
-                Vec3 look_at = {
-                    pos.x + forward.x,  // Look at point is in front of drone's position
-                    pos.y + forward.y,
-                    pos.z + forward.z
-                };
-                
-                // Set FPV camera
-                set_scene_camera(&fpv_scene, fpv_pos, look_at, up, 70.0f);
-                
-                // Render scene
-                render_scene(&fpv_scene);
-                
-                // Advance to next frame
-                next_frame(&fpv_scene);
-                
-                t_render = 0.0;
-            }
-            
-            if (t_control >= DT_CONTROL) {
-                // Check if we have a valid frame index
-                unsigned char* frame_data = NULL;
-                if (fpv_scene.current_frame > 0 && fpv_scene.current_frame <= fpv_scene.frame_count) {
-                    frame_data = fpv_scene.frames[fpv_scene.current_frame - 1];
-                }
-                
-                // Convert RGB to grayscale (handles NULL gracefully)
-                convert_to_grayscale(frame_data, grayscale_pixels, fpv_width, fpv_height, fpv_channels);
-                
-                // Update state estimator
-                update_estimator(
-                    quad.gyro_measurement,
-                    quad.accel_measurement,
-                    DT_CONTROL,
-                    &estimator
-                );
-                
-                // Get motor commands from geometric controller
-                double new_omega[4];
-                control_quad_commands(
-                    quad.linear_position_W,
-                    quad.linear_velocity_W,
-                    estimator.R,
-                    estimator.angular_velocity,
-                    quad.inertia,
-                    target,
-                    new_omega
-                );
-                memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
-                
-                // Write training sample: Grayscale pixels, IMU, and motor commands
-                
-                // First write grayscale pixels
-                fprintf(f_data, "\n%.6f", grayscale_pixels[0]);
-                for (int j = 1; j < fpv_pixels; j++) {
-                    fprintf(f_data, ",%.6f", grayscale_pixels[j]);
-                }
-                
-                fprintf(f_data, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
-                       quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
-                       quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
-                       
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
-                       quad.omega_next[0],
-                       quad.omega_next[1],
-                       quad.omega_next[2],
-                       quad.omega_next[3]);
-                       
-                t_control = 0.0;
-            }
-            
-            t_physics += DT_PHYSICS;
-            t_control += DT_PHYSICS;
-            t_render += DT_PHYSICS;
-        }
-        
-        if ((episode + 1) % 100 == 0) {
-            printf("Generated %d episodes\n", episode + 1);
-        }
-    }
-    
-    fclose(f_data);
-    free(grayscale_pixels);
-    
-    // Clean up raytracer resources
-    destroy_mesh(&ground);
-    destroy_mesh(&treasure);
-    destroy_scene(&fpv_scene);
-}
-
 // Custom function to propagate gradients between models
 void backward_between_models(SSM* first_model, SSM* second_model, float* d_first_model_input) {
-    // Zero gradients for first model
-    zero_gradients(first_model);
-    
     // The error to propagate back is already in second_model->d_error
     // Need to convert it to gradient w.r.t first model output
     
@@ -441,10 +160,33 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     free(h_y_episodes);
     
     // Initialize the four SSM models
-    SSM* layer1_ssm = init_ssm(input_dim, layer1_state_dim, layer1_dim, batch_size);
-    SSM* layer2_ssm = init_ssm(layer1_dim, layer2_state_dim, layer2_dim, batch_size);
-    SSM* layer3_ssm = init_ssm(layer2_dim, layer3_state_dim, layer3_dim, batch_size);
-    SSM* layer4_ssm = init_ssm(layer3_dim, layer4_state_dim, output_dim, batch_size);
+    SSM* layer1_ssm = NULL;
+    SSM* layer2_ssm = NULL;
+    SSM* layer3_ssm = NULL;
+    SSM* layer4_ssm = NULL;
+    
+    // Training parameters
+    const int num_epochs = 1000;
+    const float learning_rate = 0.0001f;
+    const int grad_accum_steps = 8;  // Number of steps to accumulate gradients
+    
+    // Check if we're continuing training from existing models
+    if (access(layer1_file, F_OK) != -1 && 
+        access(layer2_file, F_OK) != -1 && 
+        access(layer3_file, F_OK) != -1 && 
+        access(layer4_file, F_OK) != -1) {
+        printf("Loading existing models for continued training...\n");
+        layer1_ssm = load_ssm(layer1_file, batch_size);
+        layer2_ssm = load_ssm(layer2_file, batch_size);
+        layer3_ssm = load_ssm(layer3_file, batch_size);
+        layer4_ssm = load_ssm(layer4_file, batch_size);
+    } else {
+        printf("Initializing new models for training...\n");
+        layer1_ssm = init_ssm(input_dim, layer1_state_dim, layer1_dim, batch_size);
+        layer2_ssm = init_ssm(layer1_dim, layer2_state_dim, layer2_dim, batch_size);
+        layer3_ssm = init_ssm(layer2_dim, layer3_state_dim, layer3_dim, batch_size);
+        layer4_ssm = init_ssm(layer3_dim, layer4_state_dim, output_dim, batch_size);
+    }
     
     // Allocate memory for intermediate outputs
     float *d_layer1_output, *d_layer2_output, *d_layer3_output;
@@ -452,11 +194,9 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     CHECK_CUDA(cudaMalloc(&d_layer2_output, batch_size * layer2_dim * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&d_layer3_output, batch_size * layer3_dim * sizeof(float)));
     
-    // Training parameters
-    const int num_epochs = 2000;
-    const float learning_rate = 0.0001f;
-    
     printf("Starting four-stage model training for %d epochs...\n", num_epochs);
+    printf("Using gradient accumulation with %d steps\n", grad_accum_steps);
+    printf("Learning rate: %.6f\n", learning_rate);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
@@ -508,7 +248,6 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
             num_steps++;
             
             // Backward pass through layer 4
-            zero_gradients(layer4_ssm);
             backward_pass(layer4_ssm, d_layer3_output);
             
             // Backpropagate through layer 3
@@ -520,11 +259,20 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
             // Backpropagate through layer 1
             backward_between_models(layer1_ssm, layer2_ssm, d_current_X);
             
-            // Update weights
-            update_weights(layer1_ssm, learning_rate);
-            update_weights(layer2_ssm, learning_rate);
-            update_weights(layer3_ssm, learning_rate);
-            update_weights(layer4_ssm, learning_rate);
+            // Update weights only after accumulating gradients for grad_accum_steps or at end of sequence
+            if ((step + 1) % grad_accum_steps == 0 || step == seq_length - 1) {
+                // Update weights using accumulated gradients
+                update_weights(layer1_ssm, learning_rate);
+                update_weights(layer2_ssm, learning_rate);
+                update_weights(layer3_ssm, learning_rate);
+                update_weights(layer4_ssm, learning_rate);
+                
+                // Zero gradients after update
+                zero_gradients(layer1_ssm);
+                zero_gradients(layer2_ssm);
+                zero_gradients(layer3_ssm);
+                zero_gradients(layer4_ssm);
+            }
         }
         
         // Print progress
@@ -533,10 +281,31 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
         }
     }
     
-    save_ssm(layer1_ssm, layer1_file);
-    save_ssm(layer2_ssm, layer2_file);
-    save_ssm(layer3_ssm, layer3_file);
-    save_ssm(layer4_ssm, layer4_file);
+    // Generate timestamped filenames for output
+    char time_prefix[64];
+    time_t now = time(NULL);
+    strftime(time_prefix, sizeof(time_prefix), "%Y%m%d_%H%M%S", localtime(&now));
+    
+    char final_layer1_file[128];
+    char final_layer2_file[128];
+    char final_layer3_file[128];
+    char final_layer4_file[128];
+
+    sprintf(final_layer1_file, "%s_layer1_model.bin", time_prefix);
+    sprintf(final_layer2_file, "%s_layer2_model.bin", time_prefix);
+    sprintf(final_layer3_file, "%s_layer3_model.bin", time_prefix);
+    sprintf(final_layer4_file, "%s_layer4_model.bin", time_prefix);
+
+    save_ssm(layer1_ssm, final_layer1_file);
+    save_ssm(layer2_ssm, final_layer2_file);
+    save_ssm(layer3_ssm, final_layer3_file);
+    save_ssm(layer4_ssm, final_layer4_file);
+    
+    printf("Models saved to:\n");
+    printf("  %s\n", final_layer1_file);
+    printf("  %s\n", final_layer2_file);
+    printf("  %s\n", final_layer3_file);
+    printf("  %s\n", final_layer4_file);
     
     // Cleanup
     cudaFree(d_X);
@@ -550,33 +319,53 @@ void train_stacked_models(const char* data_file, const char* layer1_file,
     free_ssm(layer4_ssm);
 }
 
-int main() {
+int main(int argc, char** argv) {
     srand(time(NULL) ^ getpid());
     
-    // Generate timestamped filenames
-    char data_fname[64], layer1_fname[64], layer2_fname[64], layer3_fname[64], layer4_fname[64];
-    time_t now = time(NULL);
-    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
-    strftime(layer1_fname, sizeof(layer1_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
-    strftime(layer2_fname, sizeof(layer2_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
-    strftime(layer3_fname, sizeof(layer3_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
-    strftime(layer4_fname, sizeof(layer4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
-    
-    // Number of episodes for training
+    // Default filenames and parameters
+    char data_fname[128];
+    char layer1_fname[128], layer2_fname[128], layer3_fname[128], layer4_fname[128];
     int num_episodes = 2000;
     
-    printf("Phase 1: Generating training data with FPV rendering...\n");
-    generate_data(data_fname, num_episodes);
+    // Generate timestamped filenames for models
+    char time_prefix[64];
+    time_t now = time(NULL);
+    strftime(time_prefix, sizeof(time_prefix), "%Y%m%d_%H%M%S", localtime(&now));
     
-    printf("Phase 2: Training four-stage SSM model with raw pixel input...\n");
+    sprintf(layer1_fname, "%s_layer1_model.bin", time_prefix);
+    sprintf(layer2_fname, "%s_layer2_model.bin", time_prefix);
+    sprintf(layer3_fname, "%s_layer3_model.bin", time_prefix);
+    sprintf(layer4_fname, "%s_layer4_model.bin", time_prefix);
+    
+    // Check for command line arguments
+    if (argc >= 6) {
+        // First argument is data file, next four are model files
+        strcpy(data_fname, argv[1]);
+        strcpy(layer1_fname, argv[2]);
+        strcpy(layer2_fname, argv[3]);
+        strcpy(layer3_fname, argv[4]);
+        strcpy(layer4_fname, argv[5]);
+        
+        printf("Using data file: %s\n", data_fname);
+        printf("Continuing training with existing models:\n");
+        printf("Layer 1: %s\n", layer1_fname);
+        printf("Layer 2: %s\n", layer2_fname);
+        printf("Layer 3: %s\n", layer3_fname);
+        printf("Layer 4: %s\n", layer4_fname);
+    } else if (argc >= 2) {
+        // First argument is data file, use new model files
+        strcpy(data_fname, argv[1]);
+        printf("Using data file: %s\n", data_fname);
+        printf("Starting new training run with timestamped model files\n");
+    } else {
+        printf("Error: Supply data file.\n");
+        return 1;
+    }
+    
+    printf("Training four-stage SSM model with raw pixel input...\n");
     train_stacked_models(data_fname, layer1_fname, layer2_fname, layer3_fname, layer4_fname, num_episodes);
     
     printf("Training complete!\n");
-    printf("Data saved to: %s\n", data_fname);
-    printf("Layer 1 model saved to: %s\n", layer1_fname);
-    printf("Layer 2 model saved to: %s\n", layer2_fname);
-    printf("Layer 3 model saved to: %s\n", layer3_fname);
-    printf("Layer 4 model saved to: %s\n", layer4_fname);
     
     return 0;
 }
