@@ -28,51 +28,33 @@ int main(int argc, char* argv[]) {
     SSM* layer3_ssm = load_ssm(argv[3], 1);
     SSM* layer4_ssm = load_ssm(argv[4], 1);
 
-    // Print network dimensions
-    printf("Loaded Layer 1 Model dimensions:\n");
-    printf("Input dim: %d\n", layer1_ssm->input_dim);
-    printf("State dim: %d\n", layer1_ssm->state_dim);
-    printf("Output dim: %d\n", layer1_ssm->output_dim);
-    printf("Batch size: %d\n", layer1_ssm->batch_size);
-    
-    printf("\nLoaded Layer 2 Model dimensions:\n");
-    printf("Input dim: %d\n", layer2_ssm->input_dim);
-    printf("State dim: %d\n", layer2_ssm->state_dim);
-    printf("Output dim: %d\n", layer2_ssm->output_dim);
-    printf("Batch size: %d\n", layer2_ssm->batch_size);
-    
-    printf("\nLoaded Layer 3 Model dimensions:\n");
-    printf("Input dim: %d\n", layer3_ssm->input_dim);
-    printf("State dim: %d\n", layer3_ssm->state_dim);
-    printf("Output dim: %d\n", layer3_ssm->output_dim);
-    printf("Batch size: %d\n", layer3_ssm->batch_size);
-    
-    printf("\nLoaded Layer 4 Model dimensions:\n");
-    printf("Input dim: %d\n", layer4_ssm->input_dim);
-    printf("State dim: %d\n", layer4_ssm->state_dim);
-    printf("Output dim: %d\n", layer4_ssm->output_dim);
-    printf("Batch size: %d\n", layer4_ssm->batch_size);
-
+    // Initialize random seed
     srand(time(NULL));
     
-    // Initialize quadcopter with random position
-    Quad quad = create_quad(
-        random_range(-2.0, 2.0),
-        random_range(0.0, 2.0),    // Always at or above ground
-        random_range(-2.0, 2.0),
-        0.0
-    );
-
+    // Initialize drone with random position and orientation
+    double drone_x = random_range(-2.0, 2.0);
+    double drone_y = random_range(0.5, 2.0);
+    double drone_z = random_range(-2.0, 2.0);
+    double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
+    
+    // Create quad with random position and orientation
+    Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
+    
     // Initialize random target position and yaw
+    double target_x = random_range(-2.0, 2.0);
+    double target_y = random_range(0.5, 2.5);
+    double target_z = random_range(-2.0, 2.0);
+    double target_yaw = 0.0; // random_range(-M_PI, M_PI);
+    
+    // Create target array (position, velocity, and desired yaw)
     double target[7] = {
-        random_range(-2.0, 2.0),    // x
-        random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0),    // z
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(-M_PI, M_PI)   // yaw
+        target_x, target_y, target_z,    // Target position
+        0.0, 0.0, 0.0,                   // Zero velocity target
+        target_yaw                       // Random target yaw
     };
     
-    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
+    printf("Drone starts at (%.2f, %.2f, %.2f), target at (%.2f, %.2f, %.2f) with yaw %.2f\n", 
+           drone_x, drone_y, drone_z, target_x, target_y, target_z, target_yaw);
     
     // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -89,6 +71,14 @@ int main(int argc, char* argv[]) {
         (Vec3){1.4f, 1.4f, 1.4f}
     );
     
+    // Set up camera
+    set_scene_camera(&scene,
+        (Vec3){-3.0f, 3.0f, -3.0f},
+        (Vec3){0.0f, 0.0f, 0.0f},
+        (Vec3){0.0f, 1.0f, 0.0f},
+        60.0f
+    );
+    
     // Create meshes
     Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
@@ -103,19 +93,8 @@ int main(int argc, char* argv[]) {
     add_mesh_to_scene(&fpv_scene, treasure);
 
     // Set treasure position (target) for both scenes
-    set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
-    
-    set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
-    set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
-
-    // Set up chase camera with 60 degree FOV
-    set_scene_camera(&scene,
-        (Vec3){-3.0f, 3.0f, -3.0f},
-        (Vec3){0.0f, 0.0f, 0.0f},
-        (Vec3){0.0f, 1.0f, 0.0f},
-        60.0f
-    );
+    set_mesh_position(&scene.meshes[2], (Vec3){(float)target_x, (float)target_y, (float)target_z});
+    set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target_x, (float)target_y, (float)target_z});
 
     // Initialize timers
     double t_physics = 0.0;
@@ -187,25 +166,33 @@ int main(int argc, char* argv[]) {
         
         // Render update
         if (t_render >= DT_RENDER) {
-            // Get drone position and orientation for visualization
-            Vec3 pos = {
-                (float)quad.linear_position_W[0],
-                (float)quad.linear_position_W[1],
-                (float)quad.linear_position_W[2]
-            };
+            // Update drone position and rotation in the scene
+            set_mesh_position(&scene.meshes[0], 
+                (Vec3){(float)quad.linear_position_W[0], 
+                       (float)quad.linear_position_W[1], 
+                       (float)quad.linear_position_W[2]});
             
-            Vec3 rot = {
-                atan2f(quad.R_W_B[7], quad.R_W_B[8]),
-                asinf(-quad.R_W_B[6]),
-                atan2f(quad.R_W_B[3], quad.R_W_B[0])
-            };
-
-            // Update drone position in both scenes
-            set_mesh_position(&scene.meshes[0], pos);
-            set_mesh_rotation(&scene.meshes[0], rot);
+            set_mesh_rotation(&scene.meshes[0], 
+                (Vec3){
+                    atan2f(quad.R_W_B[7], quad.R_W_B[8]),
+                    asinf(-quad.R_W_B[6]),
+                    atan2f(quad.R_W_B[3], quad.R_W_B[0])
+                }
+            );
             
-            set_mesh_position(&fpv_scene.meshes[0], pos);
-            set_mesh_rotation(&fpv_scene.meshes[0], rot);
+            // Update FPV scene
+            set_mesh_position(&fpv_scene.meshes[0], 
+                (Vec3){(float)quad.linear_position_W[0], 
+                       (float)quad.linear_position_W[1], 
+                       (float)quad.linear_position_W[2]});
+            
+            set_mesh_rotation(&fpv_scene.meshes[0], 
+                (Vec3){
+                    atan2f(quad.R_W_B[7], quad.R_W_B[8]),
+                    asinf(-quad.R_W_B[6]),
+                    atan2f(quad.R_W_B[3], quad.R_W_B[0])
+                }
+            );
             
             // Update FPV camera to match drone's position and orientation
             Vec3 forward = {
@@ -228,26 +215,25 @@ int main(int argc, char* argv[]) {
             };
             
             Vec3 fpv_pos = {
-                pos.x + camera_offset.x,
-                pos.y + camera_offset.y,
-                pos.z + camera_offset.z
+                (float)quad.linear_position_W[0] + camera_offset.x,
+                (float)quad.linear_position_W[1] + camera_offset.y,
+                (float)quad.linear_position_W[2] + camera_offset.z
             };
             
             // Calculate look-at point (position + forward)
             Vec3 look_at = {
-                pos.x + forward.x,  // Look at point is in front of drone's position
-                pos.y + forward.y,
-                pos.z + forward.z
+                fpv_pos.x + forward.x,  // Look at point is in front of drone's position
+                fpv_pos.y + forward.y,
+                fpv_pos.z + forward.z
             };
             
             // Set FPV camera
             set_scene_camera(&fpv_scene, fpv_pos, look_at, up, 70.0f);
             
-            // Render both scenes
+            // Render scenes
             render_scene(&scene);
             render_scene(&fpv_scene);
             
-            // Advance to next frame in both scenes
             next_frame(&scene);
             next_frame(&fpv_scene);
             
@@ -262,14 +248,15 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
+    // Display final results
     printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw %.2f or ±%.2f\n", 
            quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
            asinf(-quad.R_W_B[6]), M_PI - fabs(asinf(-quad.R_W_B[6])));
     
     // Calculate distance to target
-    double dist = sqrt(pow(quad.linear_position_W[0] - target[0], 2) + 
-                     pow(quad.linear_position_W[1] - target[1], 2) + 
-                     pow(quad.linear_position_W[2] - target[2], 2));
+    double dist = sqrt(pow(quad.linear_position_W[0] - target_x, 2) + 
+                     pow(quad.linear_position_W[1] - target_y, 2) + 
+                     pow(quad.linear_position_W[2] - target_z, 2));
     printf("Distance to target: %.2f meters\n", dist);
     
     // Save animations

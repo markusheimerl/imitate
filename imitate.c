@@ -47,29 +47,34 @@ void generate_data(const char* data_file, int num_episodes) {
     fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
     
     for (int episode = 0; episode < num_episodes; episode++) {
-        // Random initial state
-        Quad quad = create_quad(
-            random_range(-2.0, 2.0),
-            random_range(0.0, 2.0),    // Always at or above ground
-            random_range(-2.0, 2.0),
-            0.0
-        );
+        // Initialize drone with random position and orientation
+        double drone_x = random_range(-2.0, 2.0);
+        double drone_y = random_range(0.5, 2.0);
+        double drone_z = random_range(-2.0, 2.0);
+        double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
+        
+        // Create quad with random position and orientation
+        Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
+        
+        // Place target completely randomly
+        double target_x = random_range(-2.0, 2.0);
+        double target_y = random_range(0.5, 2.5);
+        double target_z = random_range(-2.0, 2.0);
+        double target_yaw = 0.0; // random_range(-M_PI, M_PI);
+        
+        // Create target array (position, velocity, and desired yaw)
+        double target[7] = {
+            target_x, target_y, target_z,    // Target position
+            0.0, 0.0, 0.0,                   // Zero velocity target
+            target_yaw                       // Random target yaw
+        };
 
         // Initialize state estimator
         StateEstimator estimator = {
-            .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
             .angular_velocity = {0.0, 0.0, 0.0},
             .gyro_bias = {0.0, 0.0, 0.0}
         };
-        
-        // Random target
-        double target[7] = {
-            random_range(-2.0, 2.0),    // x
-            random_range(1.0, 3.0),     // y: Always above ground
-            random_range(-2.0, 2.0),    // z
-            0.0, 0.0, 0.0,              // vx, vy, vz
-            random_range(-M_PI, M_PI)   // yaw
-        };
+        memcpy(estimator.R, quad.R_W_B, 9 * sizeof(double));
         
         double t_physics = 0.0;
         double t_control = 0.0;
@@ -283,7 +288,7 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
     CHECK_CUDA(cudaMalloc(&d_hidden_output3, batch_size * hidden_dim3 * sizeof(float)));
     
     // Training parameters
-    const int num_epochs = 1000;
+    const int num_epochs = 200;
     const float learning_rate = 0.0001f;
     
     printf("Starting stacked model training for %d epochs...\n", num_epochs);
