@@ -68,13 +68,6 @@ void generate_data(const char* data_file, int num_episodes) {
             0.0, 0.0, 0.0,                   // Zero velocity target
             target_yaw                       // Random target yaw
         };
-
-        // Initialize state estimator
-        StateEstimator estimator = {
-            .angular_velocity = {0.0, 0.0, 0.0},
-            .gyro_bias = {0.0, 0.0, 0.0}
-        };
-        memcpy(estimator.R, quad.R_W_B, 9 * sizeof(double));
         
         double t_physics = 0.0;
         double t_control = 0.0;
@@ -86,21 +79,13 @@ void generate_data(const char* data_file, int num_episodes) {
             }
             
             if (t_control >= DT_CONTROL) {
-                // Update state estimator
-                update_estimator(
-                    quad.gyro_measurement,
-                    quad.accel_measurement,
-                    DT_CONTROL,
-                    &estimator
-                );
-                
                 // Get motor commands from geometric controller
                 double new_omega[4];
                 control_quad_commands(
                     quad.linear_position_W,
                     quad.linear_velocity_W,
-                    estimator.R,
-                    estimator.angular_velocity,
+                    quad.R_W_B,
+                    quad.angular_velocity_B,
                     quad.inertia,
                     target,
                     new_omega
