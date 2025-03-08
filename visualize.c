@@ -5,7 +5,7 @@
 #include <math.h>
 #include "sim/quad.h"
 #include "sim/raytracer/scene.h"
-#include "ssm/gpu/ssm.h"
+#include "ssm/ssm.h"  // Using CPU version
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
@@ -104,24 +104,19 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Allocate and prepare host and device memory for inputs and outputs
+    // Allocate input buffer for layer1 model
+    float* layer1_input = (float*)calloc(layer1_ssm->batch_size * layer1_ssm->input_dim, sizeof(float));
     
-    // Host buffers for inputs and intermediate results
-    float* h_layer1_input = (float*)calloc(layer1_ssm->batch_size * layer1_ssm->input_dim, sizeof(float));
-    float* h_layer4_output = (float*)calloc(layer4_ssm->batch_size * layer4_ssm->output_dim, sizeof(float));
-
-    // GPU buffers for inputs and outputs
-    float *d_layer1_input, *d_layer2_input, *d_layer3_input, *d_layer4_input;
-    CHECK_CUDA(cudaMalloc(&d_layer1_input, layer1_ssm->batch_size * layer1_ssm->input_dim * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_layer2_input, layer2_ssm->batch_size * layer2_ssm->input_dim * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_layer3_input, layer3_ssm->batch_size * layer3_ssm->input_dim * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_layer4_input, layer4_ssm->batch_size * layer4_ssm->input_dim * sizeof(float)));
+    // Allocate intermediate buffers for connecting layers
+    float* layer2_input = (float*)calloc(layer2_ssm->batch_size * layer2_ssm->input_dim, sizeof(float));
+    float* layer3_input = (float*)calloc(layer3_ssm->batch_size * layer3_ssm->input_dim, sizeof(float));
+    float* layer4_input = (float*)calloc(layer4_ssm->batch_size * layer4_ssm->input_dim, sizeof(float));
     
     // Reset internal states of all models
-    CHECK_CUDA(cudaMemset(layer1_ssm->d_state, 0, layer1_ssm->batch_size * layer1_ssm->state_dim * sizeof(float)));
-    CHECK_CUDA(cudaMemset(layer2_ssm->d_state, 0, layer2_ssm->batch_size * layer2_ssm->state_dim * sizeof(float)));
-    CHECK_CUDA(cudaMemset(layer3_ssm->d_state, 0, layer3_ssm->batch_size * layer3_ssm->state_dim * sizeof(float)));
-    CHECK_CUDA(cudaMemset(layer4_ssm->d_state, 0, layer4_ssm->batch_size * layer4_ssm->state_dim * sizeof(float)));
+    memset(layer1_ssm->state, 0, layer1_ssm->batch_size * layer1_ssm->state_dim * sizeof(float));
+    memset(layer2_ssm->state, 0, layer2_ssm->batch_size * layer2_ssm->state_dim * sizeof(float));
+    memset(layer3_ssm->state, 0, layer3_ssm->batch_size * layer3_ssm->state_dim * sizeof(float));
+    memset(layer4_ssm->state, 0, layer4_ssm->batch_size * layer4_ssm->state_dim * sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -137,58 +132,36 @@ int main(int argc, char* argv[]) {
             int idx = 0;
             
             // IMU measurements (9)
-            for(int i = 0; i < 3; i++) h_layer1_input[idx++] = (float)quad.gyro_measurement[i];
-            for(int i = 0; i < 3; i++) h_layer1_input[idx++] = (float)quad.accel_measurement[i];
-            for(int i = 0; i < 3; i++) h_layer1_input[idx++] = (float)quad.mag_measurement[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.gyro_measurement[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.accel_measurement[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.mag_measurement[i];
             
             // Position and velocity (6)
-            for(int i = 0; i < 3; i++) h_layer1_input[idx++] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) h_layer1_input[idx++] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_velocity_W[i];
             
             // Target position and yaw (4)
-            for(int i = 0; i < 3; i++) h_layer1_input[idx++] = (float)target[i];
-            h_layer1_input[idx++] = (float)target[6];
-            
-            // Copy input data to GPU
-            CHECK_CUDA(cudaMemcpy(d_layer1_input, h_layer1_input, 
-                                 layer1_ssm->batch_size * layer1_ssm->input_dim * sizeof(float), 
-                                 cudaMemcpyHostToDevice));
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)target[i];
+            layer1_input[idx++] = (float)target[6];
             
             // Forward pass through all models
-            forward_pass(layer1_ssm, d_layer1_input);
+            forward_pass(layer1_ssm, layer1_input);
             
-            // Copy output from layer 1 to input for layer 2
-            CHECK_CUDA(cudaMemcpy(d_layer2_input, layer1_ssm->d_predictions, 
-                                 layer1_ssm->batch_size * layer1_ssm->output_dim * sizeof(float), 
-                                 cudaMemcpyDeviceToDevice));
+            // Copy output of layer1 as input to layer2
+            memcpy(layer2_input, layer1_ssm->predictions, layer1_ssm->output_dim * sizeof(float));
+            forward_pass(layer2_ssm, layer2_input);
             
-            // Forward pass through layer 2
-            forward_pass(layer2_ssm, d_layer2_input);
+            // Copy output of layer2 as input to layer3
+            memcpy(layer3_input, layer2_ssm->predictions, layer2_ssm->output_dim * sizeof(float));
+            forward_pass(layer3_ssm, layer3_input);
             
-            // Copy output from layer 2 to input for layer 3
-            CHECK_CUDA(cudaMemcpy(d_layer3_input, layer2_ssm->d_predictions, 
-                                 layer2_ssm->batch_size * layer2_ssm->output_dim * sizeof(float), 
-                                 cudaMemcpyDeviceToDevice));
-            
-            // Forward pass through layer 3
-            forward_pass(layer3_ssm, d_layer3_input);
-            
-            // Copy output from layer 3 to input for layer 4
-            CHECK_CUDA(cudaMemcpy(d_layer4_input, layer3_ssm->d_predictions, 
-                                 layer3_ssm->batch_size * layer3_ssm->output_dim * sizeof(float), 
-                                 cudaMemcpyDeviceToDevice));
-            
-            // Forward pass through layer 4
-            forward_pass(layer4_ssm, d_layer4_input);
-            
-            // Copy final predictions back to host
-            CHECK_CUDA(cudaMemcpy(h_layer4_output, layer4_ssm->d_predictions, 
-                                 layer4_ssm->batch_size * layer4_ssm->output_dim * sizeof(float), 
-                                 cudaMemcpyDeviceToHost));
+            // Copy output of layer3 as input to layer4
+            memcpy(layer4_input, layer3_ssm->predictions, layer3_ssm->output_dim * sizeof(float));
+            forward_pass(layer4_ssm, layer4_input);
             
             // Apply predicted motor commands from layer4
             for (int i = 0; i < 4; i++) {
-                quad.omega_next[i] = (double)h_layer4_output[i];
+                quad.omega_next[i] = (double)layer4_ssm->predictions[i];
             }
             
             t_control = 0.0;
@@ -304,13 +277,10 @@ int main(int argc, char* argv[]) {
     printf("First-person view saved to: %s\n", fpv_filename);
 
     // Cleanup
-    free(h_layer1_input);
-    free(h_layer4_output);
-    cudaFree(d_layer1_input);
-    cudaFree(d_layer2_input);
-    cudaFree(d_layer3_input);
-    cudaFree(d_layer4_input);
-    
+    free(layer1_input);
+    free(layer2_input);
+    free(layer3_input);
+    free(layer4_input);
     destroy_mesh(&drone);
     destroy_mesh(&ground);
     destroy_mesh(&treasure);

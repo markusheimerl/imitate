@@ -28,7 +28,7 @@ void reorganize_data(float* input, float* output, int num_episodes, int seq_leng
 // Helper function for cosine learning rate schedule with a final constant period
 float cosine_learning_rate(float initial_lr, float min_lr, int current_epoch, int total_epochs) {
     // 80% cosine decay, 20% constant minimum rate
-    int cosine_epochs = 0.9 * total_epochs;
+    int cosine_epochs = 0.8 * total_epochs;
     
     if (current_epoch >= cosine_epochs) {
         // In the constant period
@@ -73,10 +73,8 @@ void backward_between_models(SSM* prev_model, SSM* next_model, float* d_prev_mod
 }
 
 // Train a stacked model of four SSMs
-void train_model(const char* data_file, const char* model1_out_file, const char* model2_out_file, 
-                 const char* model3_out_file, const char* model4_out_file, int num_episodes,
-                 const char* model1_in_file, const char* model2_in_file, 
-                 const char* model3_in_file, const char* model4_in_file) {
+void train_model(const char* data_file, const char* model1_file, const char* model2_file, 
+                         const char* model3_file, const char* model4_file, int num_episodes) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -179,25 +177,10 @@ void train_model(const char* data_file, const char* model1_out_file, const char*
     free(h_y_episodes);
     
     // Initialize the SSM models
-    SSM* layer1_ssm;
-    SSM* layer2_ssm;
-    SSM* layer3_ssm;
-    SSM* layer4_ssm;
-    
-    // Check if we're continuing training from existing models
-    if (model1_in_file && model2_in_file && model3_in_file && model4_in_file) {
-        printf("Continuing training from existing models...\n");
-        layer1_ssm = load_ssm(model1_in_file, batch_size);
-        layer2_ssm = load_ssm(model2_in_file, batch_size);
-        layer3_ssm = load_ssm(model3_in_file, batch_size);
-        layer4_ssm = load_ssm(model4_in_file, batch_size);
-    } else {
-        printf("Starting training from scratch...\n");
-        layer1_ssm = init_ssm(input_dim, state_dim1, hidden_dim1, batch_size);
-        layer2_ssm = init_ssm(hidden_dim1, state_dim2, hidden_dim2, batch_size);
-        layer3_ssm = init_ssm(hidden_dim2, state_dim3, hidden_dim3, batch_size);
-        layer4_ssm = init_ssm(hidden_dim3, state_dim4, output_dim, batch_size);
-    }
+    SSM* layer1_ssm = init_ssm(input_dim, state_dim1, hidden_dim1, batch_size);
+    SSM* layer2_ssm = init_ssm(hidden_dim1, state_dim2, hidden_dim2, batch_size);
+    SSM* layer3_ssm = init_ssm(hidden_dim2, state_dim3, hidden_dim3, batch_size);
+    SSM* layer4_ssm = init_ssm(hidden_dim3, state_dim4, output_dim, batch_size);
     
     // Allocate memory for intermediate outputs
     float *d_hidden_output1, *d_hidden_output2, *d_hidden_output3;
@@ -214,7 +197,7 @@ void train_model(const char* data_file, const char* model1_out_file, const char*
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        // Calculate learning rate for current epoch
+        // Calculate learning rate for this epoch with 80/20 schedule
         float learning_rate = cosine_learning_rate(initial_lr, min_lr, epoch, num_epochs);
         
         float epoch_loss = 0.0f;
@@ -286,10 +269,10 @@ void train_model(const char* data_file, const char* model1_out_file, const char*
         }
     }
 
-    save_ssm(layer1_ssm, model1_out_file);
-    save_ssm(layer2_ssm, model2_out_file);
-    save_ssm(layer3_ssm, model3_out_file);
-    save_ssm(layer4_ssm, model4_out_file);
+    save_ssm(layer1_ssm, model1_file);
+    save_ssm(layer2_ssm, model2_file);
+    save_ssm(layer3_ssm, model3_file);
+    save_ssm(layer4_ssm, model4_file);
     
     // Cleanup
     cudaFree(d_X);
@@ -304,43 +287,36 @@ void train_model(const char* data_file, const char* model1_out_file, const char*
 }
 
 int main(int argc, char* argv[]) {
-    // Check for minimum required arguments
     if (argc < 3) {
-        printf("Usage: %s <data_file> <num_episodes> [model1_in model2_in model3_in model4_in]\n", argv[0]);
+        printf("Usage: %s <data_file> <num_episodes>\n", argv[0]);
         return 1;
     }
     
-    // Generate timestamped filenames for output models
-    char model1_out_fname[64], model2_out_fname[64], model3_out_fname[64], model4_out_fname[64];
+    // Generate timestamped filenames for models
+    char model1_fname[64], model2_fname[64], model3_fname[64], model4_fname[64];
     time_t now = time(NULL);
-    strftime(model1_out_fname, sizeof(model1_out_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
-    strftime(model2_out_fname, sizeof(model2_out_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
-    strftime(model3_out_fname, sizeof(model3_out_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
-    strftime(model4_out_fname, sizeof(model4_out_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
+    strftime(model1_fname, sizeof(model1_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
+    strftime(model2_fname, sizeof(model2_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
+    strftime(model3_fname, sizeof(model3_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
+    strftime(model4_fname, sizeof(model4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
     
-    // Get data file and number of episodes from command line
+    // Get data file from command line
     const char* data_file = argv[1];
+    
+    // Get number of episodes from command line
     int num_episodes = atoi(argv[2]);
-    
-    // Check if we're continuing training from existing models
-    const char* model1_in_fname = NULL;
-    const char* model2_in_fname = NULL;
-    const char* model3_in_fname = NULL;
-    const char* model4_in_fname = NULL;
-    
-    if (argc >= 7) {
-        model1_in_fname = argv[3];
-        model2_in_fname = argv[4];
-        model3_in_fname = argv[5];
-        model4_in_fname = argv[6];
-        printf("Continuing training from existing models\n");
-    }
     
     printf("Training with data from: %s\n", data_file);
     printf("Number of episodes: %d\n", num_episodes);
     
-    train_model(data_file, model1_out_fname, model2_out_fname, model3_out_fname, model4_out_fname, 
-                num_episodes, model1_in_fname, model2_in_fname, model3_in_fname, model4_in_fname);
+    printf("Training model...\n");
+    train_model(data_file, model1_fname, model2_fname, model3_fname, model4_fname, num_episodes);
+    
+    printf("Training complete!\n");
+    printf("Layer 1 model saved to: %s\n", model1_fname);
+    printf("Layer 2 model saved to: %s\n", model2_fname);
+    printf("Layer 3 model saved to: %s\n", model3_fname);
+    printf("Layer 4 model saved to: %s\n", model4_fname);
     
     return 0;
 }
