@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     double drone_x = random_range(-2.0, 2.0);
     double drone_y = random_range(0.5, 2.0);
     double drone_z = random_range(-2.0, 2.0);
-    double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
+    double drone_yaw = random_range(-M_PI, M_PI);
     
     // Create quad with random position and orientation
     Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
@@ -44,7 +44,7 @@ int main(int argc, char* argv[]) {
     double target_x = random_range(-2.0, 2.0);
     double target_y = random_range(0.5, 2.5);
     double target_z = random_range(-2.0, 2.0);
-    double target_yaw = 0.0; // random_range(-M_PI, M_PI);
+    double target_yaw = random_range(-M_PI, M_PI);
     
     // Create target array (position, velocity, and desired yaw)
     double target[7] = {
@@ -53,8 +53,10 @@ int main(int argc, char* argv[]) {
         target_yaw                       // Random target yaw
     };
     
-    printf("Drone starts at (%.2f, %.2f, %.2f), target at (%.2f, %.2f, %.2f) with yaw %.2f\n", 
-           drone_x, drone_y, drone_z, target_x, target_y, target_z, target_yaw);
+    printf("Drone starts at (%.2f, %.2f, %.2f) with yaw %.2f\n", 
+           drone_x, drone_y, drone_z, drone_yaw);
+    printf("Target at (%.2f, %.2f, %.2f) with yaw %.2f\n", 
+           target_x, target_y, target_z, target_yaw);
     
     // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -126,12 +128,13 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Fill input for layer1 model: IMU data, position, velocity, and target
+            // Fill input for layer1 model: IMU data (including magnetometer), position, velocity, and target
             int idx = 0;
             
-            // IMU measurements (6)
+            // IMU measurements (9)
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.gyro_measurement[i];
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.accel_measurement[i];
+            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.mag_measurement[i];
             
             // Position and velocity (6)
             for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_position_W[i];
