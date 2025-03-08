@@ -6,15 +6,6 @@
 #include "sim/quad.h"
 #include "ssm/gpu/ssm.h"
 
-#define DT_PHYSICS  (1.0 / 1000.0)
-#define DT_CONTROL  (1.0 / 60.0)
-#define SIM_TIME    10.0  // 10 seconds per episode
-
-// Helper function to get random value in range [min, max]
-double random_range(double min, double max) {
-    return min + (double)rand() / RAND_MAX * (max - min);
-}  
-    
 // Helper function to reorganize data for batch processing
 void reorganize_data(float* input, float* output, int num_episodes, int seq_length, int feature_dim) {
     for (int episode = 0; episode < num_episodes; episode++) {
@@ -30,114 +21,6 @@ void reorganize_data(float* input, float* output, int num_episodes, int seq_leng
             }
         }
     }
-}
-
-// Generate training data for the SSM
-void generate_data(const char* data_file, int num_episodes) {
-    FILE* f_data = fopen(data_file, "w");
-    if (!f_data) {
-        printf("Error opening file: %s\n", data_file);
-        return;
-    }
-    
-    // Write header: IMU measurements, position, velocity, target position+yaw, motor commands
-    fprintf(f_data, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
-    fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
-    fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
-    fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
-    
-    for (int episode = 0; episode < num_episodes; episode++) {
-        // Initialize drone with random position and orientation
-        double drone_x = random_range(-2.0, 2.0);
-        double drone_y = random_range(0.5, 2.0);
-        double drone_z = random_range(-2.0, 2.0);
-        double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
-        
-        // Create quad with random position and orientation
-        Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
-        
-        // Place target completely randomly
-        double target_x = random_range(-2.0, 2.0);
-        double target_y = random_range(0.5, 2.5);
-        double target_z = random_range(-2.0, 2.0);
-        double target_yaw = 0.0; // random_range(-M_PI, M_PI);
-        
-        // Create target array (position, velocity, and desired yaw)
-        double target[7] = {
-            target_x, target_y, target_z,    // Target position
-            0.0, 0.0, 0.0,                   // Zero velocity target
-            target_yaw                       // Random target yaw
-        };
-
-        // Initialize state estimator
-        StateEstimator estimator = {
-            .angular_velocity = {0.0, 0.0, 0.0},
-            .gyro_bias = {0.0, 0.0, 0.0}
-        };
-        memcpy(estimator.R, quad.R_W_B, 9 * sizeof(double));
-        
-        double t_physics = 0.0;
-        double t_control = 0.0;
-        
-        for (int i = 0; i < (int)(SIM_TIME / DT_PHYSICS); i++) {
-            if (t_physics >= DT_PHYSICS) {
-                update_quad(&quad, DT_PHYSICS);
-                t_physics = 0.0;
-            }
-            
-            if (t_control >= DT_CONTROL) {
-                // Update state estimator
-                update_estimator(
-                    quad.gyro_measurement,
-                    quad.accel_measurement,
-                    DT_CONTROL,
-                    &estimator
-                );
-                
-                // Get motor commands from geometric controller
-                double new_omega[4];
-                control_quad_commands(
-                    quad.linear_position_W,
-                    quad.linear_velocity_W,
-                    estimator.R,
-                    estimator.angular_velocity,
-                    quad.inertia,
-                    target,
-                    new_omega
-                );
-                memcpy(quad.omega_next, new_omega, 4 * sizeof(double));
-                
-                // Write training sample: IMU, position, velocity, target, and motor commands
-                fprintf(f_data, "\n%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // IMU
-                       quad.gyro_measurement[0], quad.gyro_measurement[1], quad.gyro_measurement[2],
-                       quad.accel_measurement[0], quad.accel_measurement[1], quad.accel_measurement[2]);
-                       
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,", // Position and velocity
-                       quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
-                       quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
-                
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f,", // Target
-                       target[0], target[1], target[2], target[6]);
-                       
-                fprintf(f_data, "%.6f,%.6f,%.6f,%.6f", // Motor commands
-                       quad.omega_next[0],
-                       quad.omega_next[1],
-                       quad.omega_next[2],
-                       quad.omega_next[3]);
-                       
-                t_control = 0.0;
-            }
-            
-            t_physics += DT_PHYSICS;
-            t_control += DT_PHYSICS;
-        }
-        
-        if ((episode + 1) % 1000 == 0) {
-            printf("Generated %d episodes\n", episode + 1);
-        }
-    }
-    
-    fclose(f_data);
 }
 
 // Custom function to propagate gradients between models
@@ -172,9 +55,9 @@ void backward_between_models(SSM* prev_model, SSM* next_model, float* d_prev_mod
     backward_pass(prev_model, d_prev_model_input);
 }
 
-// Train four SSM models in a stack
-void train_stacked_models(const char* data_file, const char* model1_file, const char* model2_file, 
-                         const char* model3_file, const char* model4_file, int num_episodes) {
+// Train four sequential SSM models
+void train_model(const char* data_file, int num_episodes, const char* model1_file, 
+                          const char* model2_file, const char* model3_file, const char* model4_file) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -275,11 +158,26 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
     free(h_X_episodes);
     free(h_y_episodes);
     
-    // Initialize the SSM models
-    SSM* layer1_ssm = init_ssm(input_dim, state_dim1, hidden_dim1, batch_size);
-    SSM* layer2_ssm = init_ssm(hidden_dim1, state_dim2, hidden_dim2, batch_size);
-    SSM* layer3_ssm = init_ssm(hidden_dim2, state_dim3, hidden_dim3, batch_size);
-    SSM* layer4_ssm = init_ssm(hidden_dim3, state_dim4, output_dim, batch_size);
+    // Initialize or load the SSM models
+    SSM* layer1_ssm;
+    SSM* layer2_ssm;
+    SSM* layer3_ssm;
+    SSM* layer4_ssm;
+    
+    // Check if we're continuing training from existing models
+    if (model1_file && model2_file && model3_file && model4_file) {
+        printf("Continuing training from existing models...\n");
+        layer1_ssm = load_ssm(model1_file, batch_size);
+        layer2_ssm = load_ssm(model2_file, batch_size);
+        layer3_ssm = load_ssm(model3_file, batch_size);
+        layer4_ssm = load_ssm(model4_file, batch_size);
+    } else {
+        printf("Initializing new models...\n");
+        layer1_ssm = init_ssm(input_dim, state_dim1, hidden_dim1, batch_size);
+        layer2_ssm = init_ssm(hidden_dim1, state_dim2, hidden_dim2, batch_size);
+        layer3_ssm = init_ssm(hidden_dim2, state_dim3, hidden_dim3, batch_size);
+        layer4_ssm = init_ssm(hidden_dim3, state_dim4, output_dim, batch_size);
+    }
     
     // Allocate memory for intermediate outputs
     float *d_hidden_output1, *d_hidden_output2, *d_hidden_output3;
@@ -291,7 +189,7 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
     const int num_epochs = 200;
     const float learning_rate = 0.0001f;
     
-    printf("Starting stacked model training for %d epochs...\n", num_epochs);
+    printf("Starting training for %d epochs...\n", num_epochs);
     
     // Training loop
     for (int epoch = 0; epoch < num_epochs; epoch++) {
@@ -363,10 +261,24 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
         }
     }
 
-    save_ssm(layer1_ssm, model1_file);
-    save_ssm(layer2_ssm, model2_file);
-    save_ssm(layer3_ssm, model3_file);
-    save_ssm(layer4_ssm, model4_file);
+    // Generate timestamped filenames for saving models
+    char model1_fname[64], model2_fname[64], model3_fname[64], model4_fname[64];
+    time_t now = time(NULL);
+    strftime(model1_fname, sizeof(model1_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
+    strftime(model2_fname, sizeof(model2_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
+    strftime(model3_fname, sizeof(model3_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
+    strftime(model4_fname, sizeof(model4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
+    
+    save_ssm(layer1_ssm, model1_fname);
+    save_ssm(layer2_ssm, model2_fname);
+    save_ssm(layer3_ssm, model3_fname);
+    save_ssm(layer4_ssm, model4_fname);
+    
+    printf("Models saved to:\n");
+    printf("Layer 1: %s\n", model1_fname);
+    printf("Layer 2: %s\n", model2_fname);
+    printf("Layer 3: %s\n", model3_fname);
+    printf("Layer 4: %s\n", model4_fname);
     
     // Cleanup
     cudaFree(d_X);
@@ -380,33 +292,35 @@ void train_stacked_models(const char* data_file, const char* model1_file, const 
     free_ssm(layer4_ssm);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     srand(time(NULL) ^ getpid());
     
-    // Generate timestamped filenames
-    char data_fname[64], model1_fname[64], model2_fname[64], model3_fname[64], model4_fname[64];
-    time_t now = time(NULL);
-    strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
-    strftime(model1_fname, sizeof(model1_fname), "%Y%m%d_%H%M%S_layer1_model.bin", localtime(&now));
-    strftime(model2_fname, sizeof(model2_fname), "%Y%m%d_%H%M%S_layer2_model.bin", localtime(&now));
-    strftime(model3_fname, sizeof(model3_fname), "%Y%m%d_%H%M%S_layer3_model.bin", localtime(&now));
-    strftime(model4_fname, sizeof(model4_fname), "%Y%m%d_%H%M%S_layer4_model.bin", localtime(&now));
-    
-    // Number of episodes for training
+    // Default number of episodes
     int num_episodes = 10000;
+    const char* data_file = NULL;
+    const char* model1_file = NULL;
+    const char* model2_file = NULL; 
+    const char* model3_file = NULL;
+    const char* model4_file = NULL;
     
-    printf("Phase 1: Generating training data...\n");
-    generate_data(data_fname, num_episodes);
+    // Parse command line arguments
+    if (argc >= 2) {
+        num_episodes = atoi(argv[1]);
+    }
     
-    printf("Phase 2: Training stacked SSM models...\n");
-    train_stacked_models(data_fname, model1_fname, model2_fname, model3_fname, model4_fname, num_episodes);
+    if (argc >= 3) {
+        data_file = argv[2];
+    }
     
-    printf("Training complete!\n");
-    printf("Data saved to: %s\n", data_fname);
-    printf("Layer 1 model saved to: %s\n", model1_fname);
-    printf("Layer 2 model saved to: %s\n", model2_fname);
-    printf("Layer 3 model saved to: %s\n", model3_fname);
-    printf("Layer 4 model saved to: %s\n", model4_fname);
+    if (argc >= 7) {
+        model1_file = argv[3];
+        model2_file = argv[4];
+        model3_file = argv[5];
+        model4_file = argv[6];
+        printf("Continuing training from existing models.\n");
+    }
+
+    train_model(data_file, num_episodes, model1_file, model2_file, model3_file, model4_file);
     
     return 0;
 }

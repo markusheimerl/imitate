@@ -4,7 +4,7 @@ LDFLAGS = -lm -flto
 CUDAFLAGS = --cuda-gpu-arch=sm_89 -x cuda -Wno-unknown-cuda-version
 CUDALIBS = -L/usr/local/cuda/lib64 -lcudart -lcublas
 
-all: imitate.out visualize.out
+all: imitate.out visualize.out data.out
 
 imitate.out: imitate.c
 	$(CC) $(CFLAGS) $(CUDAFLAGS) $< $(CUDALIBS) $(LDFLAGS) -o $@
@@ -12,11 +12,27 @@ imitate.out: imitate.c
 visualize.out: visualize.c
 	$(CC) $(CFLAGS) $< -lopenblas -lwebp -lwebpmux $(LDFLAGS) -o $@
 
+data.out: data.c
+	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
+
+data: data.out
+	@./data.out 10000
+
 run: imitate.out
-	@time ./imitate.out
+	@time ./imitate.out 10000 $(shell ls -t *_data.csv | head -1)
+
+cont: imitate.out
+	@time ./imitate.out 10000 $(shell ls -t *_data.csv | head -1) \
+							$(shell ls -t *_layer1_model.bin | head -1) \
+							$(shell ls -t *_layer2_model.bin | head -1) \
+							$(shell ls -t *_layer3_model.bin | head -1) \
+							$(shell ls -t *_layer4_model.bin | head -1)
 
 viz: visualize.out
-	@time ./visualize.out $(shell ls -t *_layer1_model.bin | head -1) $(shell ls -t *_layer2_model.bin | head -1) $(shell ls -t *_layer3_model.bin | head -1) $(shell ls -t *_layer4_model.bin | head -1)
+	@time ./visualize.out $(shell ls -t *_layer1_model.bin | head -1) \
+                             $(shell ls -t *_layer2_model.bin | head -1) \
+                             $(shell ls -t *_layer3_model.bin | head -1) \
+                             $(shell ls -t *_layer4_model.bin | head -1)
 
 clean:
 	rm -f *.out *.bin *.csv *.webp
