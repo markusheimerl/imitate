@@ -76,7 +76,7 @@ void generate_data(const char* data_file, int num_episodes) {
         double drone_x = random_range(-2.0, 2.0);
         double drone_y = random_range(0.5, 2.0);
         double drone_z = random_range(-2.0, 2.0);
-        double drone_yaw = random_range(-M_PI, M_PI);
+        double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
         
         // Create quad with random position and orientation
         Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
@@ -85,7 +85,7 @@ void generate_data(const char* data_file, int num_episodes) {
         double target_x = random_range(-2.0, 2.0);
         double target_y = random_range(0.5, 2.5);
         double target_z = random_range(-2.0, 2.0);
-        double target_yaw = 0.0; // random_range(-M_PI, M_PI);
+        double target_yaw = random_range(-M_PI, M_PI);
         
         // Create target array (position, velocity, and desired yaw)
         double target[7] = {
