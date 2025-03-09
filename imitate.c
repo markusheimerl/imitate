@@ -10,8 +10,40 @@
 #define DT_CONTROL  (1.0 / 60.0)
 #define SIM_TIME    10.0  // 10 seconds per episode
 
+// Custom function to propagate gradients between models
+void backward_between_models(SSM* prev_model, SSM* next_model, float* d_prev_model_input) {
+    // Zero gradients for previous model
+    zero_gradients(prev_model);
+    
+    // The error to propagate back is already in next_model->d_error
+    // Need to convert it to gradient w.r.t previous model output
+    
+    const float alpha = 1.0f, beta = 0.0f;
+    
+    // Compute gradient from state path: d_input_grad = B^T * state_error
+    CHECK_CUBLAS(cublasSgemm(next_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                           prev_model->output_dim, prev_model->batch_size, next_model->state_dim,
+                           &alpha,
+                           next_model->d_B, next_model->state_dim,
+                           next_model->d_state_error, next_model->state_dim,
+                           &beta,
+                           prev_model->d_error, prev_model->output_dim));
+    
+    // Add gradient from direct path: d_input_grad += D^T * error
+    CHECK_CUBLAS(cublasSgemm(next_model->cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                           prev_model->output_dim, prev_model->batch_size, next_model->output_dim,
+                           &alpha,
+                           next_model->d_D, next_model->output_dim,
+                           next_model->d_error, next_model->output_dim,
+                           &alpha, // Add to existing gradient
+                           prev_model->d_error, prev_model->output_dim));
+    
+    // Now do the backward pass for the previous model
+    backward_pass(prev_model, d_prev_model_input);
+}
+
 // Train the SSM
-void train_model(const char* data_file, const char* model_file, int num_episodes) {
+void train_model(const char* data_file, const char* model_file, int num_episodes, const char* continue_model) {
     printf("Loading training data from %s...\n", data_file);
     
     // Count lines in CSV to determine number of samples
@@ -36,10 +68,12 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     printf("Found %d total samples across %d episodes, %d steps per episode\n", 
            total_samples, num_episodes, seq_length);
     
-    // Parameters
-    const int input_dim = 16;    // IMU (6) + position (3) + velocity (3) + target (4)
-    const int state_dim = 512;   // Internal state dimension
-    const int output_dim = 4;    // Motor commands (4)
+    // Parameters for both layers
+    const int input_dim = 16;      // IMU (6) + position (3) + velocity (3) + target (4)
+    const int hidden_dim = 16;     // Hidden layer output dimension
+    const int state_dim1 = 256;    // First layer state dimension
+    const int state_dim2 = 256;    // Second layer state dimension
+    const int output_dim = 4;      // Motor commands (4)
     
     // Split data into training and validation sets (80% train, 20% validation)
     const int train_episodes = num_episodes * 0.8;
@@ -158,13 +192,75 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     free(h_X_val);
     free(h_y_val);
     
-    // Initialize state space models for training and validation
-    SSM* train_ssm = init_ssm(input_dim, state_dim, output_dim, train_batch_size);
-    SSM* val_ssm = init_ssm(input_dim, state_dim, output_dim, val_batch_size);
+    // Allocate buffer for intermediate layer outputs
+    float *d_hidden_train, *d_hidden_val;
+    CHECK_CUDA(cudaMalloc(&d_hidden_train, train_episodes * seq_length * hidden_dim * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_hidden_val, val_episodes * seq_length * hidden_dim * sizeof(float)));
+    
+    // Initialize state space models (2 layers for training and 2 for validation)
+    SSM *train_ssm1, *train_ssm2, *val_ssm1, *val_ssm2;
+    
+    // Either load existing models or initialize new ones
+    if (continue_model != NULL) {
+        char model1_path[128], model2_path[128];
+        sprintf(model1_path, "%s.layer1", continue_model);
+        sprintf(model2_path, "%s.layer2", continue_model);
+        
+        printf("Continuing training from models:\n%s\n%s\n", model1_path, model2_path);
+        
+        // Load both layers
+        train_ssm1 = load_ssm(model1_path, train_batch_size);
+        train_ssm2 = load_ssm(model2_path, train_batch_size);
+        
+        // Initialize validation models with same dimensions
+        val_ssm1 = init_ssm(train_ssm1->input_dim, train_ssm1->state_dim, 
+                          train_ssm1->output_dim, val_batch_size);
+        val_ssm2 = init_ssm(train_ssm2->input_dim, train_ssm2->state_dim, 
+                          train_ssm2->output_dim, val_batch_size);
+        
+        // Copy weights from training models to validation models
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_A, train_ssm1->d_A, 
+                            train_ssm1->state_dim * train_ssm1->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_B, train_ssm1->d_B, 
+                            train_ssm1->state_dim * train_ssm1->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_C, train_ssm1->d_C, 
+                            train_ssm1->output_dim * train_ssm1->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_D, train_ssm1->d_D, 
+                            train_ssm1->output_dim * train_ssm1->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+                            
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_A, train_ssm2->d_A, 
+                            train_ssm2->state_dim * train_ssm2->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_B, train_ssm2->d_B, 
+                            train_ssm2->state_dim * train_ssm2->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_C, train_ssm2->d_C, 
+                            train_ssm2->output_dim * train_ssm2->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_D, train_ssm2->d_D, 
+                            train_ssm2->output_dim * train_ssm2->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+    } else {
+        // Initialize new models
+        train_ssm1 = init_ssm(input_dim, state_dim1, hidden_dim, train_batch_size);
+        train_ssm2 = init_ssm(hidden_dim, state_dim2, output_dim, train_batch_size);
+        val_ssm1 = init_ssm(input_dim, state_dim1, hidden_dim, val_batch_size);
+        val_ssm2 = init_ssm(hidden_dim, state_dim2, output_dim, val_batch_size);
+    }
     
     // Training parameters
     const int num_epochs = 1000;
-    const float learning_rate = 0.0001f;
+    float learning_rate = 0.0001f;
+    
+    // If continuing, use a lower learning rate
+    if (continue_model != NULL) {
+        learning_rate *= 0.5f;
+        printf("Reduced learning rate to %.6f for continued training\n", learning_rate);
+    }
     
     printf("Starting SSM training for %d epochs...\n", num_epochs);
     
@@ -176,9 +272,11 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
         float train_loss = 0.0f;
         int train_batches = 0;
         
-        // Reset state at the beginning of each epoch
-        CHECK_CUDA(cudaMemset(train_ssm->d_state, 0, 
-                             train_ssm->batch_size * train_ssm->state_dim * sizeof(float)));
+        // Reset states at the beginning of each epoch
+        CHECK_CUDA(cudaMemset(train_ssm1->d_state, 0, 
+                            train_ssm1->batch_size * train_ssm1->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(train_ssm2->d_state, 0, 
+                            train_ssm2->batch_size * train_ssm2->state_dim * sizeof(float)));
         
         // Training pass
         for (int step = 0; step < seq_length; step++) {
@@ -186,53 +284,95 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
             float *d_batch_X = &d_X_train[step * train_batch_size * input_dim];
             float *d_batch_y = &d_y_train[step * train_batch_size * output_dim];
             
-            // Forward pass
-            forward_pass(train_ssm, d_batch_X);
+            // Forward pass through first layer
+            forward_pass(train_ssm1, d_batch_X);
+            
+            // Store outputs of first layer to use as inputs to second layer
+            // and for backpropagation
+            CHECK_CUDA(cudaMemcpy(&d_hidden_train[step * train_batch_size * hidden_dim], 
+                                train_ssm1->d_predictions, 
+                                train_batch_size * hidden_dim * sizeof(float), 
+                                cudaMemcpyDeviceToDevice));
+            
+            // Forward pass through second layer
+            forward_pass(train_ssm2, train_ssm1->d_predictions);
             
             // Calculate loss
-            float loss = calculate_loss(train_ssm, d_batch_y);
+            float loss = calculate_loss(train_ssm2, d_batch_y);
             train_loss += loss;
             train_batches++;
             
-            // Backward pass
-            zero_gradients(train_ssm);
-            backward_pass(train_ssm, d_batch_X);
+            // Backward pass through second layer
+            zero_gradients(train_ssm2);
+            backward_pass(train_ssm2, train_ssm1->d_predictions);
             
-            // Update weights
-            update_weights(train_ssm, learning_rate);
+            // Backpropagate through the connection between layers
+            backward_between_models(train_ssm1, train_ssm2, d_batch_X);
+            
+            // Update weights for both layers
+            update_weights(train_ssm1, learning_rate);
+            update_weights(train_ssm2, learning_rate);
         }
         
         // Calculate average training loss
         float avg_train_loss = train_loss / train_batches;
         
-        // Copy updated weights to validation model
-        CHECK_CUDA(cudaMemcpy(val_ssm->d_A, train_ssm->d_A, 
-                             state_dim * state_dim * sizeof(float), cudaMemcpyDeviceToDevice));
-        CHECK_CUDA(cudaMemcpy(val_ssm->d_B, train_ssm->d_B, 
-                             state_dim * input_dim * sizeof(float), cudaMemcpyDeviceToDevice));
-        CHECK_CUDA(cudaMemcpy(val_ssm->d_C, train_ssm->d_C, 
-                             output_dim * state_dim * sizeof(float), cudaMemcpyDeviceToDevice));
-        CHECK_CUDA(cudaMemcpy(val_ssm->d_D, train_ssm->d_D, 
-                             output_dim * input_dim * sizeof(float), cudaMemcpyDeviceToDevice));
+        // Copy updated weights to validation models
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_A, train_ssm1->d_A, 
+                            train_ssm1->state_dim * train_ssm1->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_B, train_ssm1->d_B, 
+                            train_ssm1->state_dim * train_ssm1->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_C, train_ssm1->d_C, 
+                            train_ssm1->output_dim * train_ssm1->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm1->d_D, train_ssm1->d_D, 
+                            train_ssm1->output_dim * train_ssm1->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+                            
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_A, train_ssm2->d_A, 
+                            train_ssm2->state_dim * train_ssm2->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_B, train_ssm2->d_B, 
+                            train_ssm2->state_dim * train_ssm2->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_C, train_ssm2->d_C, 
+                            train_ssm2->output_dim * train_ssm2->state_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(val_ssm2->d_D, train_ssm2->d_D, 
+                            train_ssm2->output_dim * train_ssm2->input_dim * sizeof(float), 
+                            cudaMemcpyDeviceToDevice));
         
         // Validation pass (no weight updates)
         float val_loss = 0.0f;
         int val_batches = 0;
         
-        // Reset validation state
-        CHECK_CUDA(cudaMemset(val_ssm->d_state, 0, 
-                             val_ssm->batch_size * val_ssm->state_dim * sizeof(float)));
+        // Reset validation states
+        CHECK_CUDA(cudaMemset(val_ssm1->d_state, 0, 
+                            val_ssm1->batch_size * val_ssm1->state_dim * sizeof(float)));
+        CHECK_CUDA(cudaMemset(val_ssm2->d_state, 0, 
+                            val_ssm2->batch_size * val_ssm2->state_dim * sizeof(float)));
         
         for (int step = 0; step < seq_length; step++) {
             // Get validation batch data
             float *d_batch_X = &d_X_val[step * val_batch_size * input_dim];
             float *d_batch_y = &d_y_val[step * val_batch_size * output_dim];
             
-            // Forward pass only (no backprop or weight updates)
-            forward_pass(val_ssm, d_batch_X);
+            // Forward pass through first layer
+            forward_pass(val_ssm1, d_batch_X);
+            
+            // Store outputs of first layer
+            CHECK_CUDA(cudaMemcpy(&d_hidden_val[step * val_batch_size * hidden_dim], 
+                                val_ssm1->d_predictions, 
+                                val_batch_size * hidden_dim * sizeof(float), 
+                                cudaMemcpyDeviceToDevice));
+            
+            // Forward pass through second layer
+            forward_pass(val_ssm2, val_ssm1->d_predictions);
             
             // Calculate validation loss
-            float loss = calculate_loss(val_ssm, d_batch_y);
+            float loss = calculate_loss(val_ssm2, d_batch_y);
             val_loss += loss;
             val_batches++;
         }
@@ -246,9 +386,11 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
             
             // Save the best model
             if (epoch > 0 && (epoch + 1) % 100 == 0) {
-                char best_model_fname[128];
-                sprintf(best_model_fname, "%s.best", model_file);
-                save_ssm(train_ssm, best_model_fname);
+                char best_model_fname1[128], best_model_fname2[128];
+                sprintf(best_model_fname1, "%s.layer1.best", model_file);
+                sprintf(best_model_fname2, "%s.layer2.best", model_file);
+                save_ssm(train_ssm1, best_model_fname1);
+                save_ssm(train_ssm2, best_model_fname2);
                 printf("Saved best model with validation loss: %.8f\n", best_val_loss);
             }
         }
@@ -260,8 +402,13 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
         }
     }
     
-    // Save final model
-    save_ssm(train_ssm, model_file);
+    // Save final models
+    char final_model_fname1[128], final_model_fname2[128];
+    sprintf(final_model_fname1, "%s.layer1", model_file);
+    sprintf(final_model_fname2, "%s.layer2", model_file);
+    save_ssm(train_ssm1, final_model_fname1);
+    save_ssm(train_ssm2, final_model_fname2);
+    printf("Final models saved to %s.layer1 and %s.layer2\n", model_file, model_file);
     
     printf("Training complete. Best validation loss: %.8f\n", best_val_loss);
     
@@ -270,13 +417,17 @@ void train_model(const char* data_file, const char* model_file, int num_episodes
     cudaFree(d_y_train);
     cudaFree(d_X_val);
     cudaFree(d_y_val);
-    free_ssm(train_ssm);
-    free_ssm(val_ssm);
+    cudaFree(d_hidden_train);
+    cudaFree(d_hidden_val);
+    free_ssm(train_ssm1);
+    free_ssm(train_ssm2);
+    free_ssm(val_ssm1);
+    free_ssm(val_ssm2);
 }
 
 int main(int argc, char* argv[]) {
-    if(argc != 3) {
-        printf("Usage: %s <num_episodes> <data_file>\n", argv[0]);
+    if(argc != 3 && argc != 4) {
+        printf("Usage: %s <num_episodes> <data_file> [continue_model]\n", argv[0]);
         return 1;
     }
     srand(time(NULL) ^ getpid());
@@ -286,9 +437,12 @@ int main(int argc, char* argv[]) {
     time_t now = time(NULL);
     strftime(model_fname, sizeof(model_fname), "%Y%m%d_%H%M%S_model.bin", localtime(&now));
     
+    // Determine if we're continuing from an existing model
+    const char* continue_model = (argc == 4) ? argv[3] : NULL;
+    
     // Train SSM model
-    printf("Phase 2: Training SSM...\n");
-    train_model(argv[2], model_fname, atoi(argv[1]));
+    printf("Training SSM with two layers...\n");
+    train_model(argv[2], model_fname, atoi(argv[1]), continue_model);
     
     return 0;
 }

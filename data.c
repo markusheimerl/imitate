@@ -74,7 +74,7 @@ void generate_data(const char* data_file, int num_episodes) {
         
         // Initialize drone with random position and orientation
         double drone_x = random_range(-2.0, 2.0);
-        double drone_y = random_range(0.5, 2.0);
+        double drone_y = random_range(0.0, 2.0);
         double drone_z = random_range(-2.0, 2.0);
         double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
         
@@ -83,7 +83,7 @@ void generate_data(const char* data_file, int num_episodes) {
         
         // Place target completely randomly
         double target_x = random_range(-2.0, 2.0);
-        double target_y = random_range(0.5, 2.5);
+        double target_y = random_range(1.0, 3.0);
         double target_z = random_range(-2.0, 2.0);
         double target_yaw = random_range(-M_PI, M_PI);
         

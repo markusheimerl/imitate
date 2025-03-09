@@ -16,17 +16,17 @@ data.out: data.c
 	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
 
 data: data.out
-	@./data.out 10000
+	@./data.out 500
 
 run: imitate.out
-	@time ./imitate.out 10000 $(shell ls -t *_data.csv | head -1)
+	@time ./imitate.out 500 $(shell ls -t *_data.csv | head -1)
 
 cont: imitate.out
-	@time ./imitate.out 10000 $(shell ls -t *_data.csv | head -1) \
-							  $(shell ls -t *_model.bin | head -1)
+	@time ./imitate.out 500 $(shell ls -t *_data.csv | head -1) \
+	                                                      $(shell ls -t *_model.bin | head -1)
 
 viz: visualize.out
-	@time ./visualize.out $(shell ls -t *_model.bin | head -1)
+	@time ./visualize.out $(shell ls -t *_model.bin.layer1 | head -1) $(shell ls -t *_model.bin.layer2 | head -1)
 
 clean:
-	rm -f *.out *.bin *.csv *.webp
+	rm -f *.out *.bin *.csv *.webp *.layer1 *.layer2 *.best

@@ -17,38 +17,45 @@ double random_range(double min, double max) {
 }
 
 int main(int argc, char* argv[]) {
-    if(argc != 2) {
-        printf("Usage: %s <model_file>\n", argv[0]);
+    if(argc != 3) {
+        printf("Usage: %s <model_layer1> <model_layer2>\n", argv[0]);
         return 1;
     }
 
-    // Load SSM model
-    SSM* ssm = load_ssm(argv[1], 1);
+    // Load both SSM model layers
+    SSM* ssm1 = load_ssm(argv[1], 1);
+    SSM* ssm2 = load_ssm(argv[2], 1);
 
     // Print network dimensions
     printf("Loaded SSM dimensions:\n");
-    printf("Input dim: %d\n", ssm->input_dim);
-    printf("State dim: %d\n", ssm->state_dim);
-    printf("Output dim: %d\n", ssm->output_dim);
-    printf("Batch size: %d\n", ssm->batch_size);
+    printf("Layer 1: Input dim: %d, State dim: %d, Output dim: %d\n", 
+           ssm1->input_dim, ssm1->state_dim, ssm1->output_dim);
+    printf("Layer 2: Input dim: %d, State dim: %d, Output dim: %d\n", 
+           ssm2->input_dim, ssm2->state_dim, ssm2->output_dim);
+    printf("Batch size: %d\n", ssm1->batch_size);
 
     srand(time(NULL));
     
-    // Initialize quadcopter with random position
-    Quad quad = create_quad(
-        random_range(-2.0, 2.0),
-        random_range(0.0, 2.0),    // Always at or above ground
-        random_range(-2.0, 2.0),
-        0.0
-    );
-
-    // Initialize random target position and yaw
+    // Initialize drone with random position and orientation
+    double drone_x = random_range(-2.0, 2.0);
+    double drone_y = random_range(0.0, 2.0);
+    double drone_z = random_range(-2.0, 2.0);
+    double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
+    
+    // Create quad with random position and orientation
+    Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
+    
+    // Place target completely randomly
+    double target_x = random_range(-2.0, 2.0);
+    double target_y = random_range(1.0, 3.0);
+    double target_z = random_range(-2.0, 2.0);
+    double target_yaw = random_range(-M_PI, M_PI);
+    
+    // Create target array (position, velocity, and desired yaw)
     double target[7] = {
-        random_range(-2.0, 2.0),    // x
-        random_range(1.0, 3.0),     // y: Always above ground
-        random_range(-2.0, 2.0),    // z
-        0.0, 0.0, 0.0,              // vx, vy, vz
-        random_range(-M_PI, M_PI)   // yaw
+        target_x, target_y, target_z,    // Target position
+        0.0, 0.0, 0.0,                   // Zero velocity target
+        target_yaw                       // Random target yaw
     };
     
     printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
@@ -102,11 +109,13 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Allocate input buffer for SSM
-    float* ssm_input = (float*)calloc(ssm->batch_size * ssm->input_dim, sizeof(float));
+    // Allocate input buffers for SSM
+    float* ssm1_input = (float*)calloc(ssm1->batch_size * ssm1->input_dim, sizeof(float));
+    float* hidden_layer = (float*)calloc(ssm1->batch_size * ssm1->output_dim, sizeof(float));
     
-    // Reset SSM internal state
-    memset(ssm->state, 0, ssm->batch_size * ssm->state_dim * sizeof(float));
+    // Reset SSM internal states
+    memset(ssm1->state, 0, ssm1->batch_size * ssm1->state_dim * sizeof(float));
+    memset(ssm2->state, 0, ssm2->batch_size * ssm2->state_dim * sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -122,23 +131,29 @@ int main(int argc, char* argv[]) {
             int idx = 0;
             
             // IMU measurements (6)
-            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.gyro_measurement[i];
-            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.accel_measurement[i];
+            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.gyro_measurement[i];
+            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.accel_measurement[i];
             
             // Position and velocity (6)
-            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)quad.linear_velocity_W[i];
             
             // Target position and yaw (4)
-            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)target[i];
-            ssm_input[idx++] = (float)target[6];
+            for(int i = 0; i < 3; i++) ssm1_input[idx++] = (float)target[i];
+            ssm1_input[idx++] = (float)target[6];
             
-            // Forward pass through SSM
-            forward_pass(ssm, ssm_input);
+            // Forward pass through first layer
+            forward_pass(ssm1, ssm1_input);
             
-            // Apply predicted motor commands (4)
+            // Copy first layer predictions to hidden buffer
+            memcpy(hidden_layer, ssm1->predictions, ssm1->batch_size * ssm1->output_dim * sizeof(float));
+            
+            // Forward pass through second layer
+            forward_pass(ssm2, hidden_layer);
+            
+            // Apply predicted motor commands (4) from second layer
             for (int i = 0; i < 4; i++) {
-                quad.omega_next[i] = (double)ssm->predictions[i];
+                quad.omega_next[i] = (double)ssm2->predictions[i];
             }
             
             t_control = 0.0;
@@ -246,12 +261,14 @@ int main(int argc, char* argv[]) {
     printf("First-person view saved to: %s\n", fpv_filename);
 
     // Cleanup
-    free(ssm_input);
+    free(ssm1_input);
+    free(hidden_layer);
     destroy_mesh(&drone);
     destroy_mesh(&ground);
     destroy_mesh(&treasure);
     destroy_scene(&scene);
     destroy_scene(&fpv_scene);
-    free_ssm(ssm);
+    free_ssm(ssm1);
+    free_ssm(ssm2);
     return 0;
 }
