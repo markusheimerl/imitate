@@ -5,7 +5,7 @@
 #include <math.h>
 #include "sim/quad.h"
 #include "sim/raytracer/scene.h"
-#include "ssm/ssm.h"  // Using CPU version
+#include "ssm/ssm.h"
 
 #define DT_PHYSICS  (1.0 / 1000.0)
 #define DT_CONTROL  (1.0 / 60.0)
@@ -17,44 +17,41 @@ double random_range(double min, double max) {
 }
 
 int main(int argc, char* argv[]) {
-    if(argc != 5) {
-        printf("Usage: %s <layer1_model_file> <layer2_model_file> <layer3_model_file> <layer4_model_file>\n", argv[0]);
+    if(argc != 2) {
+        printf("Usage: %s <model_file>\n", argv[0]);
         return 1;
     }
 
-    // Load all four SSM models
-    SSM* layer1_ssm = load_ssm(argv[1], 1);
-    SSM* layer2_ssm = load_ssm(argv[2], 1);
-    SSM* layer3_ssm = load_ssm(argv[3], 1);
-    SSM* layer4_ssm = load_ssm(argv[4], 1);
+    // Load SSM model
+    SSM* ssm = load_ssm(argv[1], 1);
 
-    // Initialize random seed
+    // Print network dimensions
+    printf("Loaded SSM dimensions:\n");
+    printf("Input dim: %d\n", ssm->input_dim);
+    printf("State dim: %d\n", ssm->state_dim);
+    printf("Output dim: %d\n", ssm->output_dim);
+    printf("Batch size: %d\n", ssm->batch_size);
+
     srand(time(NULL));
     
-    // Initialize drone with random position and orientation
-    double drone_x = random_range(-2.0, 2.0);
-    double drone_y = random_range(0.5, 2.0);
-    double drone_z = random_range(-2.0, 2.0);
-    double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
-    
-    // Create quad with random position and orientation
-    Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
-    
+    // Initialize quadcopter with random position
+    Quad quad = create_quad(
+        random_range(-2.0, 2.0),
+        random_range(0.0, 2.0),    // Always at or above ground
+        random_range(-2.0, 2.0),
+        0.0
+    );
+
     // Initialize random target position and yaw
-    double target_x = random_range(-2.0, 2.0);
-    double target_y = random_range(0.5, 2.5);
-    double target_z = random_range(-2.0, 2.0);
-    double target_yaw = 0.0; // random_range(-M_PI, M_PI);
-    
-    // Create target array (position, velocity, and desired yaw)
     double target[7] = {
-        target_x, target_y, target_z,    // Target position
-        0.0, 0.0, 0.0,                   // Zero velocity target
-        target_yaw                       // Random target yaw
+        random_range(-2.0, 2.0),    // x
+        random_range(1.0, 3.0),     // y: Always above ground
+        random_range(-2.0, 2.0),    // z
+        0.0, 0.0, 0.0,              // vx, vy, vz
+        random_range(-M_PI, M_PI)   // yaw
     };
     
-    printf("Drone starts at (%.2f, %.2f, %.2f), target at (%.2f, %.2f, %.2f) with yaw %.2f\n", 
-           drone_x, drone_y, drone_z, target_x, target_y, target_z, target_yaw);
+    printf("Target position: (%.2f, %.2f, %.2f) with yaw: %.2f rad\n", target[0], target[1], target[2], target[6]);
     
     // Initialize scenes
     Scene scene = create_scene(400, 300, (int)(SIM_TIME * 1000), 24, 0.4f);
@@ -71,14 +68,6 @@ int main(int argc, char* argv[]) {
         (Vec3){1.4f, 1.4f, 1.4f}
     );
     
-    // Set up camera
-    set_scene_camera(&scene,
-        (Vec3){-3.0f, 3.0f, -3.0f},
-        (Vec3){0.0f, 0.0f, 0.0f},
-        (Vec3){0.0f, 1.0f, 0.0f},
-        60.0f
-    );
-    
     // Create meshes
     Mesh drone = create_mesh("sim/raytracer/drone.obj", "sim/raytracer/drone.webp");
     Mesh ground = create_mesh("sim/raytracer/ground.obj", "sim/raytracer/ground.webp");
@@ -93,8 +82,19 @@ int main(int argc, char* argv[]) {
     add_mesh_to_scene(&fpv_scene, treasure);
 
     // Set treasure position (target) for both scenes
-    set_mesh_position(&scene.meshes[2], (Vec3){(float)target_x, (float)target_y, (float)target_z});
-    set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target_x, (float)target_y, (float)target_z});
+    set_mesh_position(&scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+    set_mesh_rotation(&scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+    
+    set_mesh_position(&fpv_scene.meshes[2], (Vec3){(float)target[0], (float)target[1], (float)target[2]});
+    set_mesh_rotation(&fpv_scene.meshes[2], (Vec3){0.0f, (float)target[6], 0.0f});
+
+    // Set up chase camera with 60 degree FOV
+    set_scene_camera(&scene,
+        (Vec3){-3.0f, 3.0f, -3.0f},
+        (Vec3){0.0f, 0.0f, 0.0f},
+        (Vec3){0.0f, 1.0f, 0.0f},
+        60.0f
+    );
 
     // Initialize timers
     double t_physics = 0.0;
@@ -102,19 +102,11 @@ int main(int argc, char* argv[]) {
     double t_render = 0.0;
     clock_t start_time = clock();
     
-    // Allocate input buffer for layer1 model
-    float* layer1_input = (float*)calloc(layer1_ssm->batch_size * layer1_ssm->input_dim, sizeof(float));
+    // Allocate input buffer for SSM
+    float* ssm_input = (float*)calloc(ssm->batch_size * ssm->input_dim, sizeof(float));
     
-    // Allocate intermediate buffers for connecting layers
-    float* layer2_input = (float*)calloc(layer2_ssm->batch_size * layer2_ssm->input_dim, sizeof(float));
-    float* layer3_input = (float*)calloc(layer3_ssm->batch_size * layer3_ssm->input_dim, sizeof(float));
-    float* layer4_input = (float*)calloc(layer4_ssm->batch_size * layer4_ssm->input_dim, sizeof(float));
-    
-    // Reset internal states of all models
-    memset(layer1_ssm->state, 0, layer1_ssm->batch_size * layer1_ssm->state_dim * sizeof(float));
-    memset(layer2_ssm->state, 0, layer2_ssm->batch_size * layer2_ssm->state_dim * sizeof(float));
-    memset(layer3_ssm->state, 0, layer3_ssm->batch_size * layer3_ssm->state_dim * sizeof(float));
-    memset(layer4_ssm->state, 0, layer4_ssm->batch_size * layer4_ssm->state_dim * sizeof(float));
+    // Reset SSM internal state
+    memset(ssm->state, 0, ssm->batch_size * ssm->state_dim * sizeof(float));
 
     // Main simulation loop
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
@@ -126,39 +118,27 @@ int main(int argc, char* argv[]) {
         
         // Control update
         if (t_control >= DT_CONTROL) {
-            // Fill input for layer1 model: IMU data, position, velocity, and target
+            // Fill SSM input: IMU data, position, velocity, and target
             int idx = 0;
             
             // IMU measurements (6)
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.gyro_measurement[i];
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.accel_measurement[i];
+            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.gyro_measurement[i];
+            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.accel_measurement[i];
             
             // Position and velocity (6)
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_position_W[i];
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)quad.linear_velocity_W[i];
+            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.linear_position_W[i];
+            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)quad.linear_velocity_W[i];
             
             // Target position and yaw (4)
-            for(int i = 0; i < 3; i++) layer1_input[idx++] = (float)target[i];
-            layer1_input[idx++] = (float)target[6];
+            for(int i = 0; i < 3; i++) ssm_input[idx++] = (float)target[i];
+            ssm_input[idx++] = (float)target[6];
             
-            // Forward pass through all models
-            forward_pass(layer1_ssm, layer1_input);
+            // Forward pass through SSM
+            forward_pass(ssm, ssm_input);
             
-            // Copy output of layer1 as input to layer2
-            memcpy(layer2_input, layer1_ssm->predictions, layer1_ssm->output_dim * sizeof(float));
-            forward_pass(layer2_ssm, layer2_input);
-            
-            // Copy output of layer2 as input to layer3
-            memcpy(layer3_input, layer2_ssm->predictions, layer2_ssm->output_dim * sizeof(float));
-            forward_pass(layer3_ssm, layer3_input);
-            
-            // Copy output of layer3 as input to layer4
-            memcpy(layer4_input, layer3_ssm->predictions, layer3_ssm->output_dim * sizeof(float));
-            forward_pass(layer4_ssm, layer4_input);
-            
-            // Apply predicted motor commands from layer4
+            // Apply predicted motor commands (4)
             for (int i = 0; i < 4; i++) {
-                quad.omega_next[i] = (double)layer4_ssm->predictions[i];
+                quad.omega_next[i] = (double)ssm->predictions[i];
             }
             
             t_control = 0.0;
@@ -166,33 +146,25 @@ int main(int argc, char* argv[]) {
         
         // Render update
         if (t_render >= DT_RENDER) {
-            // Update drone position and rotation in the scene
-            set_mesh_position(&scene.meshes[0], 
-                (Vec3){(float)quad.linear_position_W[0], 
-                       (float)quad.linear_position_W[1], 
-                       (float)quad.linear_position_W[2]});
+            // Get drone position and orientation for visualization
+            Vec3 pos = {
+                (float)quad.linear_position_W[0],
+                (float)quad.linear_position_W[1],
+                (float)quad.linear_position_W[2]
+            };
             
-            set_mesh_rotation(&scene.meshes[0], 
-                (Vec3){
-                    atan2f(quad.R_W_B[7], quad.R_W_B[8]),
-                    asinf(-quad.R_W_B[6]),
-                    atan2f(quad.R_W_B[3], quad.R_W_B[0])
-                }
-            );
+            Vec3 rot = {
+                atan2f(quad.R_W_B[7], quad.R_W_B[8]),
+                asinf(-quad.R_W_B[6]),
+                atan2f(quad.R_W_B[3], quad.R_W_B[0])
+            };
+
+            // Update drone position in both scenes
+            set_mesh_position(&scene.meshes[0], pos);
+            set_mesh_rotation(&scene.meshes[0], rot);
             
-            // Update FPV scene
-            set_mesh_position(&fpv_scene.meshes[0], 
-                (Vec3){(float)quad.linear_position_W[0], 
-                       (float)quad.linear_position_W[1], 
-                       (float)quad.linear_position_W[2]});
-            
-            set_mesh_rotation(&fpv_scene.meshes[0], 
-                (Vec3){
-                    atan2f(quad.R_W_B[7], quad.R_W_B[8]),
-                    asinf(-quad.R_W_B[6]),
-                    atan2f(quad.R_W_B[3], quad.R_W_B[0])
-                }
-            );
+            set_mesh_position(&fpv_scene.meshes[0], pos);
+            set_mesh_rotation(&fpv_scene.meshes[0], rot);
             
             // Update FPV camera to match drone's position and orientation
             Vec3 forward = {
@@ -215,25 +187,26 @@ int main(int argc, char* argv[]) {
             };
             
             Vec3 fpv_pos = {
-                (float)quad.linear_position_W[0] + camera_offset.x,
-                (float)quad.linear_position_W[1] + camera_offset.y,
-                (float)quad.linear_position_W[2] + camera_offset.z
+                pos.x + camera_offset.x,
+                pos.y + camera_offset.y,
+                pos.z + camera_offset.z
             };
             
             // Calculate look-at point (position + forward)
             Vec3 look_at = {
-                fpv_pos.x + forward.x,  // Look at point is in front of drone's position
-                fpv_pos.y + forward.y,
-                fpv_pos.z + forward.z
+                pos.x + forward.x,  // Look at point is in front of drone's position
+                pos.y + forward.y,
+                pos.z + forward.z
             };
             
             // Set FPV camera
             set_scene_camera(&fpv_scene, fpv_pos, look_at, up, 70.0f);
             
-            // Render scenes
+            // Render both scenes
             render_scene(&scene);
             render_scene(&fpv_scene);
             
+            // Advance to next frame in both scenes
             next_frame(&scene);
             next_frame(&fpv_scene);
             
@@ -248,15 +221,14 @@ int main(int argc, char* argv[]) {
         t_render += DT_PHYSICS;
     }
 
-    // Display final results
     printf("\nFinal position: (%.2f, %.2f, %.2f) with yaw %.2f or ±%.2f\n", 
            quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2],
            asinf(-quad.R_W_B[6]), M_PI - fabs(asinf(-quad.R_W_B[6])));
     
     // Calculate distance to target
-    double dist = sqrt(pow(quad.linear_position_W[0] - target_x, 2) + 
-                     pow(quad.linear_position_W[1] - target_y, 2) + 
-                     pow(quad.linear_position_W[2] - target_z, 2));
+    double dist = sqrt(pow(quad.linear_position_W[0] - target[0], 2) + 
+                     pow(quad.linear_position_W[1] - target[1], 2) + 
+                     pow(quad.linear_position_W[2] - target[2], 2));
     printf("Distance to target: %.2f meters\n", dist);
     
     // Save animations
@@ -274,18 +246,12 @@ int main(int argc, char* argv[]) {
     printf("First-person view saved to: %s\n", fpv_filename);
 
     // Cleanup
-    free(layer1_input);
-    free(layer2_input);
-    free(layer3_input);
-    free(layer4_input);
+    free(ssm_input);
     destroy_mesh(&drone);
     destroy_mesh(&ground);
     destroy_mesh(&treasure);
     destroy_scene(&scene);
     destroy_scene(&fpv_scene);
-    free_ssm(layer1_ssm);
-    free_ssm(layer2_ssm);
-    free_ssm(layer3_ssm);
-    free_ssm(layer4_ssm);
+    free_ssm(ssm);
     return 0;
 }

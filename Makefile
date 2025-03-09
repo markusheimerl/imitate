@@ -23,16 +23,10 @@ run: imitate.out
 
 cont: imitate.out
 	@time ./imitate.out 10000 $(shell ls -t *_data.csv | head -1) \
-							$(shell ls -t *_layer1_model.bin | head -1) \
-							$(shell ls -t *_layer2_model.bin | head -1) \
-							$(shell ls -t *_layer3_model.bin | head -1) \
-							$(shell ls -t *_layer4_model.bin | head -1)
+							  $(shell ls -t *_model.bin | head -1)
 
 viz: visualize.out
-	@time ./visualize.out $(shell ls -t *_layer1_model.bin | head -1) \
-                             $(shell ls -t *_layer2_model.bin | head -1) \
-                             $(shell ls -t *_layer3_model.bin | head -1) \
-                             $(shell ls -t *_layer4_model.bin | head -1)
+	@time ./visualize.out $(shell ls -t *_model.bin | head -1)
 
 clean:
 	rm -f *.out *.bin *.csv *.webp

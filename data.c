@@ -76,7 +76,7 @@ void generate_data(const char* data_file, int num_episodes) {
         double drone_x = random_range(-2.0, 2.0);
         double drone_y = random_range(0.5, 2.0);
         double drone_z = random_range(-2.0, 2.0);
-        double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
+        double drone_yaw = random_range(-M_PI, M_PI);
         
         // Create quad with random position and orientation
         Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
@@ -96,10 +96,10 @@ void generate_data(const char* data_file, int num_episodes) {
 
         // Initialize state estimator
         StateEstimator estimator = {
+            .R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
             .angular_velocity = {0.0, 0.0, 0.0},
             .gyro_bias = {0.0, 0.0, 0.0}
         };
-        memcpy(estimator.R, quad.R_W_B, 9 * sizeof(double));
         
         double t_physics = 0.0;
         double t_control = 0.0;
