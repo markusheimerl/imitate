@@ -121,7 +121,6 @@ int main(int argc, char* argv[]) {
     for (int t = 0; t < (int)(SIM_TIME / DT_PHYSICS); t++) {
         // Physics update
         if (t_physics >= DT_PHYSICS) {
-            // Create temporary buffers for the new state
             double new_linear_position_W[3];
             double new_linear_velocity_W[3];
             double new_angular_velocity_B[3];
@@ -132,7 +131,6 @@ int main(int argc, char* argv[]) {
             double new_gyro_bias[3];
             double new_omega[4];
             
-            // Call the new update function that doesn't modify the quad directly
             update_quad_states(
                 quad.omega,                 // Current rotor speeds
                 quad.linear_position_W,     // Current position
@@ -158,7 +156,6 @@ int main(int argc, char* argv[]) {
                 new_omega                   // New rotor speeds
             );
             
-            // Update the quad's state with the new values
             memcpy(quad.linear_position_W, new_linear_position_W, 3 * sizeof(double));
             memcpy(quad.linear_velocity_W, new_linear_velocity_W, 3 * sizeof(double));
             memcpy(quad.angular_velocity_B, new_angular_velocity_B, 3 * sizeof(double));
