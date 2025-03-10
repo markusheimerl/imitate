@@ -48,18 +48,43 @@ void print_progress(int current, int total) {
 }
 
 // Generate training data for the SSM
-void generate_data(const char* data_file, int num_episodes) {
+void generate_data(const char* data_file, const char* dynamics_file, int num_episodes) {
     FILE* f_data = fopen(data_file, "w");
     if (!f_data) {
         printf("Error opening file: %s\n", data_file);
         return;
     }
     
-    // Write header: IMU measurements, position, velocity, target position+yaw, motor commands
+    FILE* f_dyn = fopen(dynamics_file, "w");
+    if (!f_dyn) {
+        printf("Error opening file: %s\n", dynamics_file);
+        fclose(f_data);
+        return;
+    }
+    
+    // Write header for controller data: IMU measurements, position, velocity, target position+yaw, motor commands
     fprintf(f_data, "gx,gy,gz,ax,ay,az,"); // IMU measurements (6)
     fprintf(f_data, "px,py,pz,vx,vy,vz,"); // Position and velocity (6)
     fprintf(f_data, "tx,ty,tz,tyaw,"); // Target (4)
     fprintf(f_data, "m1,m2,m3,m4"); // Output motor commands (4)
+    
+    // Write header for dynamics data
+    // Input: current state (26) + motor commands (4)
+    fprintf(f_dyn, "w1,w2,w3,w4,"); // Motor speeds (4)
+    fprintf(f_dyn, "px,py,pz,"); // Position (3)
+    fprintf(f_dyn, "vx,vy,vz,"); // Velocity (3)
+    fprintf(f_dyn, "wx,wy,wz,"); // Angular velocity (3)
+    fprintf(f_dyn, "r11,r12,r13,r21,r22,r23,r31,r32,r33,"); // Rotation matrix (9)
+    fprintf(f_dyn, "ax_bias,ay_bias,az_bias,"); // Accel bias (3)
+    fprintf(f_dyn, "gx_bias,gy_bias,gz_bias,"); // Gyro bias (3)
+    fprintf(f_dyn, "w_next1,w_next2,w_next3,w_next4,"); // Motor commands (4)
+    // Output: next state (20) - we don't predict biases/scales
+    fprintf(f_dyn, "next_px,next_py,next_pz,"); // Next position (3)
+    fprintf(f_dyn, "next_vx,next_vy,next_vz,"); // Next velocity (3)
+    fprintf(f_dyn, "next_wx,next_wy,next_wz,"); // Next angular velocity (3)
+    fprintf(f_dyn, "next_r11,next_r12,next_r13,next_r21,next_r22,next_r23,next_r31,next_r32,next_r33,"); // Next rotation (9)
+    fprintf(f_dyn, "next_ax,next_ay,next_az,"); // Accel measurements (3)
+    fprintf(f_dyn, "next_gx,next_gy,next_gz"); // Gyro measurements (3)
     
     // Initialize progress bar
     printf("Starting data generation for %d episodes...\n", num_episodes);
@@ -116,6 +141,32 @@ void generate_data(const char* data_file, int num_episodes) {
                 double new_gyro_bias[3];
                 double new_omega[4];
                 
+                // Record dynamics data (input to update_quad_states)
+                fprintf(f_dyn, "\n%.6f,%.6f,%.6f,%.6f,", // Motor speeds
+                       quad.omega[0], quad.omega[1], quad.omega[2], quad.omega[3]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", // Position
+                       quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", // Velocity
+                       quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", // Angular velocity
+                       quad.angular_velocity_B[0], quad.angular_velocity_B[1], quad.angular_velocity_B[2]);
+                
+                // Rotation matrix
+                for(int j = 0; j < 9; j++) {
+                    fprintf(f_dyn, "%.6f,", quad.R_W_B[j]);
+                }
+                
+                // Biases
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                       quad.accel_bias[0], quad.accel_bias[1], quad.accel_bias[2]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                       quad.gyro_bias[0], quad.gyro_bias[1], quad.gyro_bias[2]);
+                
+                // Motor commands
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
+                       quad.omega_next[0], quad.omega_next[1], quad.omega_next[2], quad.omega_next[3]);
+                
+                // Update the quad state
                 update_quad_states(
                     quad.omega,                 // Current rotor speeds
                     quad.linear_position_W,     // Current position
@@ -141,6 +192,27 @@ void generate_data(const char* data_file, int num_episodes) {
                     new_omega                   // New rotor speeds
                 );
                 
+                // Record dynamics data (output of update_quad_states)
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", // Next position
+                       new_linear_position_W[0], new_linear_position_W[1], new_linear_position_W[2]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", // Next velocity
+                       new_linear_velocity_W[0], new_linear_velocity_W[1], new_linear_velocity_W[2]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", // Next angular velocity
+                       new_angular_velocity_B[0], new_angular_velocity_B[1], new_angular_velocity_B[2]);
+                
+                // Next rotation matrix
+                for(int j = 0; j < 8; j++) {
+                    fprintf(f_dyn, "%.6f,", new_R_W_B[j]);
+                }
+                fprintf(f_dyn, "%.6f,", new_R_W_B[8]);
+                
+                // Sensor measurements
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                       accel_measurement[0], accel_measurement[1], accel_measurement[2]);
+                fprintf(f_dyn, "%.6f,%.6f,%.6f", 
+                       gyro_measurement[0], gyro_measurement[1], gyro_measurement[2]);
+                
+                // Update the quad state
                 memcpy(quad.linear_position_W, new_linear_position_W, 3 * sizeof(double));
                 memcpy(quad.linear_velocity_W, new_linear_velocity_W, 3 * sizeof(double));
                 memcpy(quad.angular_velocity_B, new_angular_velocity_B, 3 * sizeof(double));
@@ -212,8 +284,12 @@ void generate_data(const char* data_file, int num_episodes) {
     printf("Wrote %d control samples (%.2f MB)\n", 
            num_episodes * (int)(SIM_TIME / DT_CONTROL),
            (float)ftell(f_data) / (1024 * 1024));
+    printf("Wrote %d dynamics samples (%.2f MB)\n", 
+           num_episodes * (int)(SIM_TIME / DT_PHYSICS),
+           (float)ftell(f_dyn) / (1024 * 1024));
     
     fclose(f_data);
+    fclose(f_dyn);
 }
 
 int main(int argc, char *argv[]) {
@@ -231,14 +307,16 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Generate timestamped filename
-    char data_fname[64];
+    // Generate timestamped filenames
+    char data_fname[64], dynamics_fname[64];
     time_t now = time(NULL);
     strftime(data_fname, sizeof(data_fname), "%Y%m%d_%H%M%S_data.csv", localtime(&now));
+    strftime(dynamics_fname, sizeof(dynamics_fname), "%Y%m%d_%H%M%S_dynamics.csv", localtime(&now));
     
-    generate_data(data_fname, num_episodes);
+    generate_data(data_fname, dynamics_fname, num_episodes);
     
-    printf("Data saved to: %s\n", data_fname);
+    printf("Controller data saved to: %s\n", data_fname);
+    printf("Dynamics data saved to: %s\n", dynamics_fname);
     
     return 0;
 }
