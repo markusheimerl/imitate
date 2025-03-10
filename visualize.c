@@ -187,13 +187,13 @@ int main(int argc, char* argv[]) {
             ssm1_input[idx++] = (float)target[6];
             
             // Forward pass through first layer
-            forward_pass(ssm1, ssm1_input);
+            forward_pass_ssm(ssm1, ssm1_input);
             
             // Copy first layer predictions to hidden buffer
             memcpy(hidden_layer, ssm1->predictions, ssm1->batch_size * ssm1->output_dim * sizeof(float));
             
             // Forward pass through second layer
-            forward_pass(ssm2, hidden_layer);
+            forward_pass_ssm(ssm2, hidden_layer);
             
             // Apply predicted motor commands (4) from second layer
             for (int i = 0; i < 4; i++) {

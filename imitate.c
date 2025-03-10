@@ -185,28 +185,28 @@ int main(int argc, char* argv[]) {
             float *d_batch_y = &d_y_batch[step * batch_size * output_dim];
             
             // Forward pass through first layer
-            forward_pass(layer1, d_batch_X);
+            forward_pass_ssm(layer1, d_batch_X);
             
             // Forward pass through second layer
-            forward_pass(layer2, layer1->d_predictions);
+            forward_pass_ssm(layer2, layer1->d_predictions);
             
             // Calculate loss
-            float loss = calculate_loss(layer2, d_batch_y);
+            float loss = calculate_loss_ssm(layer2, d_batch_y);
             total_loss += loss;
             num_batches++;
             
             // Zero gradients
-            zero_gradients(layer1);
-            zero_gradients(layer2);
+            zero_gradients_ssm(layer1);
+            zero_gradients_ssm(layer2);
             
             // Backward pass
-            backward_pass(layer2, layer1->d_predictions);
+            backward_pass_ssm(layer2, layer1->d_predictions);
             backward_between_models(layer1, layer2);
-            backward_pass(layer1, d_batch_X);
+            backward_pass_ssm(layer1, d_batch_X);
             
             // Update weights
-            update_weights(layer1, learning_rate);
-            update_weights(layer2, learning_rate);
+            update_weights_ssm(layer1, learning_rate);
+            update_weights_ssm(layer2, learning_rate);
         }
         
         // Calculate average loss
