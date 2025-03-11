@@ -42,8 +42,15 @@ int main(int argc, char* argv[]) {
     double drone_z = random_range(-2.0, 2.0);
     double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
     
+    // Initialize sensor scale factors
+    double accel_scale[3], gyro_scale[3];
+    for(int i = 0; i < 3; i++) {
+        accel_scale[i] = random_range(-0.01, 0.01);
+        gyro_scale[i] = random_range(-0.01, 0.01);
+    }
+    
     // Create quad with random position and orientation
-    Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
+    Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw, accel_scale, gyro_scale);
     
     // Place target completely randomly
     double target_x = random_range(-2.0, 2.0);
@@ -131,6 +138,15 @@ int main(int argc, char* argv[]) {
             double new_gyro_bias[3];
             double new_omega[4];
             
+            // Generate noise terms
+            double accel_bias_noise[3], gyro_bias_noise[3], accel_meas_noise[3], gyro_meas_noise[3];
+            for(int i = 0; i < 3; i++) {
+                accel_bias_noise[i] = random_range(-0.0001, 0.0001);
+                gyro_bias_noise[i] = random_range(-0.0001, 0.0001);
+                accel_meas_noise[i] = random_range(-0.01, 0.01);
+                gyro_meas_noise[i] = random_range(-0.01, 0.01);
+            }
+            
             update_quad_states(
                 quad.omega,                 // Current rotor speeds
                 quad.linear_position_W,     // Current position
@@ -144,6 +160,11 @@ int main(int argc, char* argv[]) {
                 quad.gyro_scale,            // Gyro scale factors
                 quad.omega_next,            // Target rotor speeds
                 DT_PHYSICS,                 // Time step
+                // Noise inputs
+                accel_bias_noise,           // Accelerometer bias noise
+                gyro_bias_noise,            // Gyroscope bias noise
+                accel_meas_noise,           // Accelerometer measurement noise
+                gyro_meas_noise,            // Gyroscope measurement noise
                 // Outputs
                 new_linear_position_W,      // New position
                 new_linear_velocity_W,      // New velocity
