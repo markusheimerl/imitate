@@ -131,6 +131,12 @@ int main(int argc, char* argv[]) {
             double new_gyro_bias[3];
             double new_omega[4];
             
+            // Generate 4 random values
+            double rand1 = (double)rand() / RAND_MAX;
+            double rand2 = (double)rand() / RAND_MAX;
+            double rand3 = (double)rand() / RAND_MAX;
+            double rand4 = (double)rand() / RAND_MAX;
+            
             update_quad_states(
                 quad.omega,                 // Current rotor speeds
                 quad.linear_position_W,     // Current position
@@ -144,6 +150,7 @@ int main(int argc, char* argv[]) {
                 quad.gyro_scale,            // Gyro scale factors
                 quad.omega_next,            // Target rotor speeds
                 DT_PHYSICS,                 // Time step
+                rand1, rand2, rand3, rand4, // Random values
                 // Outputs
                 new_linear_position_W,      // New position
                 new_linear_velocity_W,      // New velocity

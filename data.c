@@ -78,6 +78,7 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
     fprintf(f_dyn, "ax_bias,ay_bias,az_bias,"); // Accel bias (3)
     fprintf(f_dyn, "gx_bias,gy_bias,gz_bias,"); // Gyro bias (3)
     fprintf(f_dyn, "w_next1,w_next2,w_next3,w_next4,"); // Motor commands (4)
+    fprintf(f_dyn, "rand1,rand2,rand3,rand4,"); // Random values (4)
     // Output: next state (20) - we don't predict biases/scales
     fprintf(f_dyn, "next_px,next_py,next_pz,"); // Next position (3)
     fprintf(f_dyn, "next_vx,next_vy,next_vz,"); // Next velocity (3)
@@ -141,6 +142,12 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                 double new_gyro_bias[3];
                 double new_omega[4];
                 
+                // Generate 4 random values
+                double rand1 = (double)rand() / RAND_MAX;
+                double rand2 = (double)rand() / RAND_MAX;
+                double rand3 = (double)rand() / RAND_MAX;
+                double rand4 = (double)rand() / RAND_MAX;
+                
                 // Record dynamics data (input to update_quad_states)
                 fprintf(f_dyn, "\n%.6f,%.6f,%.6f,%.6f,", // Motor speeds
                        quad.omega[0], quad.omega[1], quad.omega[2], quad.omega[3]);
@@ -166,6 +173,9 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                 fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
                        quad.omega_next[0], quad.omega_next[1], quad.omega_next[2], quad.omega_next[3]);
                 
+                // Random values
+                fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", rand1, rand2, rand3, rand4);
+                
                 // Update the quad state
                 update_quad_states(
                     quad.omega,                 // Current rotor speeds
@@ -180,6 +190,7 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                     quad.gyro_scale,            // Gyro scale factors
                     quad.omega_next,            // Target rotor speeds
                     DT_PHYSICS,                 // Time step
+                    rand1, rand2, rand3, rand4, // Random values
                     // Outputs
                     new_linear_position_W,      // New position
                     new_linear_velocity_W,      // New velocity
