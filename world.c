@@ -142,8 +142,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Use batch size equal to number of samples as instructed
-    int batch_size = num_samples;
+    int batch_size = num_samples * 0.2;
     int hidden_dim = 1024;
     
     printf("Starting model training:\n");
