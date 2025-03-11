@@ -16,10 +16,10 @@ data.out: data.c
 	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
 
 data: data.out
-	@./data.out 500
+	@./data.out 1000
 
 run: imitate.out
-	@time ./imitate.out 500 $(shell ls -t *_data.csv | head -1)
+	@time ./imitate.out 1000 $(shell ls -t *_data.csv | head -1)
 
 viz: visualize.out
 	@time ./visualize.out $(shell ls -t *_model_layer1.bin | head -1) $(shell ls -t *_model_layer2.bin | head -1)
