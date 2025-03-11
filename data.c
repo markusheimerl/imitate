@@ -172,54 +172,58 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                 double rand3 = (double)rand() / RAND_MAX;
                 double rand4 = (double)rand() / RAND_MAX;
                 
-                // Record ALL inputs to update_quad_states
-                // Start a new line for each sample
-                fprintf(f_dyn, "\n");
-                
-                // Rotor speeds (4)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
-                    quad.omega[0], quad.omega[1], quad.omega[2], quad.omega[3]);
-                
-                // Position and velocity (6)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2]);
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
-                
-                // Angular velocity (3)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.angular_velocity_B[0], quad.angular_velocity_B[1], quad.angular_velocity_B[2]);
-                
-                // Rotation matrix (9)
-                for(int j = 0; j < 9; j++) {
-                    fprintf(f_dyn, "%.6f,", quad.R_W_B[j]);
+                // Only record dynamics data every DT_CONTROL seconds
+                // to limit the size of the file
+                if (t_control >= DT_CONTROL) {
+                    // Record ALL inputs to update_quad_states
+                    // Start a new line for each sample
+                    fprintf(f_dyn, "\n");
+                    
+                    // Rotor speeds (4)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
+                        quad.omega[0], quad.omega[1], quad.omega[2], quad.omega[3]);
+                    
+                    // Position and velocity (6)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.linear_position_W[0], quad.linear_position_W[1], quad.linear_position_W[2]);
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.linear_velocity_W[0], quad.linear_velocity_W[1], quad.linear_velocity_W[2]);
+                    
+                    // Angular velocity (3)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.angular_velocity_B[0], quad.angular_velocity_B[1], quad.angular_velocity_B[2]);
+                    
+                    // Rotation matrix (9)
+                    for(int j = 0; j < 9; j++) {
+                        fprintf(f_dyn, "%.6f,", quad.R_W_B[j]);
+                    }
+                    
+                    // Inertia (3)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.inertia[0], quad.inertia[1], quad.inertia[2]);
+                    
+                    // Sensor biases (6)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.accel_bias[0], quad.accel_bias[1], quad.accel_bias[2]);
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.gyro_bias[0], quad.gyro_bias[1], quad.gyro_bias[2]);
+                    
+                    // Sensor scales (6)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.accel_scale[0], quad.accel_scale[1], quad.accel_scale[2]);
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        quad.gyro_scale[0], quad.gyro_scale[1], quad.gyro_scale[2]);
+                    
+                    // Target rotor speeds (4)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
+                        quad.omega_next[0], quad.omega_next[1], quad.omega_next[2], quad.omega_next[3]);
+                    
+                    // Time step (1)
+                    fprintf(f_dyn, "%.6f,", DT_PHYSICS);
+                    
+                    // Random values (4)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", rand1, rand2, rand3, rand4);
                 }
-                
-                // Inertia (3)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.inertia[0], quad.inertia[1], quad.inertia[2]);
-                
-                // Sensor biases (6)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.accel_bias[0], quad.accel_bias[1], quad.accel_bias[2]);
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.gyro_bias[0], quad.gyro_bias[1], quad.gyro_bias[2]);
-                
-                // Sensor scales (6)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.accel_scale[0], quad.accel_scale[1], quad.accel_scale[2]);
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    quad.gyro_scale[0], quad.gyro_scale[1], quad.gyro_scale[2]);
-                
-                // Target rotor speeds (4)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
-                    quad.omega_next[0], quad.omega_next[1], quad.omega_next[2], quad.omega_next[3]);
-                
-                // Time step (1)
-                fprintf(f_dyn, "%.6f,", DT_PHYSICS);
-                
-                // Random values (4)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", rand1, rand2, rand3, rand4);
                 
                 // Update the quad state
                 update_quad_states(
@@ -248,41 +252,43 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                     new_omega                   // New rotor speeds
                 );
                 
-                // Record ALL outputs from update_quad_states
-                
-                // New position (3)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    new_linear_position_W[0], new_linear_position_W[1], new_linear_position_W[2]);
-                
-                // New velocity (3)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    new_linear_velocity_W[0], new_linear_velocity_W[1], new_linear_velocity_W[2]);
-                
-                // New angular velocity (3)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    new_angular_velocity_B[0], new_angular_velocity_B[1], new_angular_velocity_B[2]);
-                
-                // New rotation matrix (9)
-                for(int j = 0; j < 8; j++) {
-                    fprintf(f_dyn, "%.6f,", new_R_W_B[j]);
+                if(t_control >= DT_CONTROL) {
+                    // Record ALL outputs from update_quad_states
+                    
+                    // New position (3)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        new_linear_position_W[0], new_linear_position_W[1], new_linear_position_W[2]);
+                    
+                    // New velocity (3)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        new_linear_velocity_W[0], new_linear_velocity_W[1], new_linear_velocity_W[2]);
+                    
+                    // New angular velocity (3)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        new_angular_velocity_B[0], new_angular_velocity_B[1], new_angular_velocity_B[2]);
+                    
+                    // New rotation matrix (9)
+                    for(int j = 0; j < 8; j++) {
+                        fprintf(f_dyn, "%.6f,", new_R_W_B[j]);
+                    }
+                    fprintf(f_dyn, "%.6f,", new_R_W_B[8]);
+                    
+                    // Sensor measurements (6)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        accel_measurement[0], accel_measurement[1], accel_measurement[2]);
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        gyro_measurement[0], gyro_measurement[1], gyro_measurement[2]);
+                    
+                    // New biases (6)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        new_accel_bias[0], new_accel_bias[1], new_accel_bias[2]);
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
+                        new_gyro_bias[0], new_gyro_bias[1], new_gyro_bias[2]);
+                    
+                    // New rotor speeds (4)
+                    fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f", 
+                        new_omega[0], new_omega[1], new_omega[2], new_omega[3]);
                 }
-                fprintf(f_dyn, "%.6f,", new_R_W_B[8]);
-                
-                // Sensor measurements (6)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    accel_measurement[0], accel_measurement[1], accel_measurement[2]);
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    gyro_measurement[0], gyro_measurement[1], gyro_measurement[2]);
-                
-                // New biases (6)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    new_accel_bias[0], new_accel_bias[1], new_accel_bias[2]);
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,", 
-                    new_gyro_bias[0], new_gyro_bias[1], new_gyro_bias[2]);
-                
-                // New rotor speeds (4)
-                fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f", 
-                    new_omega[0], new_omega[1], new_omega[2], new_omega[3]);
                 
                 // Update the quad state
                 memcpy(quad.linear_position_W, new_linear_position_W, 3 * sizeof(double));
