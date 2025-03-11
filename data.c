@@ -78,10 +78,6 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
     fprintf(f_dyn, "ax_bias,ay_bias,az_bias,"); // Accel bias (3)
     fprintf(f_dyn, "gx_bias,gy_bias,gz_bias,"); // Gyro bias (3)
     fprintf(f_dyn, "w_next1,w_next2,w_next3,w_next4,"); // Motor commands (4)
-    fprintf(f_dyn, "ab_noise1,ab_noise2,ab_noise3,"); // Accel bias noise (3)
-    fprintf(f_dyn, "gb_noise1,gb_noise2,gb_noise3,"); // Gyro bias noise (3)
-    fprintf(f_dyn, "am_noise1,am_noise2,am_noise3,"); // Accel measurement noise (3)
-    fprintf(f_dyn, "gm_noise1,gm_noise2,gm_noise3,"); // Gyro measurement noise (3)
     // Output: next state (20) - we don't predict biases/scales
     fprintf(f_dyn, "next_px,next_py,next_pz,"); // Next position (3)
     fprintf(f_dyn, "next_vx,next_vy,next_vz,"); // Next velocity (3)
@@ -107,15 +103,8 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
         double drone_z = random_range(-2.0, 2.0);
         double drone_yaw = 0.0; // random_range(-M_PI, M_PI);
         
-        // Initialize sensor scale factors
-        double accel_scale[3], gyro_scale[3];
-        for(int i = 0; i < 3; i++) {
-            accel_scale[i] = random_range(-0.01, 0.01);
-            gyro_scale[i] = random_range(-0.01, 0.01);
-        }
-        
         // Create quad with random position and orientation
-        Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw, accel_scale, gyro_scale);
+        Quad quad = create_quad(drone_x, drone_y, drone_z, drone_yaw);
         
         // Place target completely randomly
         double target_x = random_range(-2.0, 2.0);
@@ -152,15 +141,6 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                 double new_gyro_bias[3];
                 double new_omega[4];
                 
-                // Generate noise terms
-                double accel_bias_noise[3], gyro_bias_noise[3], accel_meas_noise[3], gyro_meas_noise[3];
-                for(int j = 0; j < 3; j++) {
-                    accel_bias_noise[j] = random_range(-0.0001, 0.0001);
-                    gyro_bias_noise[j] = random_range(-0.0001, 0.0001);
-                    accel_meas_noise[j] = random_range(-0.01, 0.01);
-                    gyro_meas_noise[j] = random_range(-0.01, 0.01);
-                }
-                
                 // Record dynamics data (input to update_quad_states)
                 fprintf(f_dyn, "\n%.6f,%.6f,%.6f,%.6f,", // Motor speeds
                        quad.omega[0], quad.omega[1], quad.omega[2], quad.omega[3]);
@@ -186,13 +166,6 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                 fprintf(f_dyn, "%.6f,%.6f,%.6f,%.6f,", 
                        quad.omega_next[0], quad.omega_next[1], quad.omega_next[2], quad.omega_next[3]);
                 
-                // Noise terms
-                for(int j = 0; j < 3; j++) fprintf(f_dyn, "%.6f,", accel_bias_noise[j]);
-                for(int j = 0; j < 3; j++) fprintf(f_dyn, "%.6f,", gyro_bias_noise[j]);
-                for(int j = 0; j < 3; j++) fprintf(f_dyn, "%.6f,", accel_meas_noise[j]);
-                for(int j = 0; j < 2; j++) fprintf(f_dyn, "%.6f,", gyro_meas_noise[j]);
-                fprintf(f_dyn, "%.6f,", gyro_meas_noise[2]);
-                
                 // Update the quad state
                 update_quad_states(
                     quad.omega,                 // Current rotor speeds
@@ -207,11 +180,6 @@ void generate_data(const char* data_file, const char* dynamics_file, int num_epi
                     quad.gyro_scale,            // Gyro scale factors
                     quad.omega_next,            // Target rotor speeds
                     DT_PHYSICS,                 // Time step
-                    // Noise inputs
-                    accel_bias_noise,           // Accelerometer bias noise
-                    gyro_bias_noise,            // Gyroscope bias noise
-                    accel_meas_noise,           // Accelerometer measurement noise
-                    gyro_meas_noise,            // Gyroscope measurement noise
                     // Outputs
                     new_linear_position_W,      // New position
                     new_linear_velocity_W,      // New velocity
